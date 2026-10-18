@@ -1,0 +1,76 @@
+# Décisions d'architecture
+
+Chaque entrée : la décision, sa date, ses raisons, et ce qui la remettrait en cause.
+Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, sauf quand il fallait les préciser.
+
+---
+
+## D1 — Pas de fork du mod Kouzukii : on part de zéro et on s'en sert de référence (2026-10-18)
+
+**Décision** : on ne forke pas `Kouzukii/expedition33-coop`. On réutilise sa *connaissance* (carte des hooks, chemins d'objets, cas spéciaux d'attribution des personnages), créditée dans la doc, sans reprendre de code ni d'assets.
+
+**Raisons** (étude complète : `research/kouzukii-study.md`) :
+1. **Modèle incompatible.** Son cœur est une seule instance du jeu dont on change, à chaque tour, la manette qui alimente l'unique PlayerController (`SetPlayerPlatformUserId` sur PC0). En ligne, les manettes distantes n'existent pas chez l'hôte : les hooks de tour, la bascule « Start » et l'add-on de boutons seraient tous à jeter.
+2. **Chaîne d'outils fragile et exclusive.** Le mod remplace 7 Blueprints entiers du jeu par des copies patchées (`ue-hook-blueprints`). Ces copies doivent être reconstruites à chaque patch (déjà 2 crashs de mise à jour : issues #2 et #5), entrent en conflit avec tout autre mod qui touche ces assets, et embarquent du contenu du jeu (non redistribuable).
+3. **Double système de hooks.** On aurait de toute façon besoin d'UE4SS pour le réseau. Or UE4SS C++ hooke ces mêmes fonctions Blueprint à l'exécution (`UObjectGlobals::RegisterHook`), sans remplacer d'asset, et atteint aussi le natif. Vérifié en jeu le 2026-10-18 : les hooks sur `OnTurnStart`, `TryStartParry`, `TryParryHitFromCharacter`, `ReceiveDamage`… s'enregistrent et se déclenchent.
+4. **Ce qui compte pour nous n'y est pas** : résultats de QTE offensifs, autorité sur l'aléatoire et les dégâts, capture des décisions de l'IA, réplication. Tout est à écrire dans les deux cas.
+
+**Réutilisé** : chemins `/Game/jRPGTemplate/...` des classes de combat, idée « filtrer `TryStart*` par propriétaire » pour les défenses, `MapBattleSpotToUser` et ses cas spéciaux (combats solo/marchand via `OverrideParty`, prologue « Sophie »), points d'injection UI (réglages, indicateurs de joueur). Crédit : Kouzukii (MIT).
+
+**Remise en cause si** : jamais pour l'architecture ; on pourra lire ses graphes à nouveau pour un point d'UI précis.
+
+---
+
+## D2 — Build C++ : RE-UE4SS en sous-module épinglé, compilé en CI GitHub Actions (2026-10-18)
+
+**Décision** : `native/third_party/RE-UE4SS` épinglé sur `83330635` (experimental 1181), le même commit que le `UE4SS.dll` installé. La CI (`windows-latest`, MSVC VS 18, Ninja, `Game__Shipping__Win64`) compile `UE4SS`, `proxy` (dwmapi.dll) et `E33Coop`, et publie l'ensemble comme artefact. On livre **notre** `UE4SS.dll` avec le mod.
+
+**Raisons** : aucune toolchain locale (règle de Killian) ; l'ABI C++ d'UE4SS n'est pas stable entre builds expérimentaux, donc mod et DLL doivent venir du même commit ; ≥ 1176 nécessaire pour UE 5.4 (issue UE4SS #1433). Le sous-module privé UEPseudo exige un compte GitHub lié à Epic : fait par Killian le 2026-10-18, secret `UEPSEUDO_PAT` dans le repo privé.
+
+**Alternative écartée** : en-têtes réécrits + lib d'import générée depuis les exports d'`UE4SS.dll` (approche RSDragonWildsMod). Gardée en plan B si l'accès UEPseudo est perdu.
+
+**Point de vigilance** : issue UE4SS #1463 (Windows 11 26200 + hook `ProcessLocalScriptFunction`) — pas reproduite ici, les hooks BP fonctionnent sur cette machine (26200).
+
+---
+
+## D3 — Lua réservé à l'exploration et aux scénarios ; logique dans le C++ (2026-10-18)
+
+**Décision** : le mod Lua `E33Explore` (télécommande `cmd.lua` → game thread, dumps, hooks de log) est un outil de dev. Les recettes trouvées en Lua (déclencher un combat, attaquer, charger une save) sont portées en C++ dans `native/`.
+
+**Raisons** : les hooks Lua sur fonctions BP sont post-seulement, sans écriture des out-params ; plusieurs mods E33 rapportent des plantages avec beaucoup de Lua sur le game thread ; le C++ partage le code du protocole avec les outils.
+
+---
+
+## D4 — Saves de test hors du dossier Steam Cloud, chargées par nom de slot relatif (2026-10-18)
+
+**Constat** : les noms de slot de `UGameplayStatics` sont relatifs à `%LOCALAPPDATA%\Sandfall\Saved\SaveGames\` ; le jeu y ajoute lui-même le dossier SteamID (`76561198355797267/EXPEDITION_0`). Le dossier SteamID est synchronisé par Steam Auto-Cloud.
+
+**Décision** :
+- Les saves de test vivent dans `SaveGames\e33coop-test\` (hors du dossier SteamID, donc hors Cloud), et sont chargées par `LoadGameFromSlot("e33coop-test/<nom>", 0)` puis `BP_SaveManager_C:LoadGameFromSaveFile(SaveGame, SlotName)`. Vérifié en jeu.
+- Avant tout chargement de test : `SaveManager.EnableAutoSave = false`.
+- Les fichiers de Killian dans le dossier SteamID sont en **lecture seule** pendant le développement (garde-fou en plus des backups). Exception : `steam_autocloud.vdf`, que Steam doit pouvoir écrire.
+- `reset-env` ne touche jamais au dossier SteamID.
+
+---
+
+## D5 — Rejoindre une partie : instantané mémoire du jeu, pas la save disque (2026-10-18, à valider en phase 4)
+
+**Constat** (dump) : `BP_SaveManager_C:CreateSaveGameDataFromGameState(out BP_SaveGameData_C*)` construit en mémoire les données de save depuis l'état courant, et `LoadGameFromSaveData(BP_SaveGameData_C*)` charge une partie depuis ces données. `UGameplayStatics::SaveGameToMemory` / `LoadGameFromMemory` (exposés par UE4SS) sérialisent un `USaveGame` en octets.
+
+**Décision (plan A)** : au point sûr, l'hôte appelle `CreateSaveGameDataFromGameState`, l'emballe dans un objet de save (`BP_SaveGameObject_V8_C`), le sérialise via `SaveGameToMemory` et l'envoie ; le client désérialise et appelle `LoadGameFromSaveData` (ou `LoadGameFromSaveFile`), autosave désactivée → aucune écriture dans ses slots solo. L'emplacement « dédié au coop » est donc d'abord en mémoire ; on l'écrit aussi dans `SaveGames\e33coop\` pour la reconnexion.
+
+**Plan B** (si l'instantané hors point de sauvegarde pose problème — p. ex. QuickSave (Nexus 421) signale qu'une save *en combat* corrompt) : on ne prend l'instantané qu'en exploration (c'est déjà la règle du point sûr) ; à défaut, dernière save de l'hôte + delta (position/zone via `MapToLoad` + `SpawnPointTagToLoadAt` et téléportation, `InteractedObjects`, inventaire, drapeaux de quête).
+
+---
+
+## D6 — Lancement du jeu par Steam (`steam.exe -applaunch 1903340 …`) (2026-10-18)
+
+**Décision** : le lanceur de tests démarre le jeu via `steam.exe -applaunch 1903340 <args>` (arguments transmis à `Expedition33_Steam.exe` puis au jeu), jamais en lançant directement l'exe Shipping (pas de contournement de la protection Steam).
+
+**Observations** : premier lancement bloqué par une fenêtre Steam (« ShowInterstitials ») validée par Killian ; ensuite le lancement est automatique. `-windowed -ResX=1280 -ResY=720` ne semble pas appliqué (rendu en 1920x1080) — à creuser (`GameUserSettings.ini` dédié aux tests). `-nullrhi` : pas encore testé.
+
+---
+
+## D7 — Captures d'écran par `PrintWindow` sur la fenêtre `UnrealWindow` (2026-10-18)
+
+**Décision** : `tools/dev/screenshot.ps1` capture uniquement la fenêtre de rendu du jeu (même masquée), jamais l'écran entier — Killian peut utiliser son PC pendant les tests sans que son bureau soit capturé.
