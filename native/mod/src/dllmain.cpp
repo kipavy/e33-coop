@@ -17,6 +17,7 @@
 #include "../../hooks/hookbus.hpp"
 #include "../../hooks/log.hpp"
 #include "../../hooks/ue.hpp"
+#include "../../sync/coop.hpp"
 #include "../../testrunner/runner.hpp"
 
 using namespace RC;
@@ -24,7 +25,7 @@ using namespace RC::Unreal;
 
 namespace {
 
-constexpr const char* kModVersion = "0.1.0";
+constexpr const char* kModVersion = "0.2.0";
 
 void subscribe_logging_hooks()
 {
@@ -56,7 +57,7 @@ public:
     E33CoopMod() : CppUserModBase()
     {
         ModName = STR("E33Coop");
-        ModVersion = STR("0.1.0");
+        ModVersion = STR("0.2.0");
         ModDescription = STR("Coop en ligne pour Clair Obscur: Expedition 33");
         ModAuthors = STR("kipavy");
     }
@@ -82,6 +83,7 @@ public:
         Output::send<LogLevel::Default>(STR("[E33Coop] init, log: {}\n"), file.wstring());
 
         subscribe_logging_hooks();
+        e33::coop::init();          // avant le test runner : ses hooks de début de tour fixent les propriétaires
         e33::testrunner::init();
         e33::HookBus::get().try_register();
 
@@ -101,6 +103,7 @@ private:
                 hook_retry_ += dt;
                 if (hook_retry_ > 1.0) { hook_retry_ = 0; hooks_done_ = e33::HookBus::get().try_register(); }
             }
+            e33::coop::tick(dt);
             e33::testrunner::tick(dt);
         } catch (const std::exception& ex) {
             e33::log().write("tick_exception", e33::JsonObj().add("what", ex.what()));

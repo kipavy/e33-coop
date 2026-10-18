@@ -14,6 +14,7 @@
 #include "../hooks/hookbus.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
+#include "../sync/coop.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -54,6 +55,7 @@ struct Scenario {
     double action_delay_s = 1.5;
     int combo_auto_success = 10;
     int max_turns = 60;
+    int wait_players = 0;       // hôte : nombre de clients attendus avant de lancer le combat
     std::vector<Action> actions;
     std::vector<std::string> defense;     // "parry" | "fail", cyclique par coup reçu
     json::Value expect;
@@ -110,6 +112,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.action_delay_s = v["action_delay_s"].as_number(1.5);
     s.combo_auto_success = static_cast<int>(v["combo_auto_success"].as_int(10));
     s.max_turns = static_cast<int>(v["max_turns"].as_int(60));
+    s.wait_players = static_cast<int>(v["wait_players"].as_int(0));
     for (size_t i = 0; i < v["actions"].size(); ++i) {
         const auto& a = v["actions"][i];
         Action act;
@@ -179,6 +182,11 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         const int want = static_cast<int>(ex["min_player_turns"].as_int());
         add("min_player_turns", std::to_string(want), std::to_string(g.player_turns), g.player_turns >= want);
     }
+    if (coop::active()) {
+        add("coop_session", "ok", coop::session_ok() ? "ok" : "ko", coop::session_ok());
+        add("desyncs", "0", std::to_string(coop::desync_count()), coop::desync_count() == 0);
+        add("invalid_messages", "0", std::to_string(coop::invalid_count()), coop::invalid_count() == 0);
+    }
     bool all = pass_if_checks_ok && g.errors.empty();
     for (auto& c : checks) all = all && c.ok;
 
@@ -244,7 +252,8 @@ void subscribe()
         ++g.turn;
         log().write("tr_turn", JsonObj().add("actor", game::char_class(ch)).add("player", game::is_player(ch)).add("counter", counter).raw("state", state_json()), g.turn);
         if (g.turn > g.sc.max_turns) { fail("max_turns exceeded"); return; }
-        if (game::is_player(ch) && !counter) {
+        const int spot = static_cast<int>(ue::get_int(ch, STR("BattleSpotIndex"), -1));
+        if (game::is_player(ch) && !counter && coop::controls_spot(spot)) {
             ++g.player_turns;
             g.pending_actor = ch;
             g.pending_action_at = g.t + g.sc.action_delay_s;
@@ -257,6 +266,7 @@ void subscribe()
         UObject* stats = ctx.Context;
         UObject* defender = ue::component_owner(stats);
         if (!defender || !game::is_player(defender)) return;
+        if (!coop::controls_spot(static_cast<int>(ue::get_int(defender, STR("BattleSpotIndex"), -1)))) return;   // héros d'un autre joueur
         const auto& d = g.sc.defense;
         const std::string decision = d.empty() ? "fail" : d[static_cast<size_t>(g.hit_index) % d.size()];
         ++g.hit_index;
@@ -349,11 +359,16 @@ void tick(float dt)
         }
         break;
     case Phase::Trigger:
+        if (coop::role() == coop::Role::Client) {   // le client attend le combat de l'hôte
+            if (coop::connected_players() > 0) set_phase(Phase::WaitBattle);
+            break;
+        }
+        if (coop::connected_players() < g.sc.wait_players) break;
         if (!game::trigger_battle(g.sc.encounter, err)) { fail("trigger_battle: " + err); return; }
         set_phase(Phase::WaitBattle);
         break;
     case Phase::WaitBattle:
-        if (g.phase_t > 60.0) fail("battle did not start");
+        if (g.phase_t > (coop::role() == coop::Role::Client ? 300.0 : 60.0)) fail("battle did not start");
         break;
     case Phase::Battle:
         if (g.pending_action_at >= 0 && g.t >= g.pending_action_at) {

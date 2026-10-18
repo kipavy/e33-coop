@@ -41,6 +41,8 @@ std::string char_class(UObject* character);  // nom de classe (ex. BP_Verso_Batt
 bool load_save_slot(const std::wstring& slot, std::string& err);
 // Déclenche un combat (recette E33 Versus) sur la première BP_BattleMap_C du niveau.
 bool trigger_battle(const std::wstring& encounter, std::string& err);
+// Dernière rencontre déclenchée par trigger_battle (vide sinon).
+const std::wstring& last_encounter();
 // Fait exécuter une action au personnage courant (1 = attaque de base) sur des cibles.
 bool perform_action(int action_type, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err);
 // Démarre une vraie parade (animation + fenêtre) pour un personnage ; renvoie le Success du jeu.

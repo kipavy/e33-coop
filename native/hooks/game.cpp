@@ -21,6 +21,7 @@ namespace e33::game {
 namespace {
 
 UObject* g_gi = nullptr;
+std::wstring g_last_encounter;
 
 UObject* load_asset(const wchar_t* object_path)
 {
@@ -179,9 +180,12 @@ bool trigger_battle(const std::wstring& encounter, std::string& err)
     ue::Call exec(executor, STR("ExecuteGameAction"));
     if (!exec) { err = "ExecuteGameAction not found"; return false; }
     exec.set_object(STR("GameAction"), action).invoke();
+    g_last_encounter = encounter;
     log().write("battle_trigger", JsonObj().add("encounter", ue::to_utf8(encounter)).add("map", ue::short_name(maps.front())));
     return true;
 }
+
+const std::wstring& last_encounter() { return g_last_encounter; }
 
 bool perform_action(int action_type, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err)
 {

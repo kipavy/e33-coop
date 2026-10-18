@@ -7,10 +7,14 @@ add_library(${TARGET} SHARED
     ../hooks/hookbus.cpp
     ../hooks/game.cpp
     ../testrunner/runner.cpp
+    ../sync/coop.cpp
+    ../protocol/messages.cpp
+    ../net/link.cpp
+    ../net/udp.cpp
 )
 
 target_compile_features(${TARGET} PRIVATE cxx_std_23)
-target_include_directories(${TARGET} PRIVATE ../common ../hooks ../testrunner)
+target_include_directories(${TARGET} PRIVATE ../common ../hooks ../testrunner ../sync ../protocol ../net)
 if(MSVC)
     target_compile_options(${TARGET} PRIVATE /utf-8)
 endif()

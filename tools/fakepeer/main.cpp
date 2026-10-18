@@ -25,6 +25,7 @@
 #include "jsonlog.hpp"
 #include "link.hpp"
 #include "messages.hpp"
+#include "recorder.hpp"
 #include "minijson.hpp"
 #include "transport.hpp"
 
@@ -39,43 +40,14 @@ double now_s()
     return duration<double>(steady_clock::now() - t0).count();
 }
 
-std::string hex(const std::vector<uint8_t>& b)
-{
-    static const char* d = "0123456789abcdef";
-    std::string s;
-    for (auto x : b) { s += d[x >> 4]; s += d[x & 15]; }
-    return s;
-}
-
-std::vector<uint8_t> unhex(const std::string& s)
-{
-    std::vector<uint8_t> b;
-    auto v = [](char c) { return c >= 'a' ? c - 'a' + 10 : c >= 'A' ? c - 'A' + 10 : c - '0'; };
-    for (size_t i = 0; i + 1 < s.size(); i += 2) b.push_back(static_cast<uint8_t>(v(s[i]) << 4 | v(s[i + 1])));
-    return b;
-}
-
 struct Args {
     std::string mode, connect, script, log, record, replay;
     int port = 7777;
     double timeout = 900;
 };
 
-class Recorder {
-public:
-    bool open(const std::string& path) { if (path.empty()) return true; f_.open(path, std::ios::binary); return f_.good(); }
-    void write(const char* dir, const proto::Message& m)
-    {
-        if (!f_.is_open()) return;
-        wire::Writer w;
-        proto::encode(m, w);
-        f_ << JsonObj().add("t", now_s()).add("dir", dir).add("type", proto::type_name(proto::type_of(m))).add("hex", hex(w.data())).raw("msg", proto::to_json(m)).str() << "\n";
-        f_.flush();
-    }
-
-private:
-    std::ofstream f_;
-};
+using net::Recorder;
+using net::from_hex;
 
 json::Value load_json(const std::string& path, std::string& err)
 {
@@ -182,7 +154,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
         while (std::getline(f, line)) {
             json::Value v;
             if (line.empty() || !json::parse(line, v, err)) continue;
-            auto bytes = unhex(v["hex"].as_string());
+            auto bytes = from_hex(v["hex"].as_string());
             wire::Reader r(bytes.data(), bytes.size());
             auto m = proto::decode(r, err);
             if (!m) { log.write("error", JsonObj().add("what", "bad recording line: " + err)); return 1; }
