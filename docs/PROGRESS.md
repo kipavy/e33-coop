@@ -25,6 +25,10 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 ### En cours
 - Rien (pause). Le dernier commit de `phase-2` (D9 minimal : rejeu des tirages de l'IA) est poussé mais **pas encore testé en jeu**.
 
+### État de la machine pendant la pause
+- Jeu remis à l'état vanilla : `dwmapi.dll` et `ue4ss/` retirés du dossier Win64 (`reset-env` les réinstalle).
+- Saves perso de Killian **de nouveau en écriture** (il peut jouer normalement) ; `reset-env` les repasse en lecture seule et en refait une copie avant chaque campagne.
+
 ### Bloqué
 - Rien.
 
