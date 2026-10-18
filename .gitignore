@@ -1,0 +1,18 @@
+# Outils portables et sorties locales
+.tools/
+Export/
+dumps/
+out/
+build/
+*.pak
+*.utoc
+*.ucas
+*.usmap
+
+# Résultats de runs (logs, captures) — seuls les enregistrements de référence sont versionnés
+runs/
+*.log
+*.dmp
+
+# Les assets/dumps du jeu ne doivent jamais être commités
+native/third_party/ue4ss-dumps/
