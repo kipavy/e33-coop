@@ -2,10 +2,10 @@ name: build
 on:
   push:
     branches: ["**"]
-    paths: ["native/**", "tools/**", ".github/workflows/build.yml", ".gitmodules"]
+    paths: ["native/**", "tools/fakepeer/**", ".github/workflows/build.yml", ".gitmodules"]
   workflow_dispatch: {}
 permissions: { contents: read }
-concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: false }
 defaults: { run: { shell: pwsh } }
 
 jobs:
