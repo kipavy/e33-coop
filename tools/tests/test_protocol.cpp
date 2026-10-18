@@ -24,7 +24,7 @@ static std::vector<proto::Message> samples()
     proto::DefenseResult dr; dr.battle_id = 7; dr.turn = 4; dr.hit = 2; dr.result = proto::Defense::Parry;
     return {h, proto::Welcome{1, 99}, proto::Reject{proto::RejectReason::GameBuildMismatch, "host 1 vs client 2"}, proto::Bye{"bye"},
             proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, ar, dq, dr,
-            proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}};
+            proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::AiDraws{7, 3, 0, 0, {2.0, 0.25}}};
 }
 
 static void test_roundtrip()

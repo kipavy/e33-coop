@@ -13,13 +13,13 @@
 
 namespace e33::proto {
 
-inline constexpr uint16_t kProtocolVersion = 1;
+inline constexpr uint16_t kProtocolVersion = 2;   // v2 : AiDraws
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
 enum class MsgType : uint16_t {
     Hello = 1, Welcome = 2, Reject = 3, Bye = 4, Ping = 5, Pong = 6,
     BattleStart = 20, TurnStart = 21, ActionCommand = 22, ActionResult = 23,
-    DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27,
+    DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, AiDraws = 28,
 };
 
 const char* type_name(MsgType t);
@@ -99,9 +99,16 @@ struct DefenseResult {                    // client -> hôte : résolu localemen
 };
 struct StateHash { uint32_t battle_id = 0; uint32_t turn = 0; uint64_t hash = 0; };
 struct BattleEnd { uint32_t battle_id = 0; uint8_t result = 0; };
+struct AiDraws {                          // hôte -> clients : tirages aléatoires faits par l'IA d'un ennemi, dans l'ordre
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    uint8_t enemy_index = 0;
+    uint16_t first = 0;                   // rang du premier tirage de cette liste dans le tour
+    std::vector<double> values;
+};
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
-                             ActionResult, DefenseRequest, DefenseResult, StateHash, BattleEnd>;
+                             ActionResult, DefenseRequest, DefenseResult, StateHash, BattleEnd, AiDraws>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

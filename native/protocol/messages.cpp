@@ -66,6 +66,10 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u32(x.battle_id); w.u32(x.turn); w.u64(x.hash);
         } else if constexpr (std::is_same_v<T, BattleEnd>) {
             w.u32(x.battle_id); w.u8(x.result);
+        } else if constexpr (std::is_same_v<T, AiDraws>) {
+            w.u32(x.battle_id); w.u32(x.turn); w.u8(x.enemy_index); w.u16(x.first);
+            w.u16(static_cast<uint16_t>(x.values.size()));
+            for (double v : x.values) w.f64(v);
         } else {
             static_assert(always_false<T>, "message non géré");
         }
@@ -136,6 +140,12 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
     }
     case MsgType::StateHash: { StateHash x; x.battle_id = r.u32(); x.turn = r.u32(); x.hash = r.u64(); return finish(x); }
     case MsgType::BattleEnd: { BattleEnd x; x.battle_id = r.u32(); x.result = r.u8(); return finish(x); }
+    case MsgType::AiDraws: {
+        AiDraws x; x.battle_id = r.u32(); x.turn = r.u32(); x.enemy_index = r.u8(); x.first = r.u16();
+        const uint16_t n = r.count(kMaxList);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) x.values.push_back(r.f64());
+        return finish(x);
+    }
     }
     err = "unknown message type " + std::to_string(static_cast<unsigned>(t));
     return std::nullopt;
@@ -160,6 +170,7 @@ const char* type_name(MsgType t)
     case MsgType::DefenseResult: return "DefenseResult";
     case MsgType::StateHash: return "StateHash";
     case MsgType::BattleEnd: return "BattleEnd";
+    case MsgType::AiDraws: return "AiDraws";
     }
     return "?";
 }
@@ -168,7 +179,7 @@ MsgType type_of(const Message& m)
 {
     static constexpr MsgType order[] = {MsgType::Hello, MsgType::Welcome, MsgType::Reject, MsgType::Bye, MsgType::Ping, MsgType::Pong,
                                         MsgType::BattleStart, MsgType::TurnStart, MsgType::ActionCommand, MsgType::ActionResult,
-                                        MsgType::DefenseRequest, MsgType::DefenseResult, MsgType::StateHash, MsgType::BattleEnd};
+                                        MsgType::DefenseRequest, MsgType::DefenseResult, MsgType::StateHash, MsgType::BattleEnd, MsgType::AiDraws};
     return order[m.index()];
 }
 
@@ -227,6 +238,10 @@ std::string to_json(const Message& m)
             o.add("battle", x.battle_id).add("turn", x.turn).add("hash", std::string_view(h));
         } else if constexpr (std::is_same_v<T, BattleEnd>) {
             o.add("battle", x.battle_id).add("result", static_cast<int>(x.result));
+        } else if constexpr (std::is_same_v<T, AiDraws>) {
+            std::string vs = "[";
+            for (size_t i = 0; i < x.values.size(); ++i) { if (i) vs += ","; char b[32]; std::snprintf(b, sizeof b, "%.10g", x.values[i]); vs += b; }
+            o.add("battle", x.battle_id).add("turn", x.turn).add("enemy", static_cast<int>(x.enemy_index)).add("first", static_cast<int>(x.first)).raw("values", vs + "]");
         }
     }, m);
     return o.str();

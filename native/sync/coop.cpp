@@ -56,6 +56,8 @@ struct Battle {
     uint32_t host_turn_seen = 0;                        // client : dernier TurnStart reçu de l'hôte
     std::map<UObject*, uint16_t> local_defense_hit;     // client : coup en cours par composant de stats
     std::map<UObject*, uint16_t> local_jump_hit;        // client : coup sautable en cours
+    uint16_t draw_index = 0;                            // tirages d'IA ennemie dans le tour courant
+    std::map<uint64_t, double> host_draws;              // client : (tour<<16|rang) -> valeur tirée par l'hôte
 };
 
 struct State {
@@ -332,6 +334,9 @@ void handle(Peer& p, proto::Message& m)
     } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
         s.battle.remote_hash[sh->turn] = sh->hash;
         check_hash(sh->turn);
+    } else if (auto* ad = std::get_if<proto::AiDraws>(&m)) {
+        for (size_t i = 0; i < ad->values.size(); ++i)
+            s.battle.host_draws[(static_cast<uint64_t>(ad->turn) << 16) | (ad->first + i)] = ad->values[i];
     } else if (std::get_if<proto::BattleEnd>(&m)) {
         log().write("coop_battle_end_received", JsonObj().add("battle", s.battle.id));
     } else if (auto* ping = std::get_if<proto::Ping>(&m)) {
@@ -407,6 +412,7 @@ void subscribe()
                 broadcast(bs);
             }
             ++s.battle.turn;
+            s.battle.draw_index = 0;
             const bool hero = game::is_player(actor);
             broadcast(proto::TurnStart{s.battle.id, s.battle.turn, hero ? proto::ActorKind::Hero : proto::ActorKind::Enemy,
                                        static_cast<uint8_t>(hero ? hero_spot(actor) : enemy_index(actor)), game::char_class(actor)});
@@ -417,6 +423,7 @@ void subscribe()
             s.battle.pending_command.reset();
         } else if (s.role == Role::Client && s.battle.active) {
             ++s.battle.turn;
+            s.battle.draw_index = 0;
             // l'hôte rythme les tours : attendre son TurnStart et ses résultats pour ce tour
             wait_for([&] { return s.battle.host_turn_seen >= s.battle.turn; }, 10.0);
             apply_results();
@@ -522,6 +529,41 @@ void subscribe()
         const bool ok = ue::read_out_bool(ctx, f, STR("Successful")).value_or(false);
         for (auto& p : s.peers) send_to(p, proto::DefenseResult{s.battle.id, s.battle.turn, hit, ok ? proto::Defense::Parry : proto::Defense::Fail});
     });
+
+    // Tirages aléatoires de l'IA ennemie (D9) : fonctions natives de KismetMathLibrary appelées depuis un ennemi.
+    struct RandomFn { const wchar_t* name; int kind; };   // 0 = int32, 1 = double, 2 = bool
+    static const RandomFn random_fns[] = {
+        {L"RandomIntegerInRange", 0}, {L"RandomInteger", 0}, {L"RandomFloat", 1},
+        {L"RandomFloatInRange", 1}, {L"RandomBool", 2}, {L"RandomBoolWithWeight", 2},
+    };
+    for (const auto& rf : random_fns) {
+        const int kind = rf.kind;
+        const std::string fname = ue::to_utf8(rf.name);
+        bus.post(std::wstring(L"/Script/Engine.KismetMathLibrary:") + rf.name, [kind, fname](HookCtx& ctx, UFunction*) {
+            if (s.role == Role::Solo || !s.battle.active || !ctx.RESULT_DECL) return;
+            UObject* caller = ctx.TheStack.Object();
+            if (!caller) return;
+            const int ei = enemy_index(caller);
+            if (ei < 0) return;   // seulement les tirages faits par un ennemi (choix de l'IA)
+            const uint16_t idx = s.battle.draw_index++;
+            double v = kind == 0 ? static_cast<double>(*static_cast<int32_t*>(ctx.RESULT_DECL))
+                     : kind == 1 ? *static_cast<double*>(ctx.RESULT_DECL)
+                                 : (*static_cast<uint8_t*>(ctx.RESULT_DECL) ? 1.0 : 0.0);
+            if (s.role == Role::Host) {
+                broadcast(proto::AiDraws{s.battle.id, s.battle.turn, static_cast<uint8_t>(ei), idx, {v}});
+                log().write("coop_ai_draw", JsonObj().add("fn", fname).add("enemy", ei).add("index", static_cast<int>(idx)).add("value", v), s.battle.turn);
+                return;
+            }
+            const uint64_t key = (static_cast<uint64_t>(s.battle.turn) << 16) | idx;
+            const bool got = wait_for([&] { return s.battle.host_draws.count(key) > 0; }, 3.0);
+            if (!got) { log().write("coop_ai_draw_missing", JsonObj().add("fn", fname).add("index", static_cast<int>(idx)).add("local", v), s.battle.turn); return; }
+            const double hv = s.battle.host_draws[key];
+            if (kind == 0) *static_cast<int32_t*>(ctx.RESULT_DECL) = static_cast<int32_t>(hv);
+            else if (kind == 1) *static_cast<double*>(ctx.RESULT_DECL) = hv;
+            else *static_cast<uint8_t*>(ctx.RESULT_DECL) = hv != 0.0 ? 1 : 0;
+            log().write("coop_ai_draw_replayed", JsonObj().add("fn", fname).add("index", static_cast<int>(idx)).add("local", v).add("host", hv), s.battle.turn);
+        });
+    }
 
     bus.pre(fn(game::path::BattleMgr, L"StartBattleEndFlow"), [](HookCtx& ctx, UFunction* f) {
         if (!s.battle.active) return;
