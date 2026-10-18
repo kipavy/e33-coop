@@ -94,3 +94,18 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Détection de désync** : à chaque début de tour, `StateHash` = FNV-1a 64 de (PV arrondis, PA, bouclier, mort) des héros puis des ennemis, dans l'ordre des emplacements, + acteur courant. En cas d'écart : log détaillé des deux états puis resynchronisation complète depuis l'hôte (phase 3).
 
 **Hors phase 2** : forcer l'IA ennemie du client sur le choix de l'hôte (`PerformActionByAI`), compétences, objets, buffs — phase 3.
+
+---
+
+## D9 — Décisions de l'IA ennemie : l'hôte tire, les clients rejouent les tirages (2026-10-19, à implémenter en phase 3)
+
+**Constat** : pas de `FRandomStream` ; l'IA d'un ennemi choisit sa compétence par `KismetMathLibrary::RandomIntegerInRange` appelé depuis son propre Blueprint, et sa cible via `FL_TargetingHelpers_C:GetRandomAliveHero` (`Array_Random`). Les tirages cosmétiques (VFX, caméra, répliques) utilisent le même générateur global, en nombre variable selon la machine → impossible de simplement « seeder » le RNG.
+
+**Décision** : intercepter les fonctions de tirage natives (`RandomIntegerInRange`, `RandomInteger`, `RandomFloat(InRange)`, `RandomBool*`) **et** les helpers de ciblage BP (`GetRandomAliveHero`, `AcquireTargetRandomHero`, `GetRandomEnemy`) en post-hook, et filtrer par **appelant** (objet du cadre de script : un combattant, un skill script, un `BP_BattleDamages`) :
+- hôte : enregistre chaque tirage de gameplay (appelant, fonction, n°, valeur) et l'envoie avec le tour ;
+- client : remplace la valeur retournée par celle de l'hôte, au même rang pour le même appelant (attente bornée si elle n'est pas encore arrivée) ;
+- tests : un scénario peut imposer une séquence de tirages → runs reproductibles à l'identique.
+
+**Pourquoi pas forcer directement la compétence** : il faudrait connaître les événements `Skill_*` de chaque ennemi (des centaines de BP). Rejouer les tirages est générique : même état + mêmes tirages ⇒ même décision.
+
+**Critère de fin de phase 1 en attendant** : même *verdict* sur 3 runs (toutes les vérifications vertes, ordres de défense tous obéis), pas mêmes compteurs.
