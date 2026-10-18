@@ -83,7 +83,14 @@ end
 pcall(function()
     NotifyOnNewObject("/Game/UI/Widgets/MainMenu/WBP_MM_MainMenu.WBP_MM_MainMenu_C", function(w)
         log("main_menu_created", obj_name(w))
-        ExecuteWithDelay(8000, function() ExecuteInGameThread(function() run_dumps("mainmenu") end) end)
+        -- Dumps opt-in uniquement (RUN_DIR/dump.flag) : la génération du SDK charge puis décharge
+        -- de force des milliers d'assets, ce qui a fait planter un combat lancé juste après (2026-10-18).
+        local flag = io.open(RUN_DIR .. "dump.flag", "r")
+        if flag then
+            flag:close()
+            os.remove(RUN_DIR .. "dump.flag")
+            ExecuteWithDelay(8000, function() ExecuteInGameThread(function() run_dumps("mainmenu") end) end)
+        end
     end)
 end)
 

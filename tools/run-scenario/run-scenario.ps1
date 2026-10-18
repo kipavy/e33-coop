@@ -24,7 +24,8 @@ Copy-Item $scenario (Join-Path $run "scenario.json")
 function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Output $line; Add-Content (Join-Path $run "runner.log") $line }
 
 if (-not $NoReset) {
-    & (Join-Path $repo "tools\reset-env\reset-env.ps1") -GameDir $GameDir -Package $Package | ForEach-Object { Log $_ }
+    # Pas de mod d'exploration pendant les tests : seul E33Coop tourne.
+    & (Join-Path $repo "tools\reset-env\reset-env.ps1") -GameDir $GameDir -Package $Package -LuaMods @() | ForEach-Object { Log $_ }
 } elseif (Get-Process "SandFall-Win64-Shipping" -ErrorAction SilentlyContinue) {
     throw "Le jeu tourne déjà ; relancer sans -NoReset"
 }
