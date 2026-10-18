@@ -1,4 +1,4 @@
-# Capture la fenêtre de rendu du jeu (classe UnrealWindow) via PrintWindow :
+﻿# Capture la fenêtre de rendu du jeu (classe UnrealWindow) via PrintWindow :
 # fonctionne même si la fenêtre est masquée par d'autres, et ne capture jamais le reste de l'écran.
 param([string]$Out = "$PSScriptRoot\..\..\runs\shot.png", [string]$Process = "SandFall-Win64-Shipping")
 Add-Type -AssemblyName System.Drawing

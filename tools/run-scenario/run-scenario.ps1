@@ -1,4 +1,4 @@
-# Lance un scénario de test de bout en bout et produit un rapport.
+﻿# Lance un scénario de test de bout en bout et produit un rapport.
 #   run-scenario.ps1 <nom> [-Package <artefact CI>] [-TimeoutSec 900] [-NoReset]
 # Le scénario est tests\scenarios\<nom>.json. Le jeu est lancé via Steam (-applaunch) avec
 #   -e33test=<scenario> -e33run=<dossier du run>

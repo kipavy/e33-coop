@@ -1,4 +1,4 @@
-# Remet l'environnement de test dans un état connu, sans jamais toucher aux saves personnelles.
+﻿# Remet l'environnement de test dans un état connu, sans jamais toucher aux saves personnelles.
 #  - arrête le jeu s'il tourne
 #  - vérifie / met à jour la sauvegarde des saves perso (snapshot horodaté si elles ont changé)
 #  - garde les saves perso en lecture seule (sauf steam_autocloud.vdf)

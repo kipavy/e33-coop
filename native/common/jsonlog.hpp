@@ -50,7 +50,7 @@ public:
     {
         key(k);
         char buf[32];
-        std::snprintf(buf, sizeof buf, "%.6g", v);
+        std::snprintf(buf, sizeof buf, "%.10g", v);
         body_ += buf;
         return *this;
     }
@@ -87,8 +87,10 @@ public:
     {
         const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+        char tsbuf[32];
+        std::snprintf(tsbuf, sizeof tsbuf, "%lld.%06lld", static_cast<long long>(now / 1000000), static_cast<long long>(now % 1000000));
         JsonObj line;
-        line.add("ts", static_cast<double>(now) / 1e6)
+        line.raw("ts", tsbuf)
             .add("inst", instance_)
             .add("role", role_)
             .add("ev", ev)
