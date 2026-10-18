@@ -21,7 +21,7 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $run = Join-Path $repo "runs\$stamp-$Name"
 New-Item -ItemType Directory -Force $run | Out-Null
 Copy-Item $scenario (Join-Path $run "scenario.json")
-function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Output $line; Add-Content (Join-Path $run "runner.log") $line }
+function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Host $line; Add-Content (Join-Path $run "runner.log") $line }
 
 if (-not $NoReset) {
     # Pas de mod d'exploration pendant les tests : seul E33Coop tourne.

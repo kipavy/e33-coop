@@ -259,7 +259,7 @@ bool wait_for(Cond cond, double timeout_s)
         if (elapsed > timeout_s) return false;
         s.now = base + elapsed;
         pump_network();
-        Sleep(1);
+        Sleep(0);   // Sleep(1) dure ~15 ms sous Windows : on cède juste la main
     }
     return true;
 }
@@ -496,6 +496,14 @@ void subscribe()
         if (!defender || !game::is_player(defender)) return;
         if (owner_of_spot(hero_spot(defender)) == 0) return;   // héros de l'hôte : défendu localement
         remote_defense(defender, false);
+    });
+
+    bus.post(fn(game::path::Stats, L"TryParryHitFromCharacter"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role != Role::Host || !s.battle.active) return;
+        UObject* defender = ue::component_owner(ctx.Context);
+        if (!defender || !game::is_player(defender) || owner_of_spot(hero_spot(defender)) == 0) return;
+        const auto v = ue::read_out_bool(ctx, f, STR("Successful"));
+        log().write("coop_remote_parry_verdict", JsonObj().add("successful", v.value_or(false)).add("known", v.has_value()), s.battle.turn);
     });
 
     // Client : défense résolue localement -> résultat envoyé à l'hôte.

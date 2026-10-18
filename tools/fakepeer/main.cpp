@@ -29,6 +29,11 @@
 #include "minijson.hpp"
 #include "transport.hpp"
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#include <timeapi.h>
+
 using namespace e33;
 
 namespace {
@@ -232,6 +237,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
 
 int main(int argc, char** argv)
 {
+    timeBeginPeriod(1);   // sommeils de 1 ms réels (sinon ~15 ms)
     Args a;
     if (argc < 2) { std::fprintf(stderr, "usage: fakepeer client|host [options]\n"); return 2; }
     a.mode = argv[1];

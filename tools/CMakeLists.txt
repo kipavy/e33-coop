@@ -19,7 +19,7 @@ target_include_directories(e33proto PUBLIC ${NATIVE}/common ${NATIVE}/protocol $
 target_link_libraries(e33proto PUBLIC ws2_32)
 
 add_executable(fakepeer fakepeer/main.cpp)
-target_link_libraries(fakepeer PRIVATE e33proto)
+target_link_libraries(fakepeer PRIVATE e33proto winmm)
 
 enable_testing()
 add_executable(test_protocol tests/test_protocol.cpp)
