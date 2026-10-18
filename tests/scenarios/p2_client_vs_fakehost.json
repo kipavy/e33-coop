@@ -1,0 +1,12 @@
+{
+  "name": "p2_client_vs_fakehost",
+  "description": "Phase 2 : vrai jeu client face au faux hôte qui rejoue l'enregistrement d'une session hôte réelle. Le client contrôle le héros de l'emplacement 0, résout ses parades localement et compare ses hash d'état à ceux de l'hôte.",
+  "save": "e33coop-test/TEST_A",
+  "encounter": "L_LumiereCitizenFleuret_Male*1",
+  "timeout_s": 600,
+  "max_turns": 60,
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any" }
+}

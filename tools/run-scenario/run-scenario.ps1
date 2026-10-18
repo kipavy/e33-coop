@@ -30,14 +30,17 @@ if (-not $NoReset) {
     throw "Le jeu tourne déjà ; relancer sans -NoReset"
 }
 
-# Faux pair éventuel
+# Faux pair éventuel ({repo} et {run} sont remplacés dans ses arguments)
 $peer = $null
-if ($sc.fakepeer) {
+function Start-FakePeer {
     $fp = Join-Path $repo ".tools\bin\fakepeer.exe"
-    $peerArgs = @($sc.fakepeer.args) + @("--log", (Join-Path $run "fakepeer.jsonl"))
-    Log "démarrage du faux pair : $fp $($peerArgs -join ' ')"
-    $peer = Start-Process $fp -ArgumentList $peerArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $run "fakepeer.out") -RedirectStandardError (Join-Path $run "fakepeer.err")
+    if (-not (Test-Path $fp)) { throw "fakepeer.exe introuvable : $fp (artefact CI e33coop-tools)" }
+    $peerArgs = @($sc.fakepeer.args | ForEach-Object { $_.Replace("{repo}", $repo).Replace("{run}", $run) }) + @("--log", (Join-Path $run "fakepeer.jsonl"))
+    $quoted = $peerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
+    Log "démarrage du faux pair : $fp $($quoted -join ' ')"
+    return Start-Process $fp -ArgumentList $quoted -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $run "fakepeer.out") -RedirectStandardError (Join-Path $run "fakepeer.err")
 }
+if ($sc.fakepeer -and $sc.fakepeer.start -ne "after_game") { $peer = Start-FakePeer; Start-Sleep -Seconds 1 }
 
 $gameArgs = @("-windowed", "-ResX=1280", "-ResY=720", "-nosound", "-e33test=`"$scenario`"", "-e33run=`"$run`"")
 if ($sc.launch_args) { $gameArgs += @($sc.launch_args) }
@@ -55,6 +58,7 @@ while (-not $game -and ((Get-Date) - $t0).TotalSeconds -lt 120) {
 if (-not $game) { Log "ÉCHEC : le jeu n'a pas démarré en 120 s (fenêtre Steam en attente ?)"; $status = "launch_failed" }
 else {
     Log "jeu démarré (pid $($game.Id))"
+    if ($sc.fakepeer -and $sc.fakepeer.start -eq "after_game") { $peer = Start-FakePeer }
     $result = Join-Path $run "result.json"
     $status = $null
     while (-not $status) {
@@ -71,7 +75,13 @@ else {
         if (-not $game.HasExited) { Log "arrêt forcé du jeu"; Stop-Process -Id $game.Id -Force }
     }
 }
-if ($peer -and -not $peer.HasExited) { Stop-Process -Id $peer.Id -Force }
+$peerCode = $null
+if ($peer) {
+    # le faux pair a quelques secondes pour finir proprement après le jeu
+    if (-not $peer.WaitForExit(15000)) { Log "arrêt forcé du faux pair"; Stop-Process -Id $peer.Id -Force; $peerCode = -1 }
+    else { $peer.WaitForExit(); $peerCode = $peer.ExitCode }
+    Log "faux pair terminé, code $peerCode"
+}
 
 # Collecte
 $ue = Join-Path $GameDir "Sandfall\Binaries\Win64\ue4ss"
@@ -87,6 +97,7 @@ if ($status -eq "finished") {
     $res = Get-Content (Join-Path $run "result.json") -Raw | ConvertFrom-Json
     $ok = ($res.status -eq "pass")
 }
+if ($peer -and $peerCode -ne 0) { $ok = $false }
 $dur = [int]((Get-Date) - $t0).TotalSeconds
 $report = @("# Run $stamp — $Name", "", "- Verdict : **$(if ($ok) { 'PASS' } else { 'FAIL' })** (état : $status, durée : $dur s)")
 if ($res) {
@@ -95,6 +106,7 @@ if ($res) {
     if ($res.checks) { $report += ""; $report += "| Vérification | Attendu | Obtenu | OK |"; $report += "|---|---|---|---|"
         foreach ($c in $res.checks) { $report += "| $($c.name) | $($c.expected) | $($c.actual) | $(if ($c.ok) { 'oui' } else { 'NON' }) |" } }
 }
+if ($peer) { $report += "- Faux pair : code de sortie $peerCode$(if ($peerCode -ne 0) { ' (ÉCHEC)' })" }
 $shots = Get-ChildItem (Join-Path $run "shots") -File -ErrorAction SilentlyContinue
 if ($shots) { $report += ""; $report += "Captures : " + (($shots | ForEach-Object Name) -join ", ") }
 Set-Content (Join-Path $run "report.md") $report -Encoding utf8

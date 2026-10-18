@@ -1,0 +1,13 @@
+{
+  "name": "p2_host_vs_fakeclient",
+  "description": "Phase 2 : vrai jeu hôte face au faux client. Le héros de l'emplacement 0 appartient au client : l'hôte attend son ActionCommand à chaque tour de ce héros et lui demande le résultat de chaque coup reçu (parade puis échec en alternance).",
+  "save": "e33coop-test/TEST_A",
+  "encounter": "L_LumiereCitizenFleuret_Male*1",
+  "timeout_s": 600,
+  "wait_players": 1,
+  "max_turns": 60,
+  "defense": ["fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=0:1"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_basic.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any" }
+}
