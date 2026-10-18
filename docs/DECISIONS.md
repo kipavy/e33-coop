@@ -74,3 +74,23 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 ## D7 — Captures d'écran par `PrintWindow` sur la fenêtre `UnrealWindow` (2026-10-18)
 
 **Décision** : `tools/dev/screenshot.ps1` capture uniquement la fenêtre de rendu du jeu (même masquée), jamais l'écran entier — Killian peut utiliser son PC pendant les tests sans que son bureau soit capturé.
+
+---
+
+## D8 — Modèle de synchro du combat (phase 2, 2026-10-18)
+
+**Principe** : chaque instance fait tourner sa propre simulation du combat (animations, caméra, UI) ; l'hôte est la seule source de vérité pour ce qui est calculé (dégâts, crits, PV, choix de l'IA, ordre des tours). Les clients rejouent puis **écrasent** leur état avec les résultats de l'hôte (`ActionResult.hits[].hp_after`, plus tard buffs/PA) — les « setters de réparation » déjà validés par E33 Versus (`CurrentHP`, `SetAP`, `SetCurrentShieldPoints`…).
+
+**Tour d'un héros d'un client** : le client choisit l'action et résout ses QTE offensifs localement → `ActionCommand` (action, compétence, cibles, `combo_hits`/`combo_perfect`) → l'hôte exécute la même action avec `DEBUG_ComboAutoSuccessCount = combo_hits` (même chemin que le test runner) → `ActionResult` diffusé.
+
+**Coup ennemi sur un héros d'un client** (le cœur du projet) :
+1. Le client joue l'attaque sur son instance et résout la défense **localement**, au bon timing, au moment de son propre `TryParryHitFromCharacter` → `DefenseResult{hit k, résultat}` immédiatement.
+2. L'hôte, à son propre `TryParryHitFromCharacter` pour le coup k d'un héros distant : si le résultat est déjà arrivé, il l'applique ; sinon il **attend** (pompe le réseau dans le hook, max `timeout_ms`, défaut 3 s → échec). Résultat « parade » ⇒ l'hôte appelle `TryStartParry` sur le défenseur dans le pré-hook, ce qui donne naturellement `Successful=true` (validé en phase 1, sans forcer le verdict) ; « échec » ⇒ rien.
+3. Les coups sont identifiés par (combat, tour, n° de coup sur les héros de ce joueur), compté de la même façon des deux côtés.
+4. Attaque de groupe : un `DefenseResult` par joueur concerné ; un joueur qui contrôle plusieurs héros envoie un seul résultat pour tous ses héros touchés par ce coup (règle du brief).
+
+**Pourquoi attendre dans le hook** : le verdict de `TryParryHitFromCharacter` est synchrone. L'attente vaut ~RTT/2 par coup (le client voit l'attaque en même temps que l'hôte) ; à mesurer en phase 2. Si c'est perceptible, plan B : ralentir le temps de l'hôte (dilatation) pendant les fenêtres de coup d'un héros distant.
+
+**Détection de désync** : à chaque début de tour, `StateHash` = FNV-1a 64 de (PV arrondis, PA, bouclier, mort) des héros puis des ennemis, dans l'ordre des emplacements, + acteur courant. En cas d'écart : log détaillé des deux états puis resynchronisation complète depuis l'hôte (phase 3).
+
+**Hors phase 2** : forcer l'IA ennemie du client sur le choix de l'hôte (`PerformActionByAI`), compétences, objets, buffs — phase 3.
