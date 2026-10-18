@@ -72,6 +72,8 @@ struct State {
     int action_index = 0;
     int hit_index = 0;        // coups reçus par des persos joueurs
     int parry_cmd = 0, parry_ok = 0, parry_forced = 0, fail_cmd = 0, fail_ok = 0;
+    int jump_cmd = 0, jump_ok = 0;
+    std::map<UObject*, std::string> jump_decision;   // ReceiveDamageFromObject sautable en cours, par composant de stats
     int damage_events = 0;
     double pending_action_at = -1;
     UObject* pending_actor = nullptr;
@@ -170,6 +172,14 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         const int want = static_cast<int>(ex["min_parries_ok"].as_int());
         add("min_parries_ok", std::to_string(want), std::to_string(g.parry_ok), g.parry_ok >= want);
     }
+    if (!ex["min_defenses_ok"].is_null()) {
+        const int want = static_cast<int>(ex["min_defenses_ok"].as_int());
+        add("min_defenses_ok", std::to_string(want), std::to_string(g.parry_ok + g.jump_ok), g.parry_ok + g.jump_ok >= want);
+    }
+    if (!ex["defense_commands_obeyed"].is_null()) {
+        const bool ok = g.parry_ok == g.parry_cmd && g.jump_ok == g.jump_cmd && g.fail_ok == g.fail_cmd;
+        add("defense_commands_obeyed", "true", ok ? "true" : "false", ok);
+    }
     if (!ex["min_fails_ok"].is_null()) {
         const int want = static_cast<int>(ex["min_fails_ok"].as_int());
         add("min_fails_ok", std::to_string(want), std::to_string(g.fail_ok), g.fail_ok >= want);
@@ -205,6 +215,7 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         .add("hits_on_players", g.hit_index)
         .add("parry_cmd", g.parry_cmd).add("parry_ok", g.parry_ok).add("parry_forced", g.parry_forced)
         .add("fail_cmd", g.fail_cmd).add("fail_ok", g.fail_ok)
+        .add("jump_cmd", g.jump_cmd).add("jump_ok", g.jump_ok)
         .add("damage_events", g.damage_events)
         .add("battle_end", g.end_result)
         .add("duration_s", g.t)
@@ -293,6 +304,33 @@ void subscribe()
             ++g.fail_ok;
         }
         log().write("tr_parry_verdict", JsonObj().add("decision", decision).add("verdict", verdict.has_value() ? (*verdict ? "true" : "false") : "?").add("forced", forced), g.turn);
+    });
+
+    // Attaques sautables : pas de TryParryHitFromCharacter, le test du saut est dans ReceiveDamageFromObject.
+    bus.pre(fn(game::path::Stats, L"ReceiveDamageFromObject"), [](HookCtx& ctx, RC::Unreal::UFunction* f) {
+        if (g.phase != Phase::Battle) return;
+        UObject* defender = ue::component_owner(ctx.Context);
+        if (!defender || !game::is_player(defender)) return;
+        if (!coop::controls_spot(static_cast<int>(ue::get_int(defender, STR("BattleSpotIndex"), -1)))) return;
+        if (!game::incoming_attack_jumpable(ue::read_param_object(ctx, f, STR("DamageBuilder")))) return;
+        const auto& d = g.sc.defense;
+        std::string decision = d.empty() ? "fail" : d[static_cast<size_t>(g.hit_index) % d.size()];
+        ++g.hit_index;
+        bool started = false;
+        if (decision != "fail") { decision = "jump"; ++g.jump_cmd; started = game::start_jump(defender); }
+        else ++g.fail_cmd;
+        g.jump_decision[ctx.Context] = decision;
+        log().write("tr_incoming_hit", JsonObj().add("defender", game::char_class(defender)).add("decision", decision).add("jumpable", true).add("jump_started", started).add("hit", g.hit_index), g.turn);
+    });
+    bus.post(fn(game::path::Stats, L"ReceiveDamageFromObject"), [](HookCtx& ctx, RC::Unreal::UFunction* f) {
+        auto it = g.jump_decision.find(ctx.Context);
+        if (it == g.jump_decision.end()) return;
+        const std::string decision = it->second;
+        g.jump_decision.erase(it);
+        const bool dodged = ue::read_out_bool(ctx, f, STR("DodgeSuccess")).value_or(false);
+        if (decision == "jump" && dodged) ++g.jump_ok;
+        if (decision == "fail" && !dodged) ++g.fail_ok;
+        log().write("tr_jump_verdict", JsonObj().add("decision", decision).add("dodged", dodged), g.turn);
     });
 
     bus.post(fn(game::path::Stats, L"ReceiveDamage"), [](HookCtx& ctx, RC::Unreal::UFunction*) {

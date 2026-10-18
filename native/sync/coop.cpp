@@ -55,6 +55,7 @@ struct Battle {
     std::vector<proto::ActionResult> pending_results;   // client : résultats à appliquer
     uint32_t host_turn_seen = 0;                        // client : dernier TurnStart reçu de l'hôte
     std::map<UObject*, uint16_t> local_defense_hit;     // client : coup en cours par composant de stats
+    std::map<UObject*, uint16_t> local_jump_hit;        // client : coup sautable en cours
 };
 
 struct State {
@@ -448,14 +449,10 @@ void subscribe()
         for (auto& p : s.peers) send_to(p, ac);
     });
 
-    // Défense : TryParryHitFromCharacter sur le composant de stats du défenseur.
-    bus.pre(fn(game::path::Stats, L"TryParryHitFromCharacter"), [](HookCtx& ctx, UFunction*) {
-        if (s.role != Role::Host || !s.battle.active) return;
-        UObject* defender = ue::component_owner(ctx.Context);
-        if (!defender || !game::is_player(defender)) return;
+    // Défense distante (hôte) : demande au propriétaire du héros, attend son résultat, l'applique.
+    auto remote_defense = [](UObject* defender, bool jumpable) {
         const int spot = hero_spot(defender);
         const uint8_t owner = owner_of_spot(spot);
-        if (owner == 0) return;   // héros de l'hôte : le joueur local (ou le test runner) défend
         const uint16_t hit = ++s.battle.hit_counter[owner];
         for (auto& p : s.peers)
             if (p.player_id == owner) send_to(p, proto::DefenseRequest{s.battle.id, s.battle.turn, hit, 0, {static_cast<uint8_t>(spot)}, 3000});
@@ -466,9 +463,39 @@ void subscribe()
         proto::Defense res = proto::Defense::Fail;
         if (got) { res = s.battle.defense_results[key].result; s.battle.defense_results.erase(key); }
         bool started = false;
-        if (res == proto::Defense::Parry || res == proto::Defense::GradientParry) started = game::start_parry(defender);
-        log().write("coop_remote_defense", JsonObj().add("player", static_cast<int>(owner)).add("hit", static_cast<int>(hit)).add("result", static_cast<int>(res))
-                                               .add("received", got).add("waited_ms", waited_ms).add("parry_started", started), s.battle.turn);
+        if (jumpable && res != proto::Defense::Fail) started = game::start_jump(defender);
+        else if (!jumpable && (res == proto::Defense::Parry || res == proto::Defense::GradientParry)) started = game::start_parry(defender);
+        log().write("coop_remote_defense", JsonObj().add("player", static_cast<int>(owner)).add("hit", static_cast<int>(hit)).add("jumpable", jumpable).add("result", static_cast<int>(res))
+                                               .add("received", got).add("waited_ms", waited_ms).add("started", started), s.battle.turn);
+    };
+    bus.pre(fn(game::path::Stats, L"ReceiveDamageFromObject"), [remote_defense](HookCtx& ctx, UFunction* f) {
+        if (!s.battle.active || s.role == Role::Solo) return;
+        UObject* defender = ue::component_owner(ctx.Context);
+        if (!defender || !game::is_player(defender)) return;
+        if (!game::incoming_attack_jumpable(ue::read_param_object(ctx, f, STR("DamageBuilder")))) return;
+        if (s.role == Role::Host) {
+            if (owner_of_spot(hero_spot(defender)) != 0) remote_defense(defender, true);
+        } else if (owner_of_spot(hero_spot(defender)) == s.my_player_id) {
+            s.battle.local_jump_hit[ctx.Context] = ++s.battle.hit_counter[s.my_player_id];
+        }
+    });
+    bus.post(fn(game::path::Stats, L"ReceiveDamageFromObject"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role != Role::Client || !s.battle.active) return;
+        auto it = s.battle.local_jump_hit.find(ctx.Context);
+        if (it == s.battle.local_jump_hit.end()) return;
+        const uint16_t hit = it->second;
+        s.battle.local_jump_hit.erase(it);
+        const bool dodged = ue::read_out_bool(ctx, f, STR("DodgeSuccess")).value_or(false);
+        for (auto& p : s.peers) send_to(p, proto::DefenseResult{s.battle.id, s.battle.turn, hit, dodged ? proto::Defense::Jump : proto::Defense::Fail});
+    });
+
+    // Défense : TryParryHitFromCharacter sur le composant de stats du défenseur.
+    bus.pre(fn(game::path::Stats, L"TryParryHitFromCharacter"), [remote_defense](HookCtx& ctx, UFunction*) {
+        if (s.role != Role::Host || !s.battle.active) return;
+        UObject* defender = ue::component_owner(ctx.Context);
+        if (!defender || !game::is_player(defender)) return;
+        if (owner_of_spot(hero_spot(defender)) == 0) return;   // héros de l'hôte : défendu localement
+        remote_defense(defender, false);
     });
 
     // Client : défense résolue localement -> résultat envoyé à l'hôte.

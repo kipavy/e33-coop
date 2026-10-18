@@ -5,9 +5,7 @@ on:
     paths: ["native/**", "tools/fakepeer/**", "tools/tests/**", "tools/CMakeLists.txt", ".github/workflows/build.yml", ".gitmodules"]
   workflow_dispatch: {}
 permissions: { contents: read }
-# Un seul build à la fois, toutes branches confondues (minutes Windows ×2 sur un repo privé) :
-# un build en attente est remplacé par le plus récent.
-concurrency: { group: "${{ github.workflow }}", cancel-in-progress: false }
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: false }
 defaults: { run: { shell: pwsh } }
 
 jobs:

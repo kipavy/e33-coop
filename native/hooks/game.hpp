@@ -47,5 +47,9 @@ const std::wstring& last_encounter();
 bool perform_action(int action_type, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err);
 // Démarre une vraie parade (animation + fenêtre) pour un personnage ; renvoie le Success du jeu.
 bool start_parry(UObject* character);
+// Démarre un vrai saut d'esquive (attaques sautables).
+bool start_jump(UObject* character);
+// Dans un hook de AC_jRPG_CharacterBattleStats_C:ReceiveDamageFromObject : l'attaque entrante est-elle sautable ?
+bool incoming_attack_jumpable(UObject* damage_builder);
 
 } // namespace e33::game

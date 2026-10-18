@@ -208,4 +208,24 @@ bool start_parry(UObject* character)
     return c.out_bool(STR("Success"));
 }
 
+bool start_jump(UObject* character)
+{
+    if (ue::get_bool(character, STR("IsJumping"))) return true;
+    ue::Call c(character, STR("TryStartJump"));
+    if (!c || !c.invoke()) return false;
+    return c.out_bool(STR("Success"));
+}
+
+bool incoming_attack_jumpable(UObject* damage_builder)
+{
+    if (!damage_builder) return false;
+    ue::Call src(damage_builder, STR("GetDamageSource"));
+    if (!src || !src.invoke()) return false;
+    UObject* source = src.out_object(STR("DamageSource"));   // TScriptInterface : l'objet est le premier membre
+    ue::Call chr(source, STR("GetDamageSourceCharacter"));
+    if (!chr || !chr.invoke()) return false;
+    UObject* attacker_stats = chr.out_object(STR("CharacterStats"));
+    return ue::get_bool(attacker_stats, STR("IsCurrentAttackJumpable"));
+}
+
 } // namespace e33::game

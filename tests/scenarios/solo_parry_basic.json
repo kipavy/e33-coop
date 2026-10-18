@@ -1,13 +1,28 @@
 {
   "name": "solo_parry_basic",
-  "description": "Combat solo simple : attaques de base, parades réussies puis ratées en alternance sur chaque coup reçu.",
+  "description": "Combat solo simple : attaques de base ; sur chaque coup reçu, défense réussie (parade ou saut selon l'attaque) puis ratée en alternance.",
   "save": "e33coop-test/TEST_A",
   "encounter": "L_LumiereCitizenFleuret_Male*1",
   "timeout_s": 600,
   "action_delay_s": 1.5,
   "combo_auto_success": 10,
   "max_turns": 60,
-  "actions": [{ "type": "attack", "target": 0 }],
-  "defense": ["parry", "fail"],
-  "expect": { "battle_end": "any", "min_parries_ok": 1, "min_fails_ok": 1, "max_forced_parries": 0, "min_player_turns": 1 }
+  "actions": [
+    {
+      "type": "attack",
+      "target": 0
+    }
+  ],
+  "defense": [
+    "parry",
+    "fail"
+  ],
+  "expect": {
+    "battle_end": "any",
+    "min_defenses_ok": 1,
+    "min_fails_ok": 1,
+    "defense_commands_obeyed": true,
+    "max_forced_parries": 0,
+    "min_player_turns": 1
+  }
 }
