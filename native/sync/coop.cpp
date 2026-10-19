@@ -1520,6 +1520,11 @@ bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
         if (s.now - b.turn_started_at < s.action_delay_s || s.now - b.fa_arrival[key] < s.replay_lag_s) return true;
         ue::Call c(game::battle_manager(), STR("StartFreeAimFromUI"));
         if (c) c.invoke();
+        // Le joueur d'ici ne doit ni orienter la caméra ni tirer pour ce héros (vu par Killian le 2026-10-19).
+        // DisableFreeAimControls coupe la souris/le stick et le bouton de tir ; nos tirs (OnFreeAimShootAction) et
+        // l'annulation (CancelFreeAimFromUI) passent toujours (vérifié en jeu le 2026-10-19).
+        ue::Call off(game::battle_manager(), STR("DisableFreeAimControls"));
+        if (off) { off.invoke(); bump("free_aim_controls_locked"); }
         r.started = true;
         r.t0 = SteadyClock::now();
         bump("free_aims_replayed");
