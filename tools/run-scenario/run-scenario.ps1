@@ -49,6 +49,32 @@ function Start-FakePeer($spec, [int]$index) {
     $null = $p.Handle
     return $p
 }
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class E33Win { [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr h); }
+"@
+# Gel au démarrage (écran d'avertissement, ~1 lancement sur 8, même sans le mod coop actif : voir PROGRESS) :
+# fenêtre bloquée depuis 10 s et aucune classe de jeu chargée (pas de hook /Game/ enregistré) après 45 s.
+function Test-StartupFreeze($game, [double]$elapsed, [ref]$hungSince) {
+    if ($elapsed -lt 45 -or $elapsed -gt 150) { return $false }
+    $log = Get-ChildItem $run -Filter "e33coop-*.jsonl" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($log -and (Select-String -Path $log.FullName -Pattern '"path":"/Game/' -SimpleMatch -Quiet)) { return $false }
+    $game.Refresh()
+    if (-not [E33Win]::IsHungAppWindow($game.MainWindowHandle)) { $hungSince.Value = $null; return $false }
+    if (-not $hungSince.Value) { $hungSince.Value = Get-Date }
+    return ((Get-Date) - $hungSince.Value).TotalSeconds -ge 10
+}
+
+$maxAttempts = 3
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+if ($attempt -gt 1) {
+    # Tentative précédente gelée au démarrage : tout arrêter, mettre ses journaux de côté, relancer.
+    $peers | Where-Object { -not $_.HasExited } | ForEach-Object { Stop-Process -Id $_.Id -Force }
+    $peers = @()
+    Get-ChildItem $run -File | Where-Object { $_.Extension -in ".jsonl", ".out", ".err" } | ForEach-Object { Rename-Item $_.FullName ($_.Name + ".attempt$($attempt - 1)") }
+    while (Get-Process "SandFall*" -ErrorAction SilentlyContinue) { Start-Sleep 2 }
+    Start-Sleep 5
+}
 for ($i = 0; $i -lt $peerSpecs.Count; $i++) {
     if ($peerSpecs[$i].start -ne "after_game") { $peers += Start-FakePeer $peerSpecs[$i] $i; Start-Sleep -Seconds 1 }
 }
@@ -77,6 +103,7 @@ else {
     $status = $null
     $nextShot = 0.0
     if ($sc.shots_every_s) { New-Item -ItemType Directory -Force (Join-Path $run "shots") | Out-Null }
+    $hungSince = $null
     while (-not $status) {
         Start-Sleep -Seconds 2
         # "shots_every_s": N -> capture de la fenêtre du jeu toutes les N secondes (shots\tNNN.png)
@@ -88,6 +115,11 @@ else {
         }
         if (Test-Path $result) { Start-Sleep -Seconds 1; $status = "finished" }
         elseif ($game.HasExited) { $status = "game_exited" }
+        elseif (Test-StartupFreeze $game ((Get-Date) - $t0).TotalSeconds ([ref]$hungSince)) {
+            $status = "startup_freeze"
+            Log "gel au démarrage détecté (tentative $attempt/$maxAttempts) : arrêt du jeu"
+            Stop-Process -Id $game.Id -Force
+        }
         else {
             # Crash : le jeu affiche une boîte « Fatal error » qui attend un clic. On note son texte et on la ferme.
             $dlg = & (Join-Path $repo "tools\dev\close-crash-dialog.ps1") -ProcessId $game.Id -Out (Join-Path $run "crash-dialog.txt")
@@ -102,6 +134,8 @@ else {
         $game.WaitForExit(30000) | Out-Null
         if (-not $game.HasExited) { Log "arrêt forcé du jeu"; Stop-Process -Id $game.Id -Force }
     }
+}
+if ($status -ne "startup_freeze") { break }
 }
 $peerCodes = @()
 for ($i = 0; $i -lt $peers.Count; $i++) {

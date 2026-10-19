@@ -18,7 +18,10 @@ $all = @(
 $list = if ($Only) { $Only -split "," } else { $all }
 $results = @()
 foreach ($name in $list) {
+    # Une erreur d'un scenario (texte sur stderr) ne doit pas arreter toute la batterie.
+    $ErrorActionPreference = "Continue"
     $out = & powershell -NoProfile -File (Join-Path $PSScriptRoot "run-scenario.ps1") $name -Package $Package 2>&1
+    $ErrorActionPreference = "Stop"
     $verdict = if ($out -match "PASS") { "PASS" } else { "FAIL" }
     $dir = ($out | Where-Object { $_ -match "^Dossier du run" }) -replace "^Dossier du run : ", ""
     $failed = ($out | Where-Object { $_ -match "\| NON \|" }) -join " ; "

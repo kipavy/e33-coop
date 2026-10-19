@@ -4,6 +4,7 @@
 //  - test runner si -e33test=<scenario.json>
 // Le travail sur les objets du jeu se fait dans le callback EngineTick (game thread).
 
+#include <chrono>
 #include <filesystem>
 #include <string>
 
@@ -85,7 +86,7 @@ public:
         subscribe_logging_hooks();
         e33::coop::init();          // avant le test runner : ses hooks de début de tour fixent les propriétaires
         e33::testrunner::init();
-        e33::HookBus::get().try_register();
+        init_at_ = std::chrono::steady_clock::now();   // rien d'autre avant kStartupQuiet : voir on_tick
 
         Hook::RegisterEngineTickPreCallback(
             [this](auto&, UEngine*, float dt, bool) { on_tick(dt); },
@@ -93,12 +94,27 @@ public:
     }
 
 private:
+    // Gel du jeu au démarrage (écran d'avertissement) : ~1 lancement sur 8 avec le mod, 0 sur 9 sans (2026-10-19),
+    // pendant que le mod cherche ses fonctions (StaticFindObject) et travaille dans les toutes premières secondes.
+    // On attend que le moteur ait fini de démarrer (menu principal vers 20 s) avant toute activité.
+    static constexpr std::chrono::seconds kStartupQuiet{10};
+    std::chrono::steady_clock::time_point init_at_{};
+    bool awake_ = false;
     double hook_retry_ = 0;
     bool hooks_done_ = false;
 
     void on_tick(float dt)
     {
         try {
+            if (!awake_) {
+                const auto quiet = std::chrono::steady_clock::now() - init_at_;
+                if (quiet < kStartupQuiet) return;
+                awake_ = true;
+                e33::log().write("mod_awake", e33::JsonObj().add("after_ms",
+                    static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(quiet).count())));
+                hooks_done_ = e33::HookBus::get().try_register();
+                return;
+            }
             if (!hooks_done_) {
                 hook_retry_ += dt;
                 if (hook_retry_ > 1.0) { hook_retry_ = 0; hooks_done_ = e33::HookBus::get().try_register(); }
