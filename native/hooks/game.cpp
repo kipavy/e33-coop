@@ -506,6 +506,80 @@ bool add_buff(UObject* st, const std::string& cls_name, int stacks, int turns, b
 
 UObject* gradient_gauge() { return ue::get_object(battle_manager(), STR("GradientGaugeSystem")); }
 
+namespace {
+
+// Parcourt les champs entiers (bool, octet, énumération, int) et les tableaux de ces types des composants de
+// mécanique propre d'un héros (BP_*Mechanic*Component, BP_StainHolderComponent). Champs propres à la classe BP
+// seulement (pas ceux d'UActorComponent). visit(nom, adresse, taille, est_bool, bool_prop, conteneur).
+template <class Visit>
+void for_each_mech_field(UObject* hero, Visit visit)
+{
+    for (UObject* c : ue::get_object_array(hero, STR("BlueprintCreatedComponents"))) {
+        if (!c) continue;
+        const std::string cls = char_class(c);
+        if (cls.find("Mechanic") == std::string::npos && cls.find("StainHolder") == std::string::npos) continue;
+        for (FProperty* p : TFieldRange<FProperty>(c->GetClassPrivate(), EFieldIterationFlags::IncludeDeprecated)) {
+            const std::string name = cls + "." + ue::to_utf8(p->GetName());
+            if (auto* bp = CastField<FBoolProperty>(p)) { visit(name, nullptr, 0, bp, c); continue; }
+            if (CastField<FIntProperty>(p) || CastField<FByteProperty>(p) || CastField<FEnumProperty>(p)) {
+                visit(name, p->ContainerPtrToValuePtr<void>(c), p->GetSize(), nullptr, c);
+                continue;
+            }
+            if (auto* ap = CastField<FArrayProperty>(p)) {
+                FProperty* inner = ap->GetInner();
+                if (!(CastField<FIntProperty>(inner) || CastField<FByteProperty>(inner) || CastField<FEnumProperty>(inner))) continue;
+                auto* arr = static_cast<FScriptArray*>(ap->ContainerPtrToValuePtr<void>(c));
+                int32 n = arr->Num();
+                visit(name + "#", &n, -4, nullptr, c);   // taille du tableau (lecture seule)
+                auto* data = static_cast<uint8_t*>(arr->GetData());
+                for (int32 i = 0; i < n; ++i) visit(name + "[" + std::to_string(i) + "]", data + static_cast<size_t>(i) * inner->GetSize(), inner->GetSize(), nullptr, c);
+            }
+        }
+    }
+}
+
+int64_t read_int(const void* p, int size)
+{
+    switch (size) {
+    case 1: return *static_cast<const uint8_t*>(p);
+    case 2: return *static_cast<const int16_t*>(p);
+    case 4: case -4: return *static_cast<const int32_t*>(p);
+    case 8: return *static_cast<const int64_t*>(p);
+    default: return 0;
+    }
+}
+
+} // namespace
+
+std::vector<std::pair<std::string, int64_t>> mechanic_fields(UObject* hero)
+{
+    std::vector<std::pair<std::string, int64_t>> out;
+    for_each_mech_field(hero, [&](const std::string& name, void* addr, int size, FBoolProperty* bp, UObject* comp) {
+        out.emplace_back(name, bp ? (bp->GetPropertyValueInContainer(comp) ? 1 : 0) : read_int(addr, size));
+    });
+    return out;
+}
+
+int set_mechanic_fields(UObject* hero, const std::vector<std::pair<std::string, int64_t>>& wanted, int& failed)
+{
+    int fixed = 0;
+    for_each_mech_field(hero, [&](const std::string& name, void* addr, int size, FBoolProperty* bp, UObject* comp) {
+        auto it = std::find_if(wanted.begin(), wanted.end(), [&](const auto& w) { return w.first == name; });
+        if (it == wanted.end()) return;
+        const int64_t cur = bp ? (bp->GetPropertyValueInContainer(comp) ? 1 : 0) : read_int(addr, size);
+        if (cur == it->second) return;
+        if (bp) { bp->SetPropertyValueInContainer(comp, it->second != 0); ++fixed; return; }
+        switch (size) {
+        case 1: *static_cast<uint8_t*>(addr) = static_cast<uint8_t>(it->second); ++fixed; break;
+        case 2: *static_cast<int16_t*>(addr) = static_cast<int16_t>(it->second); ++fixed; break;
+        case 4: *static_cast<int32_t*>(addr) = static_cast<int32_t>(it->second); ++fixed; break;
+        case 8: *static_cast<int64_t*>(addr) = it->second; ++fixed; break;
+        default: ++failed; break;   // taille de tableau différente : non réparable champ par champ
+        }
+    });
+    return fixed;
+}
+
 bool location(UObject* actor, double out[3])
 {
     auto l = actor_location(actor);

@@ -102,6 +102,11 @@ bool add_buff(UObject* stats, const std::string& cls, int stacks, int turns, boo
 UObject* gradient_gauge();
 // Position monde d'un acteur (K2_GetActorLocation).
 bool location(UObject* actor, double out[3]);
+// Mécanique propre d'un héros (perfection de Verso, posture de Maelle, taches de Lune…) : champs entiers des composants
+// BP_*Mechanic*Component / BP_StainHolderComponent ("Classe.Champ", "Classe.Tableau#" = taille, "Classe.Tableau[i]").
+std::vector<std::pair<std::string, int64_t>> mechanic_fields(UObject* hero);
+// Réécrit les champs qui diffèrent ; renvoie le nombre corrigé (failed : champs non réparables).
+int set_mechanic_fields(UObject* hero, const std::vector<std::pair<std::string, int64_t>>& wanted, int& failed);
 // Visée libre
 inline const wchar_t* const FreeAimComp = L"/Game/Gameplay/FreeAim/BP_FreeAimShooterBattleComponent.BP_FreeAimShooterBattleComponent_C:";
 inline const wchar_t* const FreeAimProjectile = L"/Game/Gameplay/WorldSkills/BP_FreeAimProjectile_Base.BP_FreeAimProjectile_Base_C:";

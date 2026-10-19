@@ -26,6 +26,7 @@ static std::vector<proto::Message> samples()
     proto::StateSync ss; ss.battle_id = 7; ss.turn = 4; ss.gradient_charges = 2; ss.gradient_progress = 0.5;
     proto::UnitState us; us.unit = {proto::ActorKind::Hero, 2}; us.cls = "BP_Verso_Battle2_C"; us.hp = 13965; us.ap = 9; us.shield = 1; us.break_bar = 1234567890123ll;
     us.buffs = {{"BP_BattleBuff_Burn_C", 1, 3, false}, {"BP_BattleBuff_Shell_C", 2, 0, true}};
+    us.mech = {{"BP_PerfectionMechanicComponent_C.Perfection", 42}, {"BP_StainHolderComponent_C.Stains[0]", 3}};
     ss.units = {us, proto::UnitState{{proto::ActorKind::Enemy, 0}, "BP_Enemy", 5.5, 0, 0, 0, true, {}}};
     proto::BattleRewards rw; rw.battle_id = 7; rw.xp = 521235; rw.gold = 10448; rw.loot = {{"Lumicolor", 5}, {"ChromaCatalyst", 2}};
     return {h, proto::Welcome{1, 99}, proto::Reject{proto::RejectReason::GameBuildMismatch, "host 1 vs client 2"}, proto::Bye{"bye"},

@@ -34,6 +34,25 @@ const proto::UnitState* find(const proto::StateSync& st, const proto::Unit& u)
     return nullptr;
 }
 
+bool same_mech(const std::vector<proto::MechField>& a, const std::vector<proto::MechField>& b)
+{
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) if (a[i].name != b[i].name || a[i].value != b[i].value) return false;
+    return true;
+}
+
+// Champs de a absents de b ou de valeur différente (log court).
+std::string mech_str(const std::vector<proto::MechField>& a, const std::vector<proto::MechField>& b)
+{
+    std::string s;
+    for (auto& f : a) {
+        auto it = std::find_if(b.begin(), b.end(), [&](const proto::MechField& g) { return g.name == f.name; });
+        if (it != b.end() && it->value == f.value) continue;
+        s += (s.empty() ? "" : " ") + f.name + "=" + std::to_string(f.value);
+    }
+    return s;
+}
+
 std::string buffs_str(const std::vector<proto::BuffState>& v)
 {
     std::string s;
@@ -68,6 +87,8 @@ proto::StateSync snapshot(uint32_t battle_id, uint32_t turn)
             u.buffs.push_back({b.cls, b.stacks, b.turns, b.permanent});
         }
         std::sort(u.buffs.begin(), u.buffs.end(), buff_less);
+        if (u.unit.kind == proto::ActorKind::Hero)
+            for (auto& [name, value] : game::mechanic_fields(c)) u.mech.push_back({name, value});
         st.units.push_back(std::move(u));
     };
     auto heroes = game::players();
@@ -97,6 +118,8 @@ uint64_t hash(const proto::StateSync& st, proto::Unit actor)
         h.i64(u.dead ? 1 : 0);
         h.i64(static_cast<int64_t>(u.buffs.size()));
         for (auto& b : u.buffs) { h.str(b.cls); h.i64(b.stacks); h.i64(b.turns); h.i64(b.permanent ? 1 : 0); }
+        h.i64(static_cast<int64_t>(u.mech.size()));
+        for (auto& f : u.mech) { h.str(f.name); h.i64(f.value); }
     }
     h.i64(st.gradient_charges);
     h.i64(std::llround(st.gradient_progress * 1000));
@@ -125,6 +148,7 @@ std::string diff(const proto::StateSync& local, const proto::StateSync& host)
         bool buffs_equal = lu->buffs.size() == hu.buffs.size();
         for (size_t i = 0; buffs_equal && i < hu.buffs.size(); ++i) buffs_equal = same_buff(lu->buffs[i], hu.buffs[i]);
         if (!buffs_equal) item(k, "buffs", buffs_str(lu->buffs), buffs_str(hu.buffs));
+        if (!same_mech(lu->mech, hu.mech)) item(k, "mech", mech_str(lu->mech, hu.mech), mech_str(hu.mech, lu->mech));
     }
     for (auto& lu : local.units)
         if (!find(host, lu.unit)) item(unit_key(lu.unit) + ":" + lu.cls, "extra", "present", "-");
@@ -160,6 +184,13 @@ RepairStats repair(const proto::StateSync& local, const proto::StateSync& host)
             ue::Call c(st, STR("SetCurrentShieldPoints"));
             if (c) c.set_int(STR("NewValue"), hu.shield).set_string(STR("DebugReason"), STR("E33Coop resync")).invoke();
             else ue::set_int(st, STR("CurrentShieldPoints"), hu.shield);
+        }
+        if (!hu.mech.empty() && !same_mech(lu->mech, hu.mech)) {
+            std::vector<std::pair<std::string, int64_t>> want;
+            for (auto& f : hu.mech) want.emplace_back(f.name, f.value);
+            int failed = 0;
+            r.mech += game::set_mechanic_fields(ch, want, failed);
+            r.failed += failed;
         }
         if (lu->break_bar != hu.break_bar) {
             ++r.breakbar;
@@ -214,7 +245,7 @@ RepairStats repair(const proto::StateSync& local, const proto::StateSync& host)
 std::string repair_json(const RepairStats& r)
 {
     return JsonObj().add("hp", r.hp).add("ap", r.ap).add("shield", r.shield).add("break", r.breakbar).add("death", r.death)
-        .add("buffs", r.buffs).add("gradient", r.gradient).add("failed", r.failed).str();
+        .add("buffs", r.buffs).add("mech", r.mech).add("gradient", r.gradient).add("failed", r.failed).str();
 }
 
 } // namespace e33::sync

@@ -94,6 +94,8 @@ void encode_payload(const Message& m, wire::Writer& w)
                 w_unit(w, u.unit); w.str(u.cls); w.f64(u.hp); w.f64(u.ap); w.i32(u.shield); w.u64(static_cast<uint64_t>(u.break_bar)); w.boolean(u.dead);
                 w.u16(static_cast<uint16_t>(u.buffs.size()));
                 for (auto& b : u.buffs) { w.str(b.cls); w.i32(b.stacks); w.i32(b.turns); w.boolean(b.permanent); }
+                w.u16(static_cast<uint16_t>(u.mech.size()));
+                for (auto& f : u.mech) { w.str(f.name); w.u64(static_cast<uint64_t>(f.value)); }
             }
             w.i32(x.gradient_charges); w.f64(x.gradient_progress);
         } else if constexpr (std::is_same_v<T, FreeAimEvent>) {
@@ -190,6 +192,8 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
             u.break_bar = static_cast<int64_t>(r.u64()); u.dead = r.boolean();
             const uint16_t nb = r.count(kMaxBuffs);
             for (uint16_t j = 0; j < nb && r.ok(); ++j) { BuffState b; b.cls = r.str(128); b.stacks = r.i32(); b.turns = r.i32(); b.permanent = r.boolean(); u.buffs.push_back(b); }
+            const uint16_t nm = r.count(kMaxBuffs);
+            for (uint16_t j = 0; j < nm && r.ok(); ++j) { MechField f; f.name = r.str(128); f.value = static_cast<int64_t>(r.u64()); u.mech.push_back(f); }
             x.units.push_back(std::move(u));
         }
         x.gradient_charges = r.i32(); x.gradient_progress = r.f64();
@@ -322,8 +326,10 @@ std::string to_json(const Message& m)
                 if (i) us += ",";
                 std::string bs = "[";
                 for (size_t j = 0; j < u.buffs.size(); ++j) { if (j) bs += ","; bs += JsonObj().add("c", u.buffs[j].cls).add("n", u.buffs[j].stacks).add("t", u.buffs[j].turns).add("p", u.buffs[j].permanent).str(); }
+                std::string ms = "{";
+                for (size_t j = 0; j < u.mech.size(); ++j) { if (j) ms += ","; ms += "\"" + json_escape(u.mech[j].name) + "\":" + std::to_string(u.mech[j].value); }
                 us += JsonObj().raw("u", unit_json(u.unit)).add("c", u.cls).add("hp", u.hp).add("ap", u.ap).add("shield", u.shield)
-                          .add("break", u.break_bar).add("dead", u.dead).raw("buffs", bs + "]").str();
+                          .add("break", u.break_bar).add("dead", u.dead).raw("buffs", bs + "]").raw("mech", ms + "}").str();
             }
             o.add("battle", x.battle_id).add("turn", x.turn).add("reason", static_cast<int>(x.reason)).raw("units", us + "]")
                 .add("gradient_charges", x.gradient_charges).add("gradient_progress", x.gradient_progress);

@@ -120,6 +120,7 @@ struct Draws {                            // hôte -> clients : tirages de gamep
     std::vector<Draw> draws;
 };
 struct BuffState { std::string cls; int32_t stacks = 0; int32_t turns = 0; bool permanent = false; };
+struct MechField { std::string name; int64_t value = 0; };   // "Composant.Champ" (ou Champ[i] pour un tableau)
 struct UnitState {
     Unit unit;
     std::string cls;                      // nom de classe (logs)
@@ -129,6 +130,7 @@ struct UnitState {
     int64_t break_bar = 0;
     bool dead = false;
     std::vector<BuffState> buffs;
+    std::vector<MechField> mech;          // mécanique propre (perfection, posture, taches…) : champs entiers du composant
 };
 // État complet du combat au début d'un tour (hôte -> clients). Le client ne corrige que ce qui diffère.
 struct StateSync {
