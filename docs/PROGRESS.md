@@ -2,7 +2,7 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-19, après-midi) — **phase 2 FINIE et validée par Killian** (fusionnée dans `main`)
+## État courant (2026-10-19, 14h30) — **phase 2 finie et validée ; environnement de test corrigé** (save `TEST_B`, Prairies)
 
 | Phase | État | Branche |
 |---|---|---|
@@ -28,17 +28,22 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 - **Problème signalé** : écran noir pendant les attaques ennemies (interface visible), et caméra dans le décor pendant le reste du combat. C'est l'environnement de test (combat forcé dans le hub de Lumière), pas la synchro : voir GAME-INTERNALS §15. Le déclenchement prend désormais l'arène la plus proche (`a8e7b61`), ce qui ne suffit pas.
 
 ### En cours
-- Doute sur D10 levé : sans aucun remplacement, le tirage naturel 2 donne le même tour sans coup ; D10 ne change pas le comportement (GAME-INTERNALS §15). Les tests de phase 2 exercent le **saut** distant ; la parade distante a été vérifiée au run du 2026-10-19 09:25 (verdict de l hôte conforme) et en phase 1.
+- Rien. Correctifs après la validation (2026-10-19 après-midi) :
+  - **écran noir** : venait du combat forcé dans le hub de Lumière (save TEST_A). Nouvelle save de test `TEST_B` (NG+ de Killian, Vallons fleuris), rencontre `SM_Lancelier_Alpha` : rendu normal, vérifié sur captures ;
+  - **caméra sous la carte, ennemis qui ne touchent jamais en coop** : le hook de diagnostic sur `Array_Random` cassait le ciblage des ennemis (retiré ; c'était aussi la cause du « doute D10 ») ;
+  - l'hôte attend 1,5 s avant d'exécuter une action distante (comme le runner solo) ; le runner client passe en combat même si le coop l'a lancé avant la fin de son attente ;
+  - **CI incrémentale** : un build passe de ~16 min à ~2 min (cache par commit + dates de fichiers ; seul le code modifié est recompilé) ;
+  - tests : 3/3 dans chaque sens (build `b87f2d4`, artefact `.tools/artifacts/39251250001`), 7 hash, 200 tirages identiques, 0 écart de PV, **parade** distante de nouveau couverte (réussie avec contre, puis ratée).
 
 ### Bloqué
 - Rien.
 
 ### Prochaines étapes
-1. Environnement de test : une save dans une vraie zone de combat (demandée à Killian) pour supprimer l'écran noir.
-2. Phase 3 : `Array_Random` (ciblage), compétences, objets, buffs, attaques de groupe, mort/réanimation, récompenses ; resynchronisation complète sur désync.
+1. Phase 3 : `Array_Random` (ciblage), compétences, objets, buffs, attaques de groupe, mort/réanimation, récompenses ; resynchronisation complète sur désync.
 
 ## Historique
 - 2026-10-18 : démarrage ; phase 0 complète ; test runner écrit.
 - 2026-10-19 (nuit) : phase 1 complète (3/3) ; phase 2 : protocole, fakepeer, module coop, premier combat hôte vs faux client sans désync. Pause.
 - 2026-10-19 (matin) : reprise. Crash client au chargement corrigé ; fermeture auto des crashs ; écarts de PV rendus visibles ; D10 ; les deux sens verts 3/3 avec 0 écart.
 - 2026-10-19 (après-midi) : validation de Killian OK ; écran noir identifié (environnement de test) ; phase 2 fusionnée dans `main`.
+- 2026-10-19 (14h30) : écran noir et ennemis qui ne touchent pas en coop corrigés (TEST_B ; hook Array_Random retiré) ; CI ~2 min.
