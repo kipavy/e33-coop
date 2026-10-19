@@ -58,6 +58,7 @@ struct Battle {
     std::map<UObject*, uint16_t> local_jump_hit;        // client : coup sautable en cours
     uint16_t draw_index = 0;                            // tirages d'IA ennemie dans le tour courant
     std::map<uint64_t, double> host_draws;              // client : (tour<<16|rang) -> valeur tirée par l'hôte
+    int traced_draws = 0;                               // diagnostic : tirages loggés dans ce combat
 };
 
 struct State {
@@ -382,6 +383,22 @@ proto::ActionResult snapshot_result(UObject* actor)
 
 // --- Hooks -------------------------------------------------------------------------------
 
+// Diagnostic des tirages aléatoires : qui appelle quoi, depuis quelle fonction BP.
+// 5 premiers appels par fonction (combat ou non), puis 300 par combat au plus.
+void trace_random(HookCtx& ctx, const std::string& fname)
+{
+    static std::map<std::string, int> seen;
+    const bool early = seen[fname]++ < 5;
+    const bool in_battle = s.battle.active && s.battle.traced_draws < 300;
+    if (!early && !in_battle) return;
+    if (in_battle) ++s.battle.traced_draws;
+    UObject* caller = ctx.TheStack.Object();
+    UFunction* node = ctx.TheStack.Node();
+    log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).add("caller", ue::full_name(caller))
+                                 .add("node", ue::short_name(node)).add("enemy", caller ? enemy_index(caller) : -1)
+                                 .add("has_result", ctx.RESULT_DECL != nullptr), s.battle.turn);
+}
+
 void subscribe()
 {
     using game::path::fn;
@@ -530,6 +547,11 @@ void subscribe()
         for (auto& p : s.peers) send_to(p, proto::DefenseResult{s.battle.id, s.battle.turn, hit, ok ? proto::Defense::Parry : proto::Defense::Fail});
     });
 
+    // Diagnostic (temporaire) : ciblage aléatoire, lecture seule.
+    bus.post(L"/Script/Engine.KismetArrayLibrary:Array_Random", [](HookCtx& ctx, UFunction*) {
+        if (s.role != Role::Solo) trace_random(ctx, "Array_Random");
+    });
+
     // Tirages aléatoires de l'IA ennemie (D9) : fonctions natives de KismetMathLibrary appelées depuis un ennemi.
     struct RandomFn { const wchar_t* name; int kind; };   // 0 = int32, 1 = double, 2 = bool
     static const RandomFn random_fns[] = {
@@ -540,7 +562,9 @@ void subscribe()
         const int kind = rf.kind;
         const std::string fname = ue::to_utf8(rf.name);
         bus.post(std::wstring(L"/Script/Engine.KismetMathLibrary:") + rf.name, [kind, fname](HookCtx& ctx, UFunction*) {
-            if (s.role == Role::Solo || !s.battle.active || !ctx.RESULT_DECL) return;
+            if (s.role == Role::Solo) return;
+            trace_random(ctx, fname);
+            if (!s.battle.active || !ctx.RESULT_DECL) return;
             UObject* caller = ctx.TheStack.Object();
             if (!caller) return;
             const int ei = enemy_index(caller);
