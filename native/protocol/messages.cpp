@@ -73,7 +73,7 @@ void encode_payload(const Message& m, wire::Writer& w)
             for (auto& t : x.targets) w_unit(w, t);
             w_u8list(w, x.combo);
         } else if constexpr (std::is_same_v<T, ComboResult>) {
-            w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u16(x.seq); w.boolean(x.success); w.boolean(x.perfect);
+            w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u16(x.seq); w.boolean(x.success); w.boolean(x.perfect); w.u16(x.press);
         } else if constexpr (std::is_same_v<T, DefenseRequest>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u16(x.hit); w.u8(x.jumpable); w.u16(x.timeout_ms);
         } else if constexpr (std::is_same_v<T, DefenseResult>) {
@@ -153,7 +153,8 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         return finish(x);
     }
     case MsgType::ComboResult: {
-        ComboResult x; x.battle_id = r.u32(); x.turn = r.u32(); x.spot = r.u8(); x.seq = r.u16(); x.success = r.boolean(); x.perfect = r.boolean();
+        ComboResult x; x.battle_id = r.u32(); x.turn = r.u32(); x.spot = r.u8(); x.seq = r.u16(); x.success = r.boolean(); x.perfect = r.boolean(); x.press = r.u16();
+        if (x.press > 1000 && x.press != kNoPress && x.press != kAutoPress) r.fail();
         if (x.perfect && !x.success) r.fail();
         return finish(x);
     }
@@ -289,7 +290,7 @@ std::string to_json(const Message& m)
             o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.actor_spot)).add("action", static_cast<int>(x.action_type))
                 .add("secondary", x.secondary).raw("targets", ts + "]").raw("combo", list(x.combo));
         } else if constexpr (std::is_same_v<T, ComboResult>) {
-            o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("seq", static_cast<int>(x.seq)).add("success", x.success).add("perfect", x.perfect);
+            o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("seq", static_cast<int>(x.seq)).add("success", x.success).add("perfect", x.perfect).add("press", static_cast<int>(x.press));
         } else if constexpr (std::is_same_v<T, DefenseRequest>) {
             o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("hit", static_cast<int>(x.hit)).add("jumpable", static_cast<int>(x.jumpable)).add("timeout_ms", static_cast<int>(x.timeout_ms));
         } else if constexpr (std::is_same_v<T, DefenseResult>) {

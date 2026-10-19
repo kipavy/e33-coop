@@ -82,6 +82,9 @@ struct ActionCommand {
     std::vector<uint8_t> combo;           // résultats de QTE déjà connus (faux client) : bit0 réussi, bit1 parfait
 };
 // Résultat d'une fenêtre de QTE offensif, résolu chez le propriétaire du héros (seq : n° de fenêtre du héros dans le tour).
+// Les autres instances rejouent un vrai appui au même instant de la fenêtre (press, en millièmes de sa durée).
+inline constexpr uint16_t kNoPress = 0xFFFF;     // pas d'appui (raté)
+inline constexpr uint16_t kAutoPress = 0xFFFE;   // réussite automatique (option d'accessibilité, mode test) : résultat imposé en fin de fenêtre
 struct ComboResult {
     uint32_t battle_id = 0;
     uint32_t turn = 0;
@@ -89,6 +92,7 @@ struct ComboResult {
     uint16_t seq = 0;
     bool success = false;
     bool perfect = false;
+    uint16_t press = kNoPress;
 };
 struct DefenseRequest {                   // hôte -> propriétaire : un coup arrive sur ce héros (utile au faux client)
     uint32_t battle_id = 0;

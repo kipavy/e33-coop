@@ -16,5 +16,5 @@
   "defense": ["parry", "fail"],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
   "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_actions_host.jsonl", "--timeout", "600"] },
-  "expect": { "battle_end": "any", "remote_actions": ">=2", "combos_imposed": ">=2", "combo_presses": ">=1", "rewards_checked": "any" }
+  "expect": { "battle_end": "any", "remote_actions": ">=2", "combos_replayed": ">=2", "combo_presses": ">=1", "rewards_checked": "any" }
 }

@@ -1,6 +1,7 @@
 #include "coop.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -50,6 +51,22 @@ struct Peer {
 
 using TurnSpotSeq = std::tuple<uint32_t, int, uint16_t>;   // (tour, emplacement, n°)
 
+using SteadyClock = std::chrono::steady_clock;
+
+struct Window {                                            // fenêtre de QTE offensif en cours (par timeline)
+    UObject* hero = nullptr;
+    int spot = 0;
+    uint16_t seq = 0;
+    SteadyClock::time_point start;
+    double duration = 0;                                   // secondes (temps réel)
+    bool local = false;                                    // héros contrôlé ici : résultat à publier
+    bool published = false;
+    proto::ComboResult plan;                               // héros d'un autre joueur : résultat de son propriétaire
+    bool pressed = false;
+};
+
+struct Press { UObject* timeline = nullptr; SteadyClock::time_point at; };
+
 struct LocalHit {                                          // coup reçu par un héros contrôlé ici (résultat à publier)
     int spot = 0;
     uint16_t hit = 0;
@@ -66,11 +83,14 @@ struct Battle {
     std::map<int, uint8_t> owner_by_spot;                  // emplacement de héros -> player_id
     // Actions des héros
     std::map<std::pair<uint32_t, int>, proto::ActionCommand> commands;   // (tour, emplacement) -> commande reçue
+    std::map<std::pair<uint32_t, int>, double> command_time;             // réception (s.now)
     std::set<std::pair<uint32_t, int>> executed;
     bool action_wait_logged = false;
     // QTE offensifs
     std::map<TurnSpotSeq, proto::ComboResult> combos;
     std::map<int, uint16_t> combo_seq;                     // emplacement -> n° de fenêtre dans le tour
+    std::map<UObject*, Window> windows;                    // timeline -> fenêtre en cours
+    std::vector<Press> presses;                            // appuis à rejouer (héros d'un autre joueur)
     // Défenses
     std::map<TurnSpotSeq, proto::Defense> defenses;
     std::map<int, uint16_t> hit_seq;                       // emplacement -> n° de coup reçu dans le tour
@@ -116,7 +136,8 @@ struct State {
     std::optional<proto::BattleStart> pending_start;       // client : combat de l'hôte, lancé une fois le monde prêt
     double world_ready_s = 0;
     double next_trigger_try = 0;
-    double action_delay_s = 1.5;                           // délai minimal avant d'exécuter l'action d'un héros d'un autre joueur
+    double action_delay_s = 1.5;                           // délai minimal (depuis le début du tour) avant d'exécuter l'action d'un héros d'un autre joueur
+    double replay_lag_s = 1.0;                             // décalage minimal derrière son propriétaire (-e33replaylag) : ses QTE sont connus à temps
     std::optional<uint64_t> fixed_seed;                    // hôte : -e33seed=N
     std::vector<std::string> draw_filter;                  // diagnostic : -e33draws=none | sous-chaînes
     std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
@@ -310,10 +331,14 @@ bool handle_battle_common(Peer& p, proto::Message& m)
             return true;
         }
         b.commands[{ac->turn, ac->actor_spot}] = *ac;
-        // Résultats de QTE déjà connus (faux client) : rangés comme des ComboResult.
-        for (size_t i = 0; i < ac->combo.size(); ++i)
+        b.command_time[{ac->turn, ac->actor_spot}] = s.now;
+        // Résultats de QTE déjà connus (faux client) : rangés comme des ComboResult, avec les instants d'appui
+        // canoniques du test runner (parfait à 88 % de la fenêtre, réussi à 30 %).
+        for (size_t i = 0; i < ac->combo.size(); ++i) {
+            const bool ok = (ac->combo[i] & 1) != 0, perfect = (ac->combo[i] & 2) != 0;
             b.combos[{ac->turn, ac->actor_spot, static_cast<uint16_t>(i + 1)}] = {ac->battle_id, ac->turn, ac->actor_spot, static_cast<uint16_t>(i + 1),
-                                                                               (ac->combo[i] & 1) != 0, (ac->combo[i] & 2) != 0};
+                                                                               ok || perfect, perfect, static_cast<uint16_t>(perfect ? 880 : ok ? 300 : proto::kNoPress)};
+        }
         if (s.role == Role::Host) publish(*ac, &p);
         return true;
     }
@@ -934,43 +959,104 @@ void subscribe()
         publish(ac);
     });
 
-    // QTE offensifs. Héros d'ici : résultat lu à la fin de la fenêtre et publié. Héros d'un autre joueur :
-    // résultat de son propriétaire imposé juste avant que le jeu ne l'enregistre (ComboSuccessHistory…).
-    bus.pre(fn(game::path::Timeline, L"OnSkillComboWindowEndReached"), [](HookCtx& ctx, UFunction*) {
+    // QTE offensifs (D11). Imposer « réussi/parfait » en fin de fenêtre ne reproduit pas un vrai appui (TryActivate a
+    // d'autres effets : un coup de plus vu le 2026-10-19). Donc : le propriétaire publie son résultat ET l'instant de son
+    // appui dans la fenêtre ; les autres instances, qui jouent l'action ~1 s plus tard, rejouent un vrai appui au même
+    // instant (« Try Activate Skill Combo »), avec le verdict « parfait » forcé dans IsInPerfectWindow.
+    bus.post(fn(game::path::Timeline, L"OnSkillComboWindowStartReached"), [](HookCtx& ctx, UFunction*) {
         if (s.role == Role::Solo || !s.battle.active) return;
         UObject* hero = timeline_hero(ctx.Context);
         if (!hero) return;
-        const int spot = game::spot(hero);
-        if (controls(spot)) return;
         auto& b = s.battle;
-        const uint16_t seq = ++b.combo_seq[spot];
-        const TurnSpotSeq key{b.turn, spot, seq};
-        const ULONGLONG t0 = GetTickCount64();
-        const bool got = wait_for([&] { return b.combos.count(key) > 0; }, kComboTimeout);
-        const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
-        bool success = false, perfect = false;
-        if (got) { success = b.combos[key].success; perfect = b.combos[key].perfect; }
-        else bump("combo_timeouts");
-        ue::set_bool(ctx.Context, STR("IsSkillComboSuccessful"), success);
-        ue::set_bool(ctx.Context, STR("IsSkillComboPerfect"), perfect);
-        bump("combos_imposed");
-        log().write("coop_combo_imposed", JsonObj().add("spot", spot).add("seq", static_cast<int>(seq)).add("success", success).add("perfect", perfect)
-                                             .add("received", got).add("waited_ms", waited_ms), b.turn);
+        Window w;
+        w.hero = hero;
+        w.spot = game::spot(hero);
+        w.seq = ++b.combo_seq[w.spot];
+        w.start = SteadyClock::now();
+        w.duration = ue::get_double(ctx.Context, STR("CurrentWindowEndRealTime")) - ue::get_double(ctx.Context, STR("CurrentWindowStartRealTime"));
+        w.local = controls(w.spot);
+        if (!w.local) {
+            const TurnSpotSeq key{b.turn, w.spot, w.seq};
+            const ULONGLONG t0 = GetTickCount64();
+            const bool got = wait_for([&] { return b.combos.count(key) > 0; }, kComboTimeout);
+            const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
+            if (got) w.plan = b.combos[key];
+            else { bump("combo_timeouts"); w.plan = proto::ComboResult{b.id, b.turn, static_cast<uint8_t>(w.spot), w.seq, false, false, proto::kNoPress}; }
+            if (w.plan.success && w.plan.press <= 1000)
+                b.presses.push_back({ctx.Context, w.start + std::chrono::microseconds(static_cast<int64_t>(w.duration * w.plan.press * 1000.0))});
+            log().write("coop_combo_plan", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", w.plan.success).add("perfect", w.plan.perfect)
+                                               .add("press", static_cast<int>(w.plan.press)).add("received", got).add("waited_ms", waited_ms), b.turn);
+        }
+        b.windows[ctx.Context] = w;
+    });
+    // Héros d'ici : le premier appui réussi est publié tout de suite, avec son instant dans la fenêtre.
+    bus.post(fn(game::path::Timeline, L"TryActivate"), [](HookCtx& ctx, UFunction* f) {
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end()) return;
+        Window& w = it->second;
+        const bool ok = ue::read_out_bool(ctx, f, STR("Success")).value_or(false);
+        const bool perfect = ue::read_out_bool(ctx, f, STR("Perfect")).value_or(false);
+        if (!w.local) {
+            w.pressed = true;
+            if (ok != w.plan.success || perfect != w.plan.perfect) {
+                bump("combo_verdict_mismatches");
+                log().write("coop_combo_verdict_mismatch", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", ok).add("perfect", perfect), s.battle.turn);
+            }
+            return;
+        }
+        if (w.published || !ok) return;
+        const double elapsed = std::chrono::duration<double>(SteadyClock::now() - w.start).count();
+        const double frac = w.duration > 0 ? std::clamp(elapsed / w.duration, 0.0, 1.0) : 0.5;
+        const proto::ComboResult cr{s.battle.id, s.battle.turn, static_cast<uint8_t>(w.spot), w.seq, true, perfect, static_cast<uint16_t>(std::lround(frac * 1000))};
+        w.published = true;
+        bump("combos_published");
+        log().write("coop_combo_local", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", true).add("perfect", perfect).add("press", static_cast<int>(cr.press)), s.battle.turn);
+        publish(cr);
+    });
+    // Verdict « parfait » d'un appui rejoué : celui du propriétaire (la gigue d'image ne doit pas le changer).
+    bus.post(fn(game::path::Timeline, L"IsInPerfectWindow"), [](HookCtx& ctx, UFunction* f) {
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end() || it->second.local) return;
+        ue::write_out_bool(ctx, f, STR("ReturnValue"), it->second.plan.perfect);
+    });
+    bus.pre(fn(game::path::Timeline, L"OnSkillComboWindowEndReached"), [](HookCtx& ctx, UFunction*) {
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end() || it->second.local) return;
+        Window& w = it->second;
+        if (w.plan.success && w.plan.press <= 1000 && !w.pressed) {
+            // Appui pas encore rejoué (image trop tardive) : maintenant, avant que la fenêtre ne se ferme.
+            std::erase_if(s.battle.presses, [&](const Press& p) { return p.timeline == ctx.Context; });
+            ue::Call c(w.hero, STR("Try Activate Skill Combo"));
+            if (c) c.invoke();
+            bump("combo_late_presses");
+        }
+        if (w.plan.press == proto::kAutoPress) {   // réussite automatique chez le propriétaire : pas d'appui à rejouer
+            ue::set_bool(ctx.Context, STR("IsSkillComboSuccessful"), w.plan.success);
+            ue::set_bool(ctx.Context, STR("IsSkillComboPerfect"), w.plan.perfect);
+        }
+        bump("combos_replayed");
     });
     bus.post(fn(game::path::Timeline, L"OnSkillComboWindowEndReached"), [](HookCtx& ctx, UFunction*) {
-        if (s.role == Role::Solo || !s.battle.active) return;
-        UObject* hero = timeline_hero(ctx.Context);
-        if (!hero) return;
-        const int spot = game::spot(hero);
-        if (!controls(spot)) return;
-        auto& b = s.battle;
-        // Drapeaux encore valides après OnSkillComboWindowEndReached (vérifié en jeu le 2026-10-19).
-        proto::ComboResult cr{b.id, b.turn, static_cast<uint8_t>(spot), ++b.combo_seq[spot],
-                              ue::get_bool(ctx.Context, STR("IsSkillComboSuccessful")), ue::get_bool(ctx.Context, STR("IsSkillComboPerfect"))};
-        if (cr.perfect) cr.success = true;
-        bump("combos_published");
-        log().write("coop_combo_local", JsonObj().add("spot", spot).add("seq", static_cast<int>(cr.seq)).add("success", cr.success).add("perfect", cr.perfect), b.turn);
-        publish(cr);
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end()) return;
+        Window w = it->second;
+        s.battle.windows.erase(it);
+        const bool ok = ue::get_bool(ctx.Context, STR("IsSkillComboSuccessful"));
+        const bool perfect = ue::get_bool(ctx.Context, STR("IsSkillComboPerfect"));
+        if (w.local) {
+            if (w.published) return;
+            // Pas d'appui réussi : échec, ou réussite automatique (option d'accessibilité, mode test).
+            const proto::ComboResult cr{s.battle.id, s.battle.turn, static_cast<uint8_t>(w.spot), w.seq, ok || perfect, perfect, ok ? proto::kAutoPress : proto::kNoPress};
+            bump("combos_published");
+            log().write("coop_combo_local", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", cr.success).add("perfect", perfect).add("press", static_cast<int>(cr.press)), s.battle.turn);
+            publish(cr);
+            return;
+        }
+        if (ok != w.plan.success || perfect != w.plan.perfect) {
+            bump("combo_verdict_mismatches");
+            log().write("coop_combo_verdict_mismatch", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", ok).add("perfect", perfect)
+                                                        .add("want_success", w.plan.success).add("want_perfect", w.plan.perfect), s.battle.turn);
+        }
     });
 
     // Défenses : TryParryHitFromCharacter (coups parables) ou ReceiveDamageFromObject (coups sautables).
@@ -1181,7 +1267,7 @@ void init()
 
     for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_errors", "invalid_messages",
                           "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
-                          "repair_failures", "defense_verdict_mismatches", "remote_actions"})
+                          "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions"})
         s.counters[c] = 0;
 
     s.game_build = read_build_id();
@@ -1191,6 +1277,7 @@ void init()
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
+    if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     {
         std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
         std::string part;
@@ -1279,6 +1366,7 @@ void run_remote_action()
         return;
     }
     if (s.now - b.turn_started_at < s.action_delay_s) return;
+    if (s.now - b.command_time[key] < s.replay_lag_s) return;
     const proto::ActionCommand cmd = it->second;
     b.executed.insert(key);
     std::vector<UObject*> targets;
@@ -1311,6 +1399,18 @@ void tick(double dt)
     pump_network();
     if (s.role == Role::Client) start_pending_battle();
     run_remote_action();
+    // Appuis de QTE rejoués pour les héros des autres joueurs (instant de leur propriétaire).
+    auto& presses = s.battle.presses;
+    for (size_t i = 0; i < presses.size();) {
+        if (SteadyClock::now() < presses[i].at) { ++i; continue; }
+        const Press p = presses[i];
+        presses.erase(presses.begin() + static_cast<std::ptrdiff_t>(i));
+        auto it = s.battle.windows.find(p.timeline);
+        if (it == s.battle.windows.end() || it->second.pressed) continue;
+        ue::Call c(it->second.hero, STR("Try Activate Skill Combo"));
+        if (c) c.invoke();
+        bump("combo_presses_replayed");
+    }
 }
 
 } // namespace e33::coop
