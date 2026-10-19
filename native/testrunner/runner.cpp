@@ -197,6 +197,8 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         add("desyncs", "0", std::to_string(coop::desync_count()), coop::desync_count() == 0);
         add("invalid_messages", "0", std::to_string(coop::invalid_count()), coop::invalid_count() == 0);
         add("hashes_compared", ">0", std::to_string(coop::hashes_compared()), coop::hashes_compared() > 0);
+        add("gameplay_draws", ">0", std::to_string(coop::gameplay_draw_count()), coop::gameplay_draw_count() > 0);
+        add("draw_mismatches", "0", std::to_string(coop::draw_mismatch_count()), coop::draw_mismatch_count() == 0);
         if (coop::role() == coop::Role::Client)
             add("hp_overrides", "0", std::to_string(coop::hp_override_count()), coop::hp_override_count() == 0);
     }

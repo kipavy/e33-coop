@@ -89,6 +89,8 @@ bool write_out_bool(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunct
 // Lit un paramètre d'entrée (objet) depuis les locales du cadre d'un hook.
 UObject* read_param_object(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);
 std::optional<int64_t> read_param_int(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);
+// Adresse brute d'un paramètre dans les locales du cadre d'un hook (taille dans *size), nullptr si introuvable.
+void* param_address(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, int* size = nullptr);
 
 // Propriétaire (AActor) d'un composant : GetOwner() ou premier outer qui est un Actor.
 UObject* component_owner(UObject* component);

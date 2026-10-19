@@ -23,6 +23,8 @@ int invalid_count();
 // car le hash du client est calculé après la correction.
 int hp_override_count();
 int hashes_compared();       // paires de hash (local, distant) effectivement comparées
+int gameplay_draw_count();   // tirages de gameplay remplacés par la valeur dérivée de la graine (D10)
+int draw_mismatch_count();   // client : tirages différents de ceux de l'hôte (+ paramètres illisibles)
 bool session_ok();           // connecté et accepté (ou solo)
 
 } // namespace e33::coop

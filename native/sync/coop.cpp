@@ -1,6 +1,7 @@
 #include "coop.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -56,8 +57,11 @@ struct Battle {
     uint32_t host_turn_seen = 0;                        // client : dernier TurnStart reçu de l'hôte
     std::map<UObject*, uint16_t> local_defense_hit;     // client : coup en cours par composant de stats
     std::map<UObject*, uint16_t> local_jump_hit;        // client : coup sautable en cours
-    uint16_t draw_index = 0;                            // tirages d'IA ennemie dans le tour courant
-    std::map<uint64_t, double> host_draws;              // client : (tour<<16|rang) -> valeur tirée par l'hôte
+    uint64_t rng_seed = 0;                              // graine des tirages de gameplay, choisie par l'hôte (D10)
+    std::map<uint32_t, uint16_t> draw_rank;             // flux -> rang du prochain tirage dans le tour courant
+    std::map<uint32_t, std::string> stream_names;       // flux -> "Classe:Fonction:Tirage" (logs)
+    std::map<uint32_t, std::map<uint64_t, double>> local_draws;   // tour -> (flux<<16|rang) -> valeur
+    std::map<uint32_t, std::map<uint64_t, double>> host_draws;    // client : idem, publiés par l'hôte
     int traced_draws = 0;                               // diagnostic : tirages loggés dans ce combat
     std::vector<UObject*> enemies_cache;                // ennemis au dernier début de tour (comparaison de pointeurs seulement)
 };
@@ -87,6 +91,10 @@ struct State {
     int off_thread_draws = 0;                            // tirages hors thread de jeu (ignorés)
     int hp_overrides = 0;                                // client : PV locaux corrigés par ceux de l hôte (écart réel)
     int hashes_compared = 0;
+    int gameplay_draws = 0;                              // tirages de gameplay remplacés (D10)
+    int draw_mismatches = 0;                             // client : écarts avec les tirages de l'hôte
+    int draw_errors = 0;                                 // paramètres de tirage illisibles
+    std::optional<uint64_t> fixed_seed;                  // hôte : -e33seed=N (runs reproductibles)
 };
 
 State s;
@@ -344,6 +352,7 @@ void handle(Peer& p, proto::Message& m)
         s.battle = Battle{};   // remis à zéro dès maintenant : les messages suivants de l'hôte s'y accumulent
         s.battle.id = bs->battle_id;
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
+        s.battle.rng_seed = bs->rng_seed;
         log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
     } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
         s.battle.host_turn_seen = std::max(s.battle.host_turn_seen, ts->turn);
@@ -352,9 +361,9 @@ void handle(Peer& p, proto::Message& m)
     } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
         s.battle.remote_hash[sh->turn] = sh->hash;
         check_hash(sh->turn);
-    } else if (auto* ad = std::get_if<proto::AiDraws>(&m)) {
-        for (size_t i = 0; i < ad->values.size(); ++i)
-            s.battle.host_draws[(static_cast<uint64_t>(ad->turn) << 16) | (ad->first + i)] = ad->values[i];
+    } else if (auto* dw = std::get_if<proto::Draws>(&m)) {
+        if (dw->battle_id == s.battle.id)
+            for (auto& d : dw->draws) s.battle.host_draws[dw->turn][(static_cast<uint64_t>(d.key) << 16) | d.rank] = d.value;
     } else if (std::get_if<proto::BattleEnd>(&m)) {
         log().write("coop_battle_end_received", JsonObj().add("battle", s.battle.id));
     } else if (auto* ping = std::get_if<proto::Ping>(&m)) {
@@ -444,6 +453,136 @@ void trace_random(HookCtx& ctx, const std::string& fname)
                                  .add("has_result", ctx.RESULT_DECL != nullptr), s.battle.turn);
 }
 
+// --- Tirages de gameplay (D10) ------------------------------------------------------------
+
+enum class RandomKind { IntInRange, Int, Float, FloatInRange, Bool, BoolWeight };
+struct RandomFn { const wchar_t* name; RandomKind kind; };
+
+uint64_t splitmix64(uint64_t x)
+{
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+
+// Uniforme dans [0, 1), identique sur toutes les instances pour (graine, tour, flux, rang).
+double derived_uniform(uint32_t turn, uint32_t key, uint16_t rank)
+{
+    const uint64_t h = splitmix64(s.battle.rng_seed ^ splitmix64((static_cast<uint64_t>(turn) << 32) | key) ^ splitmix64(0x5EED0000ull + rank));
+    return static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0);
+}
+
+uint32_t fnv32(const std::string& str)
+{
+    uint32_t h = 2166136261u;
+    for (unsigned char c : str) { h ^= c; h *= 16777619u; }
+    return h;
+}
+
+// Nom du flux si le tirage vient du gameplay (premier appelant BP), vide sinon.
+// Gameplay, d'après les traces du 2026-10-19 (GAME-INTERNALS §15) : IA d'un ennemi, critiques
+// (BP_BattleDamages_C:RollCriticalHit), effets de Luminas (BP_LU_*), activation de buffs (stats de combat).
+std::string gameplay_stream(HookCtx& ctx, const std::string& fname)
+{
+    UFunction* node = nullptr;
+    UObject* caller = script_caller(ctx, &node);
+    if (!caller) return {};
+    const int ei = cached_enemy_index(caller);
+    const std::string cls = game::char_class(caller);
+    const bool gameplay = ei >= 0 || cls == "BP_BattleDamages_C" || cls.rfind("BP_LU_", 0) == 0 || cls == "AC_jRPG_CharacterBattleStats_C";
+    if (!gameplay) return {};
+    std::string name = cls + ":" + ue::short_name(node) + ":" + fname;
+    if (ei >= 0) name += "#" + std::to_string(ei);   // un flux par ennemi (même classe possible)
+    return name;
+}
+
+// Remplace la valeur de retour par la valeur dérivée ; l'hôte la publie pour vérification.
+void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string& stream)
+{
+    const uint32_t key = fnv32(stream);
+    const uint16_t rank = s.battle.draw_rank[key]++;
+    s.battle.stream_names.emplace(key, stream);
+    const double u = derived_uniform(s.battle.turn, key, rank);
+    auto num = [&](const wchar_t* name, double& out) {
+        int size = 0;
+        void* p = ue::param_address(ctx, f, name, &size);
+        if (!p) return false;
+        if (kind == RandomKind::IntInRange || kind == RandomKind::Int) out = size == 4 ? *static_cast<int32_t*>(p) : static_cast<double>(*static_cast<int64_t*>(p));
+        else out = size == 4 ? *static_cast<float*>(p) : *static_cast<double*>(p);
+        return true;
+    };
+    double v = 0, a = 0, b = 0;
+    bool ok = true;
+    switch (kind) {
+    case RandomKind::IntInRange: {
+        ok = num(STR("Min"), a) && num(STR("Max"), b);
+        const int64_t range = static_cast<int64_t>(b) - static_cast<int64_t>(a) + 1;   // FMath::RandRange : bornes incluses
+        v = a + (range > 0 ? std::min<int64_t>(static_cast<int64_t>(u * range), range - 1) : 0);
+        if (ok) *static_cast<int32_t*>(ctx.RESULT_DECL) = static_cast<int32_t>(v);
+        break;
+    }
+    case RandomKind::Int:
+        ok = num(STR("Max"), b);
+        v = b > 0 ? std::min(std::floor(u * b), b - 1) : 0;
+        if (ok) *static_cast<int32_t*>(ctx.RESULT_DECL) = static_cast<int32_t>(v);
+        break;
+    case RandomKind::Float:
+        v = u;
+        *static_cast<double*>(ctx.RESULT_DECL) = v;
+        break;
+    case RandomKind::FloatInRange:
+        ok = num(STR("Min"), a) && num(STR("Max"), b);
+        v = a + (b - a) * u;
+        if (ok) *static_cast<double*>(ctx.RESULT_DECL) = v;
+        break;
+    case RandomKind::Bool:
+        v = u < 0.5 ? 1 : 0;
+        *static_cast<uint8_t*>(ctx.RESULT_DECL) = static_cast<uint8_t>(v);
+        break;
+    case RandomKind::BoolWeight:
+        ok = num(STR("Weight"), a);
+        v = (a > 0 && u <= a) ? 1 : 0;
+        if (ok) *static_cast<uint8_t*>(ctx.RESULT_DECL) = static_cast<uint8_t>(v);
+        break;
+    }
+    if (!ok) {
+        ++s.draw_errors;
+        log().write("coop_draw_param_missing", JsonObj().add("stream", stream), s.battle.turn);
+        return;
+    }
+    ++s.gameplay_draws;
+    s.battle.local_draws[s.battle.turn][(static_cast<uint64_t>(key) << 16) | rank] = v;
+    log().write("coop_draw", JsonObj().add("stream", stream).add("rank", static_cast<int>(rank)).add("value", v), s.battle.turn);
+    if (s.role == Role::Host) broadcast(proto::Draws{s.battle.id, s.battle.turn, {{key, rank, v}}});
+}
+
+// Client : compare les tirages de gameplay d'un tour terminé avec ceux de l'hôte (même flux, même rang, même valeur).
+void compare_draws(uint32_t turn)
+{
+    auto& mine = s.battle.local_draws[turn];
+    auto& host = s.battle.host_draws[turn];
+    auto name = [](uint64_t k) {
+        auto it = s.battle.stream_names.find(static_cast<uint32_t>(k >> 16));
+        return it != s.battle.stream_names.end() ? it->second : std::to_string(k >> 16);
+    };
+    for (auto& [k, v] : mine) {
+        auto it = host.find(k);
+        if (it == host.end() || std::fabs(it->second - v) > 1e-9) {
+            ++s.draw_mismatches;
+            log().write("coop_draw_mismatch", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("local", v)
+                                                  .add("host_has", it != host.end()).add("host", it != host.end() ? it->second : 0.0), turn);
+        }
+    }
+    for (auto& [k, v] : host) {
+        if (mine.count(k)) continue;
+        ++s.draw_mismatches;
+        log().write("coop_draw_mismatch", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("local_has", false).add("host", v), turn);
+    }
+    s.battle.local_draws.erase(turn);
+    s.battle.host_draws.erase(turn);
+}
+
 void subscribe()
 {
     using game::path::fn;
@@ -461,6 +600,8 @@ void subscribe()
                 proto::BattleStart bs;
                 bs.battle_id = s.battle.id;
                 bs.encounter = ue::to_utf8(game::last_encounter());
+                s.battle.rng_seed = s.fixed_seed ? *s.fixed_seed : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ s.battle.id);
+                bs.rng_seed = s.battle.rng_seed;
                 auto ps = game::players();
                 for (UObject* c : ps) {
                     const int spot = hero_spot(c);
@@ -474,7 +615,7 @@ void subscribe()
                 broadcast(bs);
             }
             ++s.battle.turn;
-            s.battle.draw_index = 0;
+            s.battle.draw_rank.clear();
             s.battle.enemies_cache = game::enemies();
             const bool hero = game::is_player(actor);
             broadcast(proto::TurnStart{s.battle.id, s.battle.turn, hero ? proto::ActorKind::Hero : proto::ActorKind::Enemy,
@@ -486,10 +627,12 @@ void subscribe()
             s.battle.pending_command.reset();
         } else if (s.role == Role::Client && s.battle.active) {
             ++s.battle.turn;
-            s.battle.draw_index = 0;
+            s.battle.draw_rank.clear();
             s.battle.enemies_cache = game::enemies();
             // l'hôte rythme les tours : attendre son TurnStart et ses résultats pour ce tour
             wait_for([&] { return s.battle.host_turn_seen >= s.battle.turn; }, 10.0);
+            // Les tirages de l'hôte pour le tour précédent sont arrivés avant son TurnStart (lien ordonné).
+            if (s.battle.turn > 1) compare_draws(s.battle.turn - 1);
             // Hash avant correction : c'est lui qui dit si la simulation locale a suivi celle de l'hôte.
             const uint64_t raw = state_hash(actor);
             apply_results();
@@ -602,42 +745,24 @@ void subscribe()
         if (s.role != Role::Solo && on_game_thread()) trace_random(ctx, "Array_Random");
     });
 
-    // Tirages aléatoires de l'IA ennemie (D9) : fonctions natives de KismetMathLibrary appelées depuis un ennemi.
-    struct RandomFn { const wchar_t* name; int kind; };   // 0 = int32, 1 = double, 2 = bool
+    // Tirages de gameplay (D10) : chaque instance remplace le résultat des fonctions natives de KismetMathLibrary
+    // par une valeur dérivée de la graine de l'hôte, du flux (appelant BP + fonction) et du rang dans le tour.
+    // Aucune attente réseau ; les tirages cosmétiques (anims, sons, caméra, répliques) ne sont pas touchés.
     static const RandomFn random_fns[] = {
-        {L"RandomIntegerInRange", 0}, {L"RandomInteger", 0}, {L"RandomFloat", 1},
-        {L"RandomFloatInRange", 1}, {L"RandomBool", 2}, {L"RandomBoolWithWeight", 2},
+        {L"RandomIntegerInRange", RandomKind::IntInRange}, {L"RandomInteger", RandomKind::Int}, {L"RandomFloat", RandomKind::Float},
+        {L"RandomFloatInRange", RandomKind::FloatInRange}, {L"RandomBool", RandomKind::Bool}, {L"RandomBoolWithWeight", RandomKind::BoolWeight},
     };
     for (const auto& rf : random_fns) {
-        const int kind = rf.kind;
+        const RandomKind kind = rf.kind;
         const std::string fname = ue::to_utf8(rf.name);
-        bus.post(std::wstring(L"/Script/Engine.KismetMathLibrary:") + rf.name, [kind, fname](HookCtx& ctx, UFunction*) {
+        bus.post(std::wstring(L"/Script/Engine.KismetMathLibrary:") + rf.name, [kind, fname](HookCtx& ctx, UFunction* f) {
             if (s.role == Role::Solo) return;
-            // Threads d'animation, chargement… : jamais un choix d'IA, et aucun accès au jeu permis ici.
+            // Threads d'animation, chargement… : jamais un tirage de gameplay, et aucun accès au jeu permis ici.
             if (!on_game_thread()) { ++s.off_thread_draws; return; }
             trace_random(ctx, fname);
-            if (!s.battle.active || !ctx.RESULT_DECL) return;
-            UObject* caller = script_caller(ctx);
-            if (!caller) return;
-            const int ei = cached_enemy_index(caller);
-            if (ei < 0) return;   // seulement les tirages faits par un ennemi (choix de l'IA)
-            const uint16_t idx = s.battle.draw_index++;
-            double v = kind == 0 ? static_cast<double>(*static_cast<int32_t*>(ctx.RESULT_DECL))
-                     : kind == 1 ? *static_cast<double*>(ctx.RESULT_DECL)
-                                 : (*static_cast<uint8_t*>(ctx.RESULT_DECL) ? 1.0 : 0.0);
-            if (s.role == Role::Host) {
-                broadcast(proto::AiDraws{s.battle.id, s.battle.turn, static_cast<uint8_t>(ei), idx, {v}});
-                log().write("coop_ai_draw", JsonObj().add("fn", fname).add("enemy", ei).add("index", static_cast<int>(idx)).add("value", v), s.battle.turn);
-                return;
-            }
-            const uint64_t key = (static_cast<uint64_t>(s.battle.turn) << 16) | idx;
-            const bool got = wait_for([&] { return s.battle.host_draws.count(key) > 0; }, 3.0);
-            if (!got) { log().write("coop_ai_draw_missing", JsonObj().add("fn", fname).add("index", static_cast<int>(idx)).add("local", v), s.battle.turn); return; }
-            const double hv = s.battle.host_draws[key];
-            if (kind == 0) *static_cast<int32_t*>(ctx.RESULT_DECL) = static_cast<int32_t>(hv);
-            else if (kind == 1) *static_cast<double*>(ctx.RESULT_DECL) = hv;
-            else *static_cast<uint8_t*>(ctx.RESULT_DECL) = hv != 0.0 ? 1 : 0;
-            log().write("coop_ai_draw_replayed", JsonObj().add("fn", fname).add("index", static_cast<int>(idx)).add("local", v).add("host", hv), s.battle.turn);
+            if (!s.battle.active || s.battle.turn == 0 || !ctx.RESULT_DECL) return;
+            const std::string stream = gameplay_stream(ctx, fname);
+            if (!stream.empty()) replace_draw(ctx, f, kind, stream);
         });
     }
 
@@ -665,6 +790,8 @@ int connected_players()
 int invalid_count() { return s.invalid; }
 int hp_override_count() { return s.hp_overrides; }
 int hashes_compared() { return s.hashes_compared; }
+int gameplay_draw_count() { return s.gameplay_draws; }
+int draw_mismatch_count() { return s.draw_mismatches + s.draw_errors; }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
 
 bool controls_spot(int spot)
@@ -684,6 +811,7 @@ void init()
     s.game_build = read_build_id();
     s.gameplay_mods = read_gameplay_mods();
     s.session_id = GetTickCount();
+    if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
     for (const std::wstring& tok : {arg(L"e33owners")}) {
         std::wstringstream ss(tok);
         std::wstring part;

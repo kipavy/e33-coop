@@ -788,3 +788,10 @@ Session d'exploration avec UE4SS 1181 + mod Lua `E33Explore` (télécommande `ru
   - le choix vient d'un `RandomIntegerInRange` dans l'ubergraph de `…_Fleuret_Female_C` ; la cible d'un `AcquireTargetRandomHero` → `FL_TargetingHelpers_C:GetRandomAliveHero` (`Array_Random`) ;
   - `Skill_Combo4_Earth` est une attaque **sautable** : aucun `TryParryHitFromCharacter`, le verdict passe par `ReceiveDamageFromObject` (`IsCurrentAttackJumpable` sur les stats de l'attaquant, via `DamageBuilder → GetDamageSource → GetDamageSourceCharacter`). Les autres combos sont parables.
 - **Conséquence pour les tests** : l'IA tire au hasard entre attaques parables et sautables, avec des nombres de coups différents. Les compteurs d'un run (tours, coups) varient donc d'un run à l'autre tant que l'IA n'est pas pilotée (voir D9).
+
+### Ajouts du 2026-10-19 (build 23765773)
+- **Hooks UE4SS sur fonctions natives** (`KismetMathLibrary:Random*`) : ils se déclenchent bien, mais `ctx.TheStack` est le cadre de la fonction native elle-même (`Object` = `Default__KismetMathLibrary`, `Node` = la fonction, paramètres dans `Locals`). Le vrai appelant BP est dans `TheStack.PreviousFrame()`.
+- **Ne jamais appeler le jeu (ProcessEvent) depuis un hook appelé très souvent** : un `GetControllerWorld` fait dans le hook de tirage pendant un chargement de save a fait planter le jeu (lecture de l'adresse nulle, thread principal). Les fonctions de tirage sont aussi appelées hors du thread de jeu.
+- **Appelants des tirages en combat** : voir D10 (IA ennemie, `RollCriticalHit`, `BP_LU_*`, `ActivateBuff` ; le reste est cosmétique).
+- **Crashs** : le build Shipping n'écrit pas de log ; UE4SS écrit `ue4ss/crash_*.dmp`, et le jeu affiche une boîte « Fatal error » qui attend un clic (fermée automatiquement par `run-scenario`).
+- **Chargement de save** : le thread de jeu ne pompe plus le réseau pendant ~30–60 s (aucun tick).
