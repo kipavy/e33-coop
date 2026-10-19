@@ -123,11 +123,51 @@ static void test_link()
     CHECK(invalid == 1);
 }
 
+// Gros messages (état complet de plusieurs Ko) : fragmentés, réassemblés dans l'ordre malgré pertes et doublons.
+static void test_link_fragments()
+{
+    std::deque<net::Datagram> a_to_b, b_to_a;
+    LossyPipe ta(a_to_b, "A", 3), tb(b_to_a, "B", 4);
+    net::Link la(ta, "B"), lb(tb, "A");
+    int invalid = 0;
+    la.on_invalid = lb.on_invalid = [&](const std::string&) { ++invalid; };
+    std::vector<std::string> sent;
+    for (uint32_t i = 0; i < 40; ++i) {
+        if (i % 3 == 0) {
+            proto::StateSync ss; ss.battle_id = 1; ss.turn = i;
+            for (uint8_t u = 0; u < 6; ++u) {
+                proto::UnitState us; us.unit = {proto::ActorKind::Enemy, u}; us.cls = "BP_EnemyBattle_Lancelier_Unique_V2_C"; us.hp = 1000.5 * u;
+                for (int b = 0; b < 12; ++b) us.buffs.push_back({"BP_BattleBuff_Burn_C_" + std::to_string(b), b, 3, false});
+                ss.units.push_back(us);
+            }
+            sent.push_back(proto::to_json(ss));
+            la.send(ss, true);
+        } else {
+            proto::StateHash h{1, i, i * 11ull};
+            sent.push_back(proto::to_json(h));
+            la.send(h, true);
+        }
+    }
+    std::vector<std::string> got;
+    double now = 0;
+    for (int step = 0; step < 8000 && got.size() < sent.size(); ++step) {
+        now += 0.02;
+        la.update(now); lb.update(now);
+        while (!a_to_b.empty()) { auto d = a_to_b.front(); a_to_b.pop_front(); CHECK(d.data.size() <= 1300); lb.on_datagram(d.data.data(), d.data.size(), now); }
+        while (!b_to_a.empty()) { auto d = b_to_a.front(); b_to_a.pop_front(); la.on_datagram(d.data.data(), d.data.size(), now); }
+        proto::Message m;
+        while (lb.pop(m)) got.push_back(proto::to_json(m));
+    }
+    CHECK(got == sent);
+    CHECK(invalid == 0);
+}
+
 int main()
 {
     test_roundtrip();
     test_invalid();
     test_link();
+    test_link_fragments();
     std::printf(g_fail ? "%d FAILURE(S)\n" : "all protocol tests passed\n", g_fail);
     return g_fail ? 1 : 0;
 }
