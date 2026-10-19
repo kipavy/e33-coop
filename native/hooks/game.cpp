@@ -164,7 +164,8 @@ bool is_dead(UObject* ch)
     return c.out_bool(STR("Dead"));
 }
 
-bool is_dead_fast(UObject* ch) { return ue::get_bool(ch, STR("Dead?")); }
+// Dead? n'est pas posé par toutes les morts (SetDead des stats : vu le 2026-10-19) ; 0 PV = mort pour le jeu.
+bool is_dead_fast(UObject* ch) { return ue::get_bool(ch, STR("Dead?")) || ue::get_double(stats(ch), STR("CurrentHP"), 1.0) <= 0.0; }
 int spot(UObject* ch) { return ch ? static_cast<int>(ue::get_int(ch, STR("BattleSpotIndex"), -1)) : -1; }
 
 UObject* find_unit(bool hero, int s)
