@@ -2,14 +2,14 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-19, 15h45) — **phase 3 en cours** (branche `phase-3`)
+## État courant (2026-10-19, 21h10) — **phase 3 : en attente de validation en jeu** (branche `phase-3`)
 
 | Phase | État | Branche |
 |---|---|---|
 | 0 — exploration | **finie** | `phase-0` (fusionnée dans `main`) |
 | 1 — environnement de test autonome | **finie** | `phase-1` (fusionnée dans `main`) |
 | 2 — preuve de concept réseau | **finie** (validée en jeu le 2026-10-19) | `phase-2` (fusionnée dans `main`) |
-| 3 — synchro complète du combat | **en cours** | `phase-3` |
+| 3 — synchro complète du combat | **batterie verte, validation en jeu à faire** | `phase-3` |
 
 Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions gratuite. Pas encore de `LICENSE` (choix de Killian).
 
@@ -26,12 +26,16 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 
 - Ajouts de fin d'après-midi : visée libre rejouée (point visé imposé via `ComputeFreeAim3rdPersonTargetLocation`, ~1 s de décalage, choix approuvé par Killian), réanimation (héros morts dans `DeadPlayerCharacters`), réglage initial de scénario (`setup`), passer le tour, fin de combat non bloquante, test à 3 joueurs (`fakepeers`), mode manuel du runner, `battery.ps1`, `.tools/run.sh` / `.tools/pair.sh`.
 
-### Tests (dernier état)
-- Batterie **12/12 verte** (build 39276875178) : p2 ×2, p3_actions ×2, p3_party ×2, p3_freeaim ×2, p3_defeat ×2, p3_resync_client, p3_three_host.
+- **Mécaniques propres dans l'état contrôlé** (perfection de Verso, posture de Maelle, taches de Lune : champs entiers/booléens/énumérations et tableaux des composants `*Mechanic*` / `StainHolder`) : envoyées dans `StateSync`, hashées, comparées et réparées. Enregistrements régénérés : 0 écart brut sur tous les rejeux.
 
-### En cours (passation : `docs/HANDOFF-PHASE3B.md`)
-- Commit `e390be0` : mécaniques propres (perfection, posture, taches) dans l'état contrôlé. Pas encore compilé ni testé ; change l'encodage de `StateSync` → régénérer tous les enregistrements puis repasser la batterie.
-- Ensuite : validation en jeu par Killian (`docs/VALIDATION-PHASE3.md`).
+### Tests (dernier état)
+- Batterie **12/12 verte** (build 39284007631, 2026-10-19 soir) : p2 ×2, p3_actions ×2, p3_party ×2, p3_freeaim ×2, p3_defeat ×2, p3_resync_client, p3_three_host.
+
+### En cours
+- Validation en jeu par Killian (`docs/VALIDATION-PHASE3.md`, paquet `.tools/artifacts/39284007631/e33coop-mod`).
+
+### Pièges récents
+- Le jeu peut figer sur l'écran d'avertissement au démarrage (3 runs d'affilée le 2026-10-19 18h37–18h48, processus entier arrêté avant le chargement des classes, rien côté mod) ; relancés à l'identique : verts. Probablement le focus ou une perturbation du bureau : ne pas utiliser le PC pendant les runs. Symptôme : `game_exited` à ~129 s, faux pair « client timed out », log client arrêté juste après `coop_battle_start_received`.
 
 ### Limites connues
 - Une seule visée libre par tour rejouée ; attaques/contres gradient non testés en automatique ; Sciel/Monoco non vus ; pas d'indicateur « tour de X » (phase 5).
@@ -46,3 +50,4 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 - 2026-10-19 (après-midi) : validation de Killian OK ; écran noir identifié (environnement de test) ; phase 2 fusionnée dans `main`.
 - 2026-10-19 (14h30) : écran noir et ennemis qui ne touchent pas en coop corrigés (TEST_B ; hook Array_Random retiré) ; CI ~2 min.
 - 2026-10-19 (15h45) : phase 3 démarrée : D11, protocole v4, équipe imposée, compétences/objets/QTE/défenses relayés, état complet, ciblage, récompenses.
+- 2026-10-19 (soir) : mécaniques propres dans l'état (build corrigé : en-tête `FEnumProperty`), enregistrements régénérés, batterie 12/12 ; checklist de validation prête.

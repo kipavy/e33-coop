@@ -1,3 +1,5 @@
+> **Terminé le 2026-10-19 au soir** : étapes 1 à 6 faites (build 39284007631, batterie 12/12). Reste la validation en jeu de Killian.
+
 Reprends le projet de mod coop en ligne pour Clair Obscur: Expedition 33. Phase 3 (synchro complète du combat) quasiment finie, sur la branche `phase-3` : il reste à valider le dernier commit (mécaniques propres), régénérer les enregistrements, repasser la batterie, puis me solliciter pour la validation en jeu.
 
 Avant toute action, lis dans cet ordre :
