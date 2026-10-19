@@ -1,9 +1,10 @@
 {
   "name": "p3_party_host",
-  "description": "Phase 3 : équipe de 3 (Verso, Lune : hôte ; Maelle à 1 PV : faux client). Ciblage aléatoire des ennemis synchronisé, mort de Maelle (elle ne se défend pas), réanimation par Lune (teinte de résurrection), fin de combat et récompenses. Produit l'enregistrement rejoué par p3_party_client.",
+  "description": "Phase 3 : équipe de 3 (Verso, Lune : hôte ; Maelle à 1 PV : faux client). Ciblage aléatoire des ennemis synchronisé, Maelle morte dès le tour 1 (réglage initial identique sur chaque instance), réanimation par Lune (teinte de résurrection), fin de combat et récompenses. Produit l'enregistrement rejoué par p3_party_client.",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
   "party": ["Verso", "Maelle", "Lune"],
+  "setup": { "Maelle": { "dead": true } },
   "timeout_s": 700,
   "wait_players": 1,
   "max_turns": 60,
@@ -13,7 +14,7 @@
     { "hero": "Verso", "type": "attack" }
   ],
   "defense": ["parry", "fail"],
-  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=16250036901998647475"],
-  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_maelle.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "700"] },
-  "expect": { "battle_end": "any", "remote_actions": ">=1", "targets_synced": ">=1" }
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=2"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_energy.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "700"] },
+  "expect": { "battle_end": "any", "remote_actions": ">=1", "targets_synced": ">=1", "hero_deaths": ">=1", "hero_revives": ">=1" }
 }

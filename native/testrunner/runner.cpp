@@ -74,6 +74,7 @@ struct Scenario {
     std::vector<Action> actions;
     std::vector<std::string> defense;     // parry | dodge | perfect_dodge | jump | fail | manual, cyclique par vague de coups
     json::Value expect;
+    json::Value setup;                    // {"<Héros>": {"hp": n, "shield": n, "dead": true}} : appliqué au tour 1, à l'identique sur chaque instance
 };
 
 struct State {
@@ -166,6 +167,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     if (s.actions.empty()) s.actions.push_back(Action{});
     for (size_t i = 0; i < v["defense"].size(); ++i) s.defense.push_back(v["defense"][i].as_string("fail"));
     s.expect = v["expect"];
+    s.setup = v["setup"];
     if (s.save.empty() || s.encounter.empty()) { err = "scenario needs save and encounter"; return false; }
     return true;
 }
@@ -443,6 +445,30 @@ bool start_dodge(UObject* defender, bool perfect)
     return ok;
 }
 
+// Réglage initial du scénario (tour 1) : PV, bouclier ou mort d'un héros. Chaque instance du test l'applique de la même
+// façon au même moment (après le contrôle du tour 1) : la simulation reste identique partout.
+void apply_setup()
+{
+    if (!g.sc.setup.is_object()) return;
+    for (UObject* h : game::players()) {
+        const json::Value& cfg = g.sc.setup[game::hardcoded_name(h)];
+        if (!cfg.is_object()) continue;
+        UObject* st = game::stats(h);
+        if (cfg["hp"].is_number()) ue::set_double(st, STR("CurrentHP"), cfg["hp"].as_number());
+        if (cfg["shield"].is_number()) {
+            ue::Call c(st, STR("SetCurrentShieldPoints"));
+            if (c) c.set_int(STR("NewValue"), cfg["shield"].as_int()).set_string(STR("DebugReason"), STR("E33Coop test setup")).invoke();
+        }
+        if (cfg["dead"].as_bool(false)) {
+            ue::set_double(st, STR("CurrentHP"), 0);
+            ue::Call c(st, STR("SetDead"));
+            if (c) c.invoke();
+        }
+        log().write("tr_setup", JsonObj().add("hero", game::hardcoded_name(h)).raw("cfg", "{}").add("hp", ue::get_double(st, STR("CurrentHP")))
+                                     .add("shield", ue::get_int(st, STR("CurrentShieldPoints"))).add("dead", game::is_dead(h)), g.turn);
+    }
+}
+
 // --- Hooks -----------------------------------------------------------------------------
 
 void subscribe()
@@ -460,7 +486,7 @@ void subscribe()
         UObject* bm = game::battle_manager();
         const bool counter = ue::get_bool(bm, STR("HasActiveCounterAttack"));
         ++g.turn;
-        if (g.turn == 1) log().write("tr_inventory", JsonObj().raw("inventory", game::battle_inventory_json()));
+        if (g.turn == 1) { log().write("tr_inventory", JsonObj().raw("inventory", game::battle_inventory_json())); apply_setup(); }
         log().write("tr_turn", JsonObj().add("actor", game::char_class(ch)).add("player", game::is_player(ch)).add("counter", counter).raw("state", state_json()), g.turn);
         if (g.turn > g.sc.max_turns) { fail("max_turns exceeded"); return; }
         if (game::is_player(ch) && !counter && coop::controls_spot(game::spot(ch))) {

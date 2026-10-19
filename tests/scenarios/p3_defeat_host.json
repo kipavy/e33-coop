@@ -1,15 +1,16 @@
 {
   "name": "p3_defeat_host",
-  "description": "Phase 3 : défaite. Maelle seule (1 PV, faux client) ne fait que boire des teintes d'énergie et ne se défend pas : le Lancelier la tue, le combat se termine par une défaite des deux côtés (pas de récompenses). Produit l'enregistrement rejoué par p3_defeat_client.",
+  "description": "Phase 3 : défaite. Lune seule, mise à 1 PV sans bouclier au tour 1 (faux client), ne fait que boire des teintes d énergie et ne se défend pas : le Lancelier la tue, le combat se termine par une défaite des deux côtés (pas de récompenses). Produit l'enregistrement rejoué par p3_defeat_client.",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
-  "party": ["Maelle"],
+  "party": ["Lune"],
+  "setup": { "Lune": { "hp": 1, "shield": 0 } },
   "timeout_s": 500,
   "wait_players": 1,
   "max_turns": 30,
   "shots_every_s": 6,
   "defense": ["fail"],
-  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=16250036901998647475"],
-  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_maelle.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "500"] },
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Lune:1", "-e33seed=16250036901998647475"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_energy.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "500"] },
   "expect": { "battle_end": "2", "remote_actions": ">=1" }
 }
