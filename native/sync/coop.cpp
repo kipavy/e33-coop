@@ -765,10 +765,9 @@ void subscribe()
         for (auto& p : s.peers) send_to(p, proto::DefenseResult{s.battle.id, s.battle.turn, hit, ok ? proto::Defense::Parry : proto::Defense::Fail});
     });
 
-    // Diagnostic (temporaire) : ciblage aléatoire, lecture seule.
-    bus.post(L"/Script/Engine.KismetArrayLibrary:Array_Random", [](HookCtx& ctx, UFunction*) {
-        if (s.role != Role::Solo && on_game_thread()) trace_random(ctx, "Array_Random");
-    });
+    // NE PAS hooker KismetArrayLibrary:Array_Random (custom thunk à paramètres génériques) : avec le hook UE4SS,
+    // GetRandomAliveHero ne renvoyait plus de cible ; l'ennemi attaquait dans le vide, caméra sous la carte
+    // (2026-10-19, GAME-INTERNALS §15). Le ciblage sera synchronisé en phase 3 au niveau de GetRandomAliveHero.
 
     // Tirages de gameplay (D10) : chaque instance remplace le résultat des fonctions natives de KismetMathLibrary
     // par une valeur dérivée de la graine de l'hôte, du flux (appelant BP + fonction) et du rang dans le tour.
