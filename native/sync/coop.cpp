@@ -95,6 +95,7 @@ struct State {
     int draw_mismatches = 0;                             // client : écarts avec les tirages de l'hôte
     int draw_errors = 0;                                 // paramètres de tirage illisibles
     std::optional<uint64_t> fixed_seed;                  // hôte : -e33seed=N (runs reproductibles)
+    std::vector<std::string> draw_filter;                // diagnostic : -e33draws=none | sous-chaînes (vide = tout remplacer)
 };
 
 State s;
@@ -553,8 +554,29 @@ void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string
     }
     ++s.gameplay_draws;
     s.battle.local_draws[s.battle.turn][(static_cast<uint64_t>(key) << 16) | rank] = v;
-    log().write("coop_draw", JsonObj().add("stream", stream).add("rank", static_cast<int>(rank)).add("value", v), s.battle.turn);
+    log().write("coop_draw", JsonObj().add("stream", stream).add("rank", static_cast<int>(rank)).add("value", v).add("a", a).add("b", b), s.battle.turn);
     if (s.role == Role::Host) broadcast(proto::Draws{s.battle.id, s.battle.turn, {{key, rank, v}}});
+}
+
+// Diagnostic -e33draws : "none" = aucun remplacement ; sinon seuls les flux contenant l'une des sous-chaînes.
+bool draw_allowed(const std::string& stream)
+{
+    if (s.draw_filter.empty()) return true;
+    for (auto& f : s.draw_filter) {
+        if (f == "none") return false;
+        if (stream.find(f) != std::string::npos) return true;
+    }
+    return false;
+}
+
+// Valeur produite par le moteur (non remplacée), pour les logs de diagnostic.
+double natural_value(HookCtx& ctx, RandomKind kind)
+{
+    switch (kind) {
+    case RandomKind::IntInRange: case RandomKind::Int: return *static_cast<int32_t*>(ctx.RESULT_DECL);
+    case RandomKind::Float: case RandomKind::FloatInRange: return *static_cast<double*>(ctx.RESULT_DECL);
+    default: return *static_cast<uint8_t*>(ctx.RESULT_DECL) ? 1.0 : 0.0;
+    }
 }
 
 // Client : compare les tirages de gameplay d'un tour terminé avec ceux de l'hôte (même flux, même rang, même valeur).
@@ -762,7 +784,8 @@ void subscribe()
             trace_random(ctx, fname);
             if (!s.battle.active || s.battle.turn == 0 || !ctx.RESULT_DECL) return;
             const std::string stream = gameplay_stream(ctx, fname);
-            if (!stream.empty()) replace_draw(ctx, f, kind, stream);
+            if (!stream.empty() && draw_allowed(stream)) replace_draw(ctx, f, kind, stream);
+            else if (!stream.empty()) log().write("coop_draw_natural", JsonObj().add("stream", stream).add("value", natural_value(ctx, kind)), s.battle.turn);
         });
     }
 
@@ -812,6 +835,11 @@ void init()
     s.gameplay_mods = read_gameplay_mods();
     s.session_id = GetTickCount();
     if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
+    {
+        std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
+        std::string part;
+        while (std::getline(ds, part, ',')) if (!part.empty()) s.draw_filter.push_back(part);
+    }
     for (const std::wstring& tok : {arg(L"e33owners")}) {
         std::wstringstream ss(tok);
         std::wstring part;
