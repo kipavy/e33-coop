@@ -16,5 +16,5 @@
   "defense": ["parry", "fail"],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=2"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_energy.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "700"] },
-  "expect": { "battle_end": "any", "remote_actions": ">=1", "targets_synced": ">=1", "hero_deaths": ">=2", "hero_revives": ">=2", "actions_item": ">=1" }
+  "expect": { "battle_end": "any", "remote_actions": ">=1", "targets_synced": ">=1", "hero_deaths": ">=2", "hero_revives": ">=2", "actions_item": ">=1", "remote_actions": ">=2" }
 }

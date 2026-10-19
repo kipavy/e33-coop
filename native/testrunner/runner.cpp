@@ -270,7 +270,7 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
     if (coop::active()) {
         add("coop_session", "ok", coop::session_ok() ? "ok" : "ko", coop::session_ok());
         for (const char* c : {"desyncs", "draw_mismatches", "draw_errors", "invalid_messages", "defense_timeouts", "combo_timeouts", "turn_wait_timeouts",
-                              "actor_mismatches", "end_mismatches", "rewards_mismatches", "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_action_errors"})
+                              "actor_mismatches", "end_mismatches", "rewards_mismatches", "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_action_errors", "remote_action_invalid"})
             wants[c] = "0";
         wants["hashes_compared"] = ">0";
         wants["gameplay_draws"] = ">0";

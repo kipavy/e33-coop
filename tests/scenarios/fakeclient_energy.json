@@ -4,7 +4,8 @@
   "mod_version": "0.3.0",
   "gameplay_mods": [],
   "actions": [
-    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" }
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
   ],
   "defense": ["fail"]
 }

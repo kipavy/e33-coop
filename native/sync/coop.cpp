@@ -1376,6 +1376,17 @@ void run_remote_action()
         if (UObject* o = game::find_unit(t.kind == proto::ActorKind::Hero, t.spot)) targets.push_back(o);
     }
     const std::wstring secondary = ue::from_utf8(cmd.secondary);
+    // Une commande que le jeu du propriétaire n'aurait pas permise (objet épuisé, PA insuffisants) signale un écart.
+    {
+        int targeting = -1, cost = 0;
+        const bool no_item = cmd.action_type == game::ActItem && game::battle_item_count(secondary) <= 0;
+        const bool no_ap = cmd.action_type == game::ActSkill && game::skill_info(cur, secondary, targeting, cost) &&
+                           ue::get_double(game::stats(cur), STR("CurrentAP")) < cost;
+        if (no_item || no_ap) {
+            bump("remote_action_invalid");
+            log().write("coop_remote_action_invalid", JsonObj().add("spot", spot).add("secondary", cmd.secondary).add("no_item", no_item).add("no_ap", no_ap), b.turn);
+        }
+    }
     if (auto_target) targets = game::auto_targets(cur, cmd.action_type, secondary);
     std::string err;
     // Pas de réussite automatique des QTE : chaque fenêtre reçoit le résultat du propriétaire.

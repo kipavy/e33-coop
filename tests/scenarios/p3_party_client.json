@@ -9,7 +9,8 @@
   "max_turns": 60,
   "shots_every_s": 6,
   "actions": [
-    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" }
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
   ],
   "defense": ["fail"],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],

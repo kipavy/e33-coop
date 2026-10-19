@@ -154,7 +154,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 if (!candidates.empty()) {
                     const json::Value& act = actions[candidates[action_index[cls]++ % candidates.size()]];
                     const std::string type = act["type"].as_string("attack");
-                    ac.action_type = static_cast<uint8_t>(type == "skill" ? 5 : type == "item" ? 3 : 1);
+                    ac.action_type = static_cast<uint8_t>(type == "skill" ? 5 : type == "item" ? 3 : type == "skip" ? 6 : type == "flee" ? 4 : 1);
                     ac.secondary = act["skill"].is_string() ? act["skill"].as_string() : act["item"].as_string();
                     const std::string target = act["target"].as_string("auto");
                     if (target.rfind("hero:", 0) == 0) {
