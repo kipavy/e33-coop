@@ -113,6 +113,7 @@ struct Battle {
     // Fin
     int local_end = -1;
     int host_end = -1;
+    double end_flow_at = -1;                               // fin sans victoire : clôture différée (tick), jamais bloquante dans le flux de fin
     std::optional<proto::BattleRewards> host_rewards;
 };
 
@@ -811,7 +812,8 @@ void finalize_battle(const char* why)
     auto& b = s.battle;
     if (b.finalized) return;
     if (s.role == Role::Client) {
-        wait_for([&] { return b.host_end >= 0; }, 5.0);
+        // Jamais d'attente ici : on peut être au milieu d'un coup (mort -> fin de combat) dont l'hôte attend le résultat.
+        // La clôture d'une fin sans victoire est donc faite dans le tick, une fois le BattleEnd de l'hôte reçu.
         if (b.host_end != b.local_end) {
             bump("end_mismatches");
             log().write("coop_end_mismatch", JsonObj().add("local", b.local_end).add("host", b.host_end));
@@ -1227,7 +1229,7 @@ void subscribe()
         if (s.role == Role::Host) broadcast(proto::BattleEnd{s.battle.id, static_cast<uint8_t>(std::clamp(result, 0, 3))});
         log().write("coop_battle_end", JsonObj().add("battle", s.battle.id).add("result", result).add("desyncs", counter("desyncs")));
         // Sans victoire, pas de récompenses : la fin est traitée tout de suite.
-        if (result != game::EndVictory) finalize_battle("end_flow");
+        if (result != game::EndVictory) s.battle.end_flow_at = s.now;
     });
 }
 
@@ -1410,6 +1412,9 @@ void tick(double dt)
     pump_network();
     if (s.role == Role::Client) start_pending_battle();
     run_remote_action();
+    // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
+    if (auto& b = s.battle; b.end_flow_at >= 0 && !b.finalized && (s.role == Role::Host || b.host_end >= 0 || s.now - b.end_flow_at > 8.0))
+        finalize_battle("end_flow");
     // Appuis de QTE rejoués pour les héros des autres joueurs (instant de leur propriétaire).
     auto& presses = s.battle.presses;
     for (size_t i = 0; i < presses.size();) {
