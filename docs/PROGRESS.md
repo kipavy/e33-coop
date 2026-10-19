@@ -24,19 +24,17 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 - Test runner : actions par héros (`attack`/`skill`/`item`/`skip`/`flee`, cibles `auto`/`enemy:N`/`hero:Nom`/`dead_hero`/`all_enemies`/`self`, repli `else`), QTE joués par de vrais appuis (`"combo": ["perfect","success","fail"]`), défenses `parry`/`dodge`/`perfect_dodge`/`jump`/`fail`, vérifications génériques sur tous les compteurs.
 - Outils : `tools/dev/remote.ps1` (télécommande Lua d'exploration), snippets Lua (combat à 3, compétence, objet, QTE).
 
+- Ajouts de fin d'après-midi : visée libre rejouée (point visé imposé via `ComputeFreeAim3rdPersonTargetLocation`, ~1 s de décalage, choix approuvé par Killian), réanimation (héros morts dans `DeadPlayerCharacters`), réglage initial de scénario (`setup`), passer le tour, fin de combat non bloquante, test à 3 joueurs (`fakepeers`), mode manuel du runner, `battery.ps1`, `.tools/run.sh` / `.tools/pair.sh`.
+
 ### Tests (dernier état)
-- `p2_host_vs_fakeclient` / `p2_client_vs_fakehost` : **verts** en protocole v4 (enregistrement refait), 0 écart brut.
-- `p3_actions_host` : vert. `p3_actions_client` : a révélé l'écart de QTE ci-dessus (corrigé, à revérifier).
-- `p3_party_*`, `p3_resync_client`, `p3_defeat_*` : écrits, pas encore lancés.
+- Batterie **12/12 verte** (build 39276875178) : p2 ×2, p3_actions ×2, p3_party ×2, p3_freeaim ×2, p3_defeat ×2, p3_resync_client, p3_three_host.
 
-### En cours
-- Revalider `p3_actions` avec l'appui rejoué, puis lancer la batterie (équipe de 3, resynchro, défaite).
+### En cours (passation : `docs/HANDOFF-PHASE3B.md`)
+- Commit `e390be0` : mécaniques propres (perfection, posture, taches) dans l'état contrôlé. Pas encore compilé ni testé ; change l'encodage de `StateSync` → régénérer tous les enregistrements puis repasser la batterie.
+- Ensuite : validation en jeu par Killian (`docs/VALIDATION-PHASE3.md`).
 
-### Reste à faire (phase 3)
-- Visée libre (tirs de Verso), attaques gradient, contre-attaques gradient, mécaniques propres (Lune, Sciel, Monoco, Maelle).
-- Combat plus long pour la couverture (rencontre à plusieurs ennemis).
-- 3 joueurs (hôte + 2 faux clients).
-- Checklist de validation en jeu.
+### Limites connues
+- Une seule visée libre par tour rejouée ; attaques/contres gradient non testés en automatique ; Sciel/Monoco non vus ; pas d'indicateur « tour de X » (phase 5).
 
 ### Bloqué
 - Rien.
