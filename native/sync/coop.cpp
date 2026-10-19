@@ -401,21 +401,46 @@ proto::ActionResult snapshot_result(UObject* actor)
 
 // --- Hooks -------------------------------------------------------------------------------
 
-// Diagnostic des tirages aléatoires : qui appelle quoi, depuis quelle fonction BP.
-// 5 premiers appels par fonction (combat ou non), puis 300 par combat au plus.
 bool on_game_thread() { return s.game_thread != 0 && GetCurrentThreadId() == s.game_thread; }
 
+// Appelant Blueprint d'une fonction native hookée. Le cadre fourni par UE4SS est celui de la fonction
+// elle-même (objet = CDO de KismetMathLibrary, nœud = RandomFloatInRange, vérifié en jeu le 2026-10-19) :
+// on remonte PreviousFrame jusqu'au premier objet qui n'est pas ce CDO.
+UObject* script_caller(HookCtx& ctx, UFunction** node_out = nullptr)
+{
+    RC::Unreal::FFrame* f = &ctx.TheStack;
+    for (int depth = 0; f && depth < 4; ++depth) {
+        UObject* o = f->Object();
+        if (o && o != ctx.Context) {
+            if (node_out) *node_out = f->Node();
+            return o;
+        }
+        RC::Unreal::FFrame* prev = f->PreviousFrame();
+        if (prev == f) break;
+        f = prev;
+    }
+    return nullptr;
+}
+
+// Diagnostic des tirages aléatoires : chaîne des cadres de script (objet / fonction BP).
+// 5 premiers appels par fonction (combat ou non), puis 600 par combat au plus.
 void trace_random(HookCtx& ctx, const std::string& fname)
 {
     static std::map<std::string, int> seen;
     const bool early = seen[fname]++ < 5;
-    const bool in_battle = s.battle.active && s.battle.traced_draws < 300;
+    const bool in_battle = s.battle.active && s.battle.traced_draws < 600;
     if (!early && !in_battle) return;
     if (in_battle) ++s.battle.traced_draws;
-    UObject* caller = ctx.TheStack.Object();
-    UFunction* node = ctx.TheStack.Node();
-    log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).add("caller", ue::full_name(caller))
-                                 .add("node", ue::short_name(node)).add("enemy", cached_enemy_index(caller))
+    std::string frames = "[";
+    RC::Unreal::FFrame* f = &ctx.TheStack;
+    for (int depth = 0; f && depth < 4; ++depth) {
+        if (frames.size() > 1) frames += ",";
+        frames += JsonObj().add("o", ue::full_name(f->Object())).add("n", ue::short_name(f->Node())).add("enemy", cached_enemy_index(f->Object())).str();
+        RC::Unreal::FFrame* prev = f->PreviousFrame();
+        if (prev == f) break;
+        f = prev;
+    }
+    log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).raw("frames", frames + "]")
                                  .add("has_result", ctx.RESULT_DECL != nullptr), s.battle.turn);
 }
 
@@ -592,7 +617,7 @@ void subscribe()
             if (!on_game_thread()) { ++s.off_thread_draws; return; }
             trace_random(ctx, fname);
             if (!s.battle.active || !ctx.RESULT_DECL) return;
-            UObject* caller = ctx.TheStack.Object();
+            UObject* caller = script_caller(ctx);
             if (!caller) return;
             const int ei = cached_enemy_index(caller);
             if (ei < 0) return;   // seulement les tirages faits par un ennemi (choix de l'IA)

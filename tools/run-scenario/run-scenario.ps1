@@ -72,8 +72,8 @@ else {
             # Crash : le jeu affiche une boîte « Fatal error » qui attend un clic. On note son texte et on la ferme.
             $dlg = & (Join-Path $repo "tools\dev\close-crash-dialog.ps1") -ProcessId $game.Id -Out (Join-Path $run "crash-dialog.txt")
             if ($dlg) { $dlg | ForEach-Object { Log "dialogue du jeu fermé : $_" }; $status = "crashed" }
+            elseif (((Get-Date) - $t0).TotalSeconds -gt $TimeoutSec) { $status = "timeout" }
         }
-        elseif (((Get-Date) - $t0).TotalSeconds -gt $TimeoutSec) { $status = "timeout" }
     }
     if (-not $game.HasExited) {
         if ($status -ne "finished") {
