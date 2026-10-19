@@ -280,6 +280,13 @@ bool perform_action(int action_type, const std::wstring& secondary, const std::v
 {
     UObject* bm = battle_manager();
     if (!bm) { err = "no battle manager"; return false; }
+    // Passer le tour / fuir : chemins de l'interface (pas de RequestActionExecution).
+    if (action_type == ActSkip || action_type == ActFlee) {
+        ue::Call c(bm, action_type == ActSkip ? STR("OnSelectSkip") : STR("OnSelectFlee"));
+        if (!c) { err = "OnSelectSkip/OnSelectFlee not found"; return false; }
+        c.invoke();
+        return true;
+    }
     if (combo_auto_success >= 0) ue::set_int(bm, STR("DEBUG_ComboAutoSuccessCount"), combo_auto_success);
     ue::Call sel(bm, STR("SelectAction"));
     if (!sel) { err = "SelectAction not found"; return false; }

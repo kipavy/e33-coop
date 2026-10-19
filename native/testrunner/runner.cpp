@@ -130,6 +130,8 @@ int action_type_of(const std::string& t)
 {
     if (t == "skill") return game::ActSkill;
     if (t == "item") return game::ActItem;
+    if (t == "skip") return game::ActSkip;
+    if (t == "flee") return game::ActFlee;
     return game::ActAttack;
 }
 
@@ -376,6 +378,7 @@ bool playable(UObject* actor, const Action& a, std::vector<UObject*>& targets, s
         if (ue::get_double(game::stats(actor), STR("CurrentAP")) < cost) { why = "not enough AP"; return false; }
     }
     if (a.type == game::ActItem && game::battle_item_count(a.secondary) <= 0) { why = "no item left"; return false; }
+    if (a.type == game::ActSkip || a.type == game::ActFlee) { targets.clear(); return true; }
     targets = resolve_targets(actor, a);
     if (targets.empty()) { why = "no target"; return false; }
     return true;
@@ -408,7 +411,8 @@ void play_turn(UObject* actor)
     std::string err;
     const int auto_success = a->combo.empty() ? g.sc.combo_auto_success : 0;
     if (!game::perform_action(a->type, a->secondary, targets, auto_success, err)) { fail("perform_action: " + err); return; }
-    const char* kind = a->type == game::ActSkill ? "actions_skill" : a->type == game::ActItem ? "actions_item" : "actions_attack";
+    const char* kind = a->type == game::ActSkill ? "actions_skill" : a->type == game::ActItem ? "actions_item"
+                     : a->type == game::ActSkip ? "actions_skip" : a->type == game::ActFlee ? "actions_flee" : "actions_attack";
     ++g.metrics[kind];
     std::string ts = "[";
     for (UObject* t : targets) { if (ts.size() > 1) ts += ","; ts += "\"" + game::char_class(t) + "#" + std::to_string(game::spot(t)) + "\""; }

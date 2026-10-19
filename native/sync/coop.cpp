@@ -121,6 +121,8 @@ struct State {
     std::vector<std::string> draw_filter;                  // diagnostic : -e33draws=none | sous-chaînes
     std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
+    bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
+    bool input_enabled = true;
     std::map<std::string, int> counters;
 };
 
@@ -742,6 +744,16 @@ void client_turn_start(UObject* actor)
     if (s.perturb_turn && *s.perturb_turn == b.turn) perturb_state();
 }
 
+// Entrées de combat de cette instance (roue d'actions, ciblage) : coupées pendant le tour du héros d'un autre joueur.
+void set_local_input(bool enabled, const char* why)
+{
+    if (enabled == s.input_enabled) return;
+    s.input_enabled = enabled;
+    ue::Call c(game::battle_manager(), STR("SetBattleInputEnabled"));
+    if (c) c.set_bool(STR("Enabled"), enabled).invoke();
+    log().write("coop_input", JsonObj().add("enabled", enabled).add("why", why), s.battle.turn);
+}
+
 // --- Fin de combat -------------------------------------------------------------------------
 
 // Récompenses : lecture / écriture de FS_BattleRewards (out-param de RollBattleRewards).
@@ -783,6 +795,7 @@ void finalize_battle(const char* why)
     }
     b.finalized = true;
     b.active = false;
+    set_local_input(true, "battle end");
     log().write("coop_battle_finalized", JsonObj().add("battle", b.id).add("why", why).add("desyncs", counter("desyncs")));
 }
 
@@ -879,7 +892,27 @@ void subscribe()
         if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;   // contre : pas un tour
         if (s.role == Role::Host) host_turn_start(ctx.Context);
         else if (s.role == Role::Client && s.battle.active) client_turn_start(ctx.Context);
+        // Tour du héros d'un autre joueur : pas de choix d'action ici (son action arrive par le réseau).
+        if (s.role != Role::Solo && s.battle.active && s.lock_input)
+            set_local_input(!game::is_player(ctx.Context) || controls(game::spot(ctx.Context)), "turn start");
     });
+
+    // Passer le tour / fuir (chemins de l'interface, sans RequestActionExecution) : publiés comme les autres actions.
+    for (const auto& [fn_name, type] : {std::pair{L"OnSelectSkip", game::ActSkip}, std::pair{L"OnSelectFlee", game::ActFlee}}) {
+        const int t = type;
+        bus.pre(fn(game::path::BattleMgr, fn_name), [t](HookCtx&, UFunction*) {
+            if (s.role == Role::Solo || !s.battle.active) return;
+            UObject* cur = game::current_character();
+            if (!cur || !game::is_player(cur) || !controls(game::spot(cur))) return;
+            proto::ActionCommand ac;
+            ac.battle_id = s.battle.id;
+            ac.turn = s.battle.turn;
+            ac.actor_spot = static_cast<uint8_t>(game::spot(cur));
+            ac.action_type = static_cast<uint8_t>(t);
+            bump("actions_published");
+            publish(ac);
+        });
+    }
 
     // Action choisie ici pour un héros contrôlé ici (test runner ou joueur) : publiée telle quelle.
     bus.pre(fn(game::path::BattleMgr, L"RequestActionExecution"), [](HookCtx& ctx, UFunction* f) {
@@ -1157,6 +1190,7 @@ void init()
     if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
+    if (arg(L"e33lockinput") == L"0") s.lock_input = false;
     {
         std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
         std::string part;
