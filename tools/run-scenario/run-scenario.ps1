@@ -65,8 +65,17 @@ else {
     if ($sc.fakepeer -and $sc.fakepeer.start -eq "after_game") { $peer = Start-FakePeer }
     $result = Join-Path $run "result.json"
     $status = $null
+    $nextShot = 0.0
+    if ($sc.shots_every_s) { New-Item -ItemType Directory -Force (Join-Path $run "shots") | Out-Null }
     while (-not $status) {
         Start-Sleep -Seconds 2
+        # "shots_every_s": N -> capture de la fenêtre du jeu toutes les N secondes (shots\tNNN.png)
+        if ($sc.shots_every_s -and ((Get-Date) - $t0).TotalSeconds -ge $nextShot) {
+            $nextShot += [double]$sc.shots_every_s
+            $shotPath = Join-Path $run ("shots\t{0:D3}.png" -f [int]((Get-Date) - $t0).TotalSeconds)
+            # processus séparé et non bloquant (Add-Type répété dans une même session peut échouer)
+            Start-Process powershell -WindowStyle Hidden -ArgumentList @("-NoProfile", "-File", "`"$(Join-Path $repo 'tools\dev\screenshot.ps1')`"", "-Out", "`"$shotPath`"") | Out-Null
+        }
         if (Test-Path $result) { Start-Sleep -Seconds 1; $status = "finished" }
         elseif ($game.HasExited) { $status = "game_exited" }
         else {

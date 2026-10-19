@@ -5,6 +5,7 @@
   "encounter": "L_LumiereCitizenFleuret_Male*1",
   "timeout_s": 900,
   "max_turns": 60,
+  "shots_every_s": 4,
   "action_delay_s": 1.5,
   "sound": true,
   "defense": ["manual"],

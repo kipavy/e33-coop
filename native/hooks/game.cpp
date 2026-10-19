@@ -1,7 +1,10 @@
 #include "game.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cmath>
+#include <optional>
 
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/UClass.hpp>
@@ -63,6 +66,16 @@ bool set_member_fname(UStruct* st, void* base, const wchar_t* name, const wchar_
     if (!p) return false;
     *static_cast<FName*>(p->ContainerPtrToValuePtr<void>(base)) = FName(v, FNAME_Add);
     return true;
+}
+
+// Position monde d'un acteur (K2_GetActorLocation ; FVector = 3 doubles en UE 5.4).
+std::optional<std::array<double, 3>> actor_location(UObject* actor)
+{
+    ue::Call c(actor, STR("K2_GetActorLocation"));
+    if (!c || !c.invoke()) return std::nullopt;
+    const auto* v = static_cast<const double*>(c.param_ptr(STR("ReturnValue")));
+    if (!v) return std::nullopt;
+    return std::array<double, 3>{v[0], v[1], v[2]};
 }
 
 } // namespace
@@ -150,7 +163,27 @@ bool trigger_battle(const std::wstring& encounter, std::string& err)
     std::vector<UObject*> maps;
     UObjectGlobals::FindAllOf(STR("BP_BattleMap_C"), maps);
     if (maps.empty()) { err = "no BP_BattleMap_C in level"; return false; }
+    // Arène la plus proche du personnage du joueur. (Avant : la première par nom, qui pouvait être ailleurs
+    // dans le niveau, hors du décor chargé : caméra dans la roche, écran noir pendant les attaques ennemies.)
     std::sort(maps.begin(), maps.end(), [](UObject* a, UObject* b) { return a->GetName() < b->GetName(); });
+    double best_d2 = -1;
+    if (UObject* pawn = UObjectGlobals::FindFirstOf(STR("BP_jRPG_Character_World_C")); pawn) {
+        if (auto p = actor_location(pawn)) {
+            std::stable_sort(maps.begin(), maps.end(), [&](UObject* a, UObject* b) {
+                auto la = actor_location(a), lb = actor_location(b);
+                auto d2 = [&](const std::optional<std::array<double, 3>>& l) {
+                    if (!l) return 1e300;
+                    const double dx = (*l)[0] - (*p)[0], dy = (*l)[1] - (*p)[1], dz = (*l)[2] - (*p)[2];
+                    return dx * dx + dy * dy + dz * dz;
+                };
+                return d2(la) < d2(lb);
+            });
+            if (auto lm = actor_location(maps.front())) {
+                const double dx = (*lm)[0] - (*p)[0], dy = (*lm)[1] - (*p)[1], dz = (*lm)[2] - (*p)[2];
+                best_d2 = dx * dx + dy * dy + dz * dz;
+            }
+        }
+    }
 
     static std::atomic<int> seq{0};
     const std::wstring obj_name = L"E33Coop_Trigger_" + std::to_wstring(++seq);
@@ -181,7 +214,8 @@ bool trigger_battle(const std::wstring& encounter, std::string& err)
     if (!exec) { err = "ExecuteGameAction not found"; return false; }
     exec.set_object(STR("GameAction"), action).invoke();
     g_last_encounter = encounter;
-    log().write("battle_trigger", JsonObj().add("encounter", ue::to_utf8(encounter)).add("map", ue::short_name(maps.front())));
+    log().write("battle_trigger", JsonObj().add("encounter", ue::to_utf8(encounter)).add("map", ue::short_name(maps.front()))
+                                     .add("maps", static_cast<int64_t>(maps.size())).add("distance", best_d2 >= 0 ? std::sqrt(best_d2) : -1.0));
     return true;
 }
 

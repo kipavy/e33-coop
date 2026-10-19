@@ -5,6 +5,7 @@
   "encounter": "L_LumiereCitizenFleuret_Male*1",
   "timeout_s": 600,
   "max_turns": 60,
+  "shots_every_s": 4,
   "defense": ["parry", "fail"],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
   "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--timeout", "600"] },
