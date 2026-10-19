@@ -128,7 +128,7 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 - L'hôte reste l'autorité : c'est lui qui choisit la graine, et ses PV écrasent toujours ceux des clients (`ActionResult`). Un écart de PV n'est plus silencieux : `hp_overrides` doit valoir 0 côté client.
 
 **Limites connues** :
-- `Array_Random` (ciblage `GetRandomAliveHero`, variantes d'anim dans l'ubergraph des personnages) n'est pas encore remplacé : sa sortie est un élément de tableau générique. À traiter en phase 3 (avec 1 seul héros, sans effet).
+- `Array_Random` (ciblage `GetRandomAliveHero`, variantes d'anim) n'est pas remplacé, et **ne doit pas être hooké** : le hook UE4SS casse le ciblage des ennemis (GAME-INTERNALS §15). Le ciblage sera synchronisé en phase 3 au niveau de `GetRandomAliveHero` (avec un seul héros, sans effet).
 - La liste des appelants de gameplay sera complétée au fil des compétences (phase 3).
 
 **Remise en cause si** : un tirage de gameplay dépend d'un appelant que l'on ne sait pas classer de façon stable, ou si les ordres d'appel dans un même flux diffèrent entre machines (détecté immédiatement par `coop_draw_mismatch`).

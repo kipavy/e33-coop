@@ -94,6 +94,8 @@ struct State {
     int gameplay_draws = 0;                              // tirages de gameplay remplacés (D10)
     int draw_mismatches = 0;                             // client : écarts avec les tirages de l'hôte
     int draw_errors = 0;                                 // paramètres de tirage illisibles
+    double action_delay_s = 1.5;                         // hôte : délai minimal avant d'exécuter une action distante (-e33actiondelay)
+    double turn_started_at = 0;                          // hôte : s.now au dernier début de tour
     std::optional<uint64_t> fixed_seed;                  // hôte : -e33seed=N (runs reproductibles)
     std::vector<std::string> draw_filter;                // diagnostic : -e33draws=none | sous-chaînes (vide = tout remplacer)
 };
@@ -647,6 +649,7 @@ void subscribe()
             broadcast(proto::StateHash{s.battle.id, s.battle.turn, h});
             check_hash(s.battle.turn);
             s.battle.pending_command.reset();
+            s.turn_started_at = s.now;
         } else if (s.role == Role::Client && s.battle.active) {
             ++s.battle.turn;
             s.battle.draw_rank.clear();
@@ -762,10 +765,9 @@ void subscribe()
         for (auto& p : s.peers) send_to(p, proto::DefenseResult{s.battle.id, s.battle.turn, hit, ok ? proto::Defense::Parry : proto::Defense::Fail});
     });
 
-    // Diagnostic (temporaire) : ciblage aléatoire, lecture seule.
-    bus.post(L"/Script/Engine.KismetArrayLibrary:Array_Random", [](HookCtx& ctx, UFunction*) {
-        if (s.role != Role::Solo && on_game_thread()) trace_random(ctx, "Array_Random");
-    });
+    // NE PAS hooker KismetArrayLibrary:Array_Random (custom thunk à paramètres génériques) : avec le hook UE4SS,
+    // GetRandomAliveHero ne renvoyait plus de cible ; l'ennemi attaquait dans le vide, caméra sous la carte
+    // (2026-10-19, GAME-INTERNALS §15). Le ciblage sera synchronisé en phase 3 au niveau de GetRandomAliveHero.
 
     // Tirages de gameplay (D10) : chaque instance remplace le résultat des fonctions natives de KismetMathLibrary
     // par une valeur dérivée de la graine de l'hôte, du flux (appelant BP + fonction) et du rang dans le tour.
@@ -835,6 +837,7 @@ void init()
     s.gameplay_mods = read_gameplay_mods();
     s.session_id = GetTickCount();
     if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
+    if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     {
         std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
         std::string part;
@@ -910,7 +913,9 @@ void tick(double dt)
     pump_network();
     if (s.role == Role::Client) start_pending_battle();
     // Hôte : exécuter la commande reçue d'un client pour son héros.
-    if (s.role == Role::Host && s.battle.active && s.battle.pending_command) {
+    // Une action distante n'est exécutée qu'une fois le tour prêt (même délai que le runner solo). L'exécuter
+    // dès le début du tour laissait caméra et placement incohérents : attaque ennemie suivante jouée sous la carte.
+    if (s.role == Role::Host && s.battle.active && s.battle.pending_command && s.now - s.turn_started_at >= s.action_delay_s) {
         UObject* cur = game::current_character();
         if (cur && game::is_player(cur) && hero_spot(cur) == s.battle.pending_command->actor_spot) {
             auto cmd = *s.battle.pending_command;

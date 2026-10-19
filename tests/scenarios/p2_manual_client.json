@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "p2_manual_client",
-  "description": "Validation manuelle (Killian) : vrai jeu client face au faux hôte. Le runner choisit les actions du héros, mais c'est le joueur qui pare / saute les coups ennemis. Vérifie que la défense locale est instantanée et que son résultat part vers l'hôte. Les PV peuvent différer de l'enregistrement de l'hôte (parades différentes) : ces écarts sont relevés, pas bloquants.",
-  "save": "e33coop-test/TEST_A",
-  "encounter": "L_LumiereCitizenFleuret_Male*1",
+  "description": "Validation manuelle (Killian) : vrai jeu client face au faux hÃ´te. Le runner choisit les actions du hÃ©ros, mais c'est le joueur qui pare / saute les coups ennemis. VÃ©rifie que la dÃ©fense locale est instantanÃ©e et que son rÃ©sultat part vers l'hÃ´te. Les PV peuvent diffÃ©rer de l'enregistrement de l'hÃ´te (parades diffÃ©rentes) : ces Ã©carts sont relevÃ©s, pas bloquants.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
   "timeout_s": 900,
   "max_turns": 60,
   "shots_every_s": 4,

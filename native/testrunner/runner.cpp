@@ -264,8 +264,11 @@ void subscribe()
     auto& bus = HookBus::get();
 
     bus.post(fn(game::path::BattleChar, L"OnTurnStart"), [](HookCtx& ctx, RC::Unreal::UFunction*) {
-        if (g.phase != Phase::Battle && g.phase != Phase::WaitBattle) return;
-        if (g.phase == Phase::WaitBattle) set_phase(Phase::Battle);
+        // Un client coop peut voir le combat (lancé par le module coop) démarrer avant que le runner ait fini
+        // d'attendre le monde : tout début de tour pendant ces attentes fait passer en combat.
+        const bool waiting = g.phase == Phase::WaitWorld || g.phase == Phase::Trigger || g.phase == Phase::WaitBattle;
+        if (g.phase != Phase::Battle && !waiting) return;
+        if (waiting) set_phase(Phase::Battle);
         UObject* ch = ctx.Context;
         UObject* bm = game::battle_manager();
         const bool counter = ue::get_bool(bm, STR("HasActiveCounterAttack"));
