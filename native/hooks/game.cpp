@@ -79,8 +79,8 @@ bool set_party(UStruct* st, void* base, const std::vector<std::wstring>& party)
     UStruct* slot_struct = inner->GetStruct();
     const int32 elem = inner->GetSize();
     auto* arr = static_cast<FScriptArray*>(ap->ContainerPtrToValuePtr<void>(base));
-    *arr = FScriptArray{};
     if (party.empty()) return true;
+    if (arr->Num() != 0) return false;   // objet neuf : le tableau doit être vide
     arr->AddZeroed(static_cast<int32>(party.size()), elem, static_cast<uint32>(alignof(uint64_t)));
     auto* data = static_cast<uint8_t*>(arr->GetData());
     for (size_t i = 0; i < party.size(); ++i) {

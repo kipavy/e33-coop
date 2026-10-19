@@ -1,0 +1,13 @@
+{
+  "name": "p3_resync_client",
+  "description": "Phase 3 : resynchronisation. Même rejeu que p2_client_vs_fakehost, mais le client fausse volontairement son état au tour 3 (-e33perturb=3 : PV d'un ennemi -1, PA d'un héros +1). L'écart doit être détecté au tour suivant (log détaillé), corrigé depuis l'état de l'hôte, et le combat doit finir sans désync.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "timeout_s": 600,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33perturb=3"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "raw_hash_diffs": ">=1", "repairs": ">=1", "perturbations": "1" }
+}

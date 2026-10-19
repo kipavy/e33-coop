@@ -1,0 +1,10 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "0.3.0",
+  "gameplay_mods": [],
+  "actions": [
+    { "hero": "Maelle", "type": "item", "item": "Consumable_Energy_Level2", "target": "hero:Maelle" }
+  ],
+  "defense": ["fail"]
+}

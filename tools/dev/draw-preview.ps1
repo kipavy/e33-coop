@@ -1,6 +1,8 @@
 # Prévoit les tirages de gameplay dérivés (D10) pour une graine, sans lancer le jeu.
 # Même calcul que native/sync/coop.cpp (derived_uniform, fnv32).
-#   draw-preview.ps1 -Seed <n> -Stream "<Classe:Fonction:Tirage#n>" [-Turns "3,6"] [-Rank 0] [-Min 0 -Max 3]
+#   draw-preview.ps1 -Seed <n> -Stream "<Classe:Fonction:Tirage#e>" [-Turns "3,6"] [-Rank 0] [-Min 0 -Max 3]
+#     #e = emplacement de combat de l ennemi appelant (D11). Ciblage : -Stream "Targeting:GetRandomAliveHero#e"
+#     -Min 0 -Max (héros vivants - 1) donne l index du héros visé parmi les vivants triés par emplacement.
 #   draw-preview.ps1 -FindFrom 1 -FindCount 200 -Stream ... -Turns "3,6" -Min 0 -Max 3 -Want 3
 param(
     [string]$Seed = "0",
