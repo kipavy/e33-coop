@@ -137,6 +137,7 @@ UObject* battle_manager() { return ue::get_object(controller(), STR("AC_jRPG_Bat
 UObject* save_manager() { return ue::get_object(gi(), STR("SaveManager")); }
 
 UObject* main_menu() { return UObjectGlobals::FindFirstOf(STR("WBP_MM_MainMenu_C")); }
+UObject* world_pawn() { return UObjectGlobals::FindFirstOf(STR("BP_jRPG_Character_World_C")); }
 
 bool map_change_in_progress()
 {

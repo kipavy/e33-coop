@@ -1488,6 +1488,9 @@ void start_pending_battle()
     if (!s.pending_start || s.now < s.next_trigger_try) return;
     constexpr double kStep = 0.5;   // FindFirstOf parcourt tous les objets : pas à chaque image
     s.next_trigger_try = s.now + kStep;
+    // Pas d'appel au jeu (ProcessEvent sur l'instance de jeu) avant qu'un pion d'exploration existe : au démarrage
+    // (écran d'avertissement), ces appels ont figé le jeu entier (4 runs clients sur ~20, 2026-10-19).
+    if (!game::world_pawn()) { s.world_ready_s = 0; return; }
     const bool ready = game::controller() && !game::map_change_in_progress() && !game::main_menu();
     s.world_ready_s = ready ? s.world_ready_s + kStep : 0;
     if (s.world_ready_s < 5.0) return;
@@ -1613,6 +1616,11 @@ void tick(double dt)
     if (s.role == Role::Solo) return;
     s.game_thread = GetCurrentThreadId();
     s.now += dt;
+    // À-coups d'image en combat (> 50 ms) : un appui de QTE peut sembler « raté d'emblée » si le jeu saccade.
+    if (s.battle.active && dt > 0.05) {
+        bump("frame_hitches");
+        log().write("frame_hitch", JsonObj().add("dt_ms", static_cast<int64_t>(dt * 1000.0)).add("in_combo_window", !s.battle.windows.empty()), s.battle.turn);
+    }
     pump_network();
     if (s.role == Role::Client) start_pending_battle();
     run_remote_action();

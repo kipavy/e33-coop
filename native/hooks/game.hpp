@@ -33,6 +33,7 @@ UObject* controller();        // BP_jRPG_Controller_World_C du niveau courant (n
 UObject* battle_manager();
 UObject* save_manager();
 UObject* main_menu();         // WBP_MM_MainMenu_C s'il existe
+UObject* world_pawn();        // pion d'exploration (BP_jRPG_Character_World_C) : nul au démarrage et au menu ; sans ProcessEvent
 bool map_change_in_progress();
 bool in_battle();
 

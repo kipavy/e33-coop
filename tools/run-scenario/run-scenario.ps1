@@ -33,6 +33,8 @@ if (-not $NoReset) {
 # Faux pairs éventuels : "fakepeer" (un) ou "fakepeers" (liste, ex. 2 faux clients pour 3 joueurs).
 # {repo} et {run} sont remplacés dans leurs arguments. Journal : fakepeer.jsonl, fakepeer2.jsonl…
 $peerSpecs = @()
+# Faux pairs orphelins d'un run interrompu : ils gardent le port 7777 (bind() échoue, le combat ne part jamais).
+Get-Process "fakepeer" -ErrorAction SilentlyContinue | ForEach-Object { Log "faux pair orphelin arrêté (pid $($_.Id))"; Stop-Process -Id $_.Id -Force }
 if ($sc.fakepeers) { $peerSpecs = @($sc.fakepeers) } elseif ($sc.fakepeer) { $peerSpecs = @($sc.fakepeer) }
 $peers = @()
 function Start-FakePeer($spec, [int]$index) {
