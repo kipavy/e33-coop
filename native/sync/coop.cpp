@@ -96,8 +96,6 @@ struct State {
     int draw_errors = 0;                                 // paramètres de tirage illisibles
     double action_delay_s = 1.5;                         // hôte : délai minimal avant d'exécuter une action distante (-e33actiondelay)
     double turn_started_at = 0;                          // hôte : s.now au dernier début de tour
-    double action_delay_s = 1.5;                         // hôte : délai minimal avant d exécuter une action distante (-e33actiondelay)
-    double turn_started_at = 0;                          // hôte : s.now au dernier début de tour
     std::optional<uint64_t> fixed_seed;                  // hôte : -e33seed=N (runs reproductibles)
     std::vector<std::string> draw_filter;                // diagnostic : -e33draws=none | sous-chaînes (vide = tout remplacer)
 };
@@ -651,7 +649,6 @@ void subscribe()
             broadcast(proto::StateHash{s.battle.id, s.battle.turn, h});
             check_hash(s.battle.turn);
             s.battle.pending_command.reset();
-            s.turn_started_at = s.now;
             s.turn_started_at = s.now;
         } else if (s.role == Role::Client && s.battle.active) {
             ++s.battle.turn;
