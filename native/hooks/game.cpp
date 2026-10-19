@@ -10,6 +10,7 @@
 #include <Unreal/UClass.hpp>
 #include <Unreal/UFunction.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/Property/FEnumProperty.hpp>
 #include <Unreal/UAssetRegistry.hpp>
 #include <Unreal/UAssetRegistryHelpers.hpp>
 
