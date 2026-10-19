@@ -30,20 +30,26 @@ if (-not $NoReset) {
     throw "Le jeu tourne déjà ; relancer sans -NoReset"
 }
 
-# Faux pair éventuel ({repo} et {run} sont remplacés dans ses arguments)
-$peer = $null
-function Start-FakePeer {
+# Faux pairs éventuels : "fakepeer" (un) ou "fakepeers" (liste, ex. 2 faux clients pour 3 joueurs).
+# {repo} et {run} sont remplacés dans leurs arguments. Journal : fakepeer.jsonl, fakepeer2.jsonl…
+$peerSpecs = @()
+if ($sc.fakepeers) { $peerSpecs = @($sc.fakepeers) } elseif ($sc.fakepeer) { $peerSpecs = @($sc.fakepeer) }
+$peers = @()
+function Start-FakePeer($spec, [int]$index) {
     $fp = Join-Path $repo ".tools\bin\fakepeer.exe"
     if (-not (Test-Path $fp)) { throw "fakepeer.exe introuvable : $fp (artefact CI e33coop-tools)" }
-    $peerArgs = @($sc.fakepeer.args | ForEach-Object { $_.Replace("{repo}", $repo).Replace("{run}", $run) }) + @("--log", (Join-Path $run "fakepeer.jsonl"))
+    $tag = if ($index -eq 0) { "fakepeer" } else { "fakepeer$($index + 1)" }
+    $peerArgs = @($spec.args | ForEach-Object { $_.Replace("{repo}", $repo).Replace("{run}", $run) }) + @("--log", (Join-Path $run "$tag.jsonl"))
     $quoted = $peerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
-    Log "démarrage du faux pair : $fp $($quoted -join ' ')"
-    $p = Start-Process $fp -ArgumentList $quoted -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $run "fakepeer.out") -RedirectStandardError (Join-Path $run "fakepeer.err")
+    Log "démarrage du faux pair $($index + 1) : $fp $($quoted -join ' ')"
+    $p = Start-Process $fp -ArgumentList $quoted -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $run "$tag.out") -RedirectStandardError (Join-Path $run "$tag.err")
     # Ouvrir le handle tout de suite : sinon ExitCode reste vide une fois le processus terminé.
     $null = $p.Handle
     return $p
 }
-if ($sc.fakepeer -and $sc.fakepeer.start -ne "after_game") { $peer = Start-FakePeer; Start-Sleep -Seconds 1 }
+for ($i = 0; $i -lt $peerSpecs.Count; $i++) {
+    if ($peerSpecs[$i].start -ne "after_game") { $peers += Start-FakePeer $peerSpecs[$i] $i; Start-Sleep -Seconds 1 }
+}
 
 $gameArgs = @("-windowed", "-ResX=1280", "-ResY=720", "-e33test=`"$scenario`"", "-e33run=`"$run`"")
 if (-not $sc.sound) { $gameArgs += "-nosound" }   # "sound": true pour les tests manuels (timing des parades)
@@ -62,7 +68,9 @@ while (-not $game -and ((Get-Date) - $t0).TotalSeconds -lt 120) {
 if (-not $game) { Log "ÉCHEC : le jeu n'a pas démarré en 120 s (fenêtre Steam en attente ?)"; $status = "launch_failed" }
 else {
     Log "jeu démarré (pid $($game.Id))"
-    if ($sc.fakepeer -and $sc.fakepeer.start -eq "after_game") { $peer = Start-FakePeer }
+    for ($i = 0; $i -lt $peerSpecs.Count; $i++) {
+        if ($peerSpecs[$i].start -eq "after_game") { $peers += Start-FakePeer $peerSpecs[$i] $i }
+    }
     $result = Join-Path $run "result.json"
     $status = $null
     $nextShot = 0.0
@@ -93,12 +101,14 @@ else {
         if (-not $game.HasExited) { Log "arrêt forcé du jeu"; Stop-Process -Id $game.Id -Force }
     }
 }
-$peerCode = $null
-if ($peer) {
-    # le faux pair a quelques secondes pour finir proprement après le jeu
-    if (-not $peer.WaitForExit(15000)) { Log "arrêt forcé du faux pair"; Stop-Process -Id $peer.Id -Force; $peerCode = -1 }
-    else { $peer.WaitForExit(); $peerCode = $peer.ExitCode }
-    Log "faux pair terminé, code $peerCode"
+$peerCodes = @()
+for ($i = 0; $i -lt $peers.Count; $i++) {
+    # chaque faux pair a quelques secondes pour finir proprement après le jeu
+    $p = $peers[$i]
+    if (-not $p.WaitForExit(15000)) { Log "arrêt forcé du faux pair $($i + 1)"; Stop-Process -Id $p.Id -Force; $code = -1 }
+    else { $p.WaitForExit(); $code = $p.ExitCode }
+    $peerCodes += $code
+    Log "faux pair $($i + 1) terminé, code $code"
 }
 
 # Collecte
@@ -124,7 +134,7 @@ if ($status -eq "finished") {
     $res = Get-Content (Join-Path $run "result.json") -Raw | ConvertFrom-Json
     $ok = ($res.status -eq "pass")
 }
-if ($peer -and $peerCode -ne 0) { $ok = $false }
+if (@($peerCodes | Where-Object { $_ -ne 0 }).Count -gt 0) { $ok = $false }
 $dur = [int]((Get-Date) - $t0).TotalSeconds
 $report = @("# Run $stamp — $Name", "", "- Verdict : **$(if ($ok) { 'PASS' } else { 'FAIL' })** (état : $status, durée : $dur s)")
 if ($res) {
@@ -133,7 +143,7 @@ if ($res) {
     if ($res.checks) { $report += ""; $report += "| Vérification | Attendu | Obtenu | OK |"; $report += "|---|---|---|---|"
         foreach ($c in $res.checks) { $report += "| $($c.name) | $($c.expected) | $($c.actual) | $(if ($c.ok) { 'oui' } else { 'NON' }) |" } }
 }
-if ($peer) { $report += "- Faux pair : code de sortie $peerCode$(if ($peerCode -ne 0) { ' (ÉCHEC)' })" }
+for ($i = 0; $i -lt $peerCodes.Count; $i++) { $report += "- Faux pair $($i + 1) : code de sortie $($peerCodes[$i])$(if ($peerCodes[$i] -ne 0) { ' (ÉCHEC)' })" }
 if (Test-Path (Join-Path $run "crash-dialog.txt")) { $report += "- **Crash** : " + ((Get-Content (Join-Path $run "crash-dialog.txt")) -join " / ") }
 if ($dumpInfo) { $report += "- Dump : " + ($dumpInfo[0..1] -join " ; ") }
 $shots = Get-ChildItem (Join-Path $run "shots") -File -ErrorAction SilentlyContinue
