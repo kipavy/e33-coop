@@ -738,6 +738,15 @@ void host_turn_start(UObject* actor)
         }
         broadcast(bs);
         log().write("coop_battle_inventory", JsonObj().raw("inventory", game::battle_inventory_json()));
+        // Diagnostic : composants de chaque héros (mécaniques propres : perfection, taches, masques… à couvrir par le hash).
+        for (UObject* h : game::players()) {
+            std::string comps = "[";
+            for (UObject* c : ue::get_object_array(h, STR("BlueprintCreatedComponents"))) {
+                if (comps.size() > 1) comps += ",";
+                comps += "\"" + game::char_class(c) + "\"";
+            }
+            log().write("coop_hero_components", JsonObj().add("hero", game::hardcoded_name(h)).raw("components", comps + "]"));
+        }
     }
     begin_turn_common();
     const proto::Unit au = actor_unit(actor);

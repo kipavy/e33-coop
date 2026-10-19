@@ -75,6 +75,7 @@ struct Scenario {
     int combo_auto_success = 10;
     int max_turns = 60;
     int wait_players = 0;       // hôte : nombre de clients attendus avant de lancer le combat
+    bool manual = false;        // "manual": true : le joueur choisit lui-même les actions de ses héros (validation en jeu)
     std::vector<Action> actions;
     std::vector<std::string> defense;     // parry | dodge | perfect_dodge | jump | fail | manual, cyclique par vague de coups
     json::Value expect;
@@ -172,6 +173,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.combo_auto_success = static_cast<int>(v["combo_auto_success"].as_int(10));
     s.max_turns = static_cast<int>(v["max_turns"].as_int(60));
     s.wait_players = static_cast<int>(v["wait_players"].as_int(0));
+    s.manual = v["manual"].as_bool(false);
     for (size_t i = 0; i < v["actions"].size(); ++i) s.actions.push_back(parse_action(v["actions"][i]));
     if (s.actions.empty()) s.actions.push_back(Action{});
     for (size_t i = 0; i < v["defense"].size(); ++i) s.defense.push_back(v["defense"][i].as_string("fail"));
@@ -558,7 +560,7 @@ void subscribe()
         if (game::is_player(ch) && !counter && coop::controls_spot(game::spot(ch))) {
             ++g.player_turns;
             g.pending_actor = ch;
-            g.pending_action_at = g.t + g.sc.action_delay_s;
+            if (!g.sc.manual) g.pending_action_at = g.t + g.sc.action_delay_s;
         }
     });
 

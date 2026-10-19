@@ -1,0 +1,17 @@
+{
+  "name": "p3_manual_host",
+  "description": "Validation en jeu (Killian) : tu es l'hôte et tu joues toi-même Lune et Maelle (actions, QTE, parades). Le faux client joue Verso : visée libre (3 tirs puis attaque), Combo1 (QTE parfait puis raté), attaques ; il pare un coup sur deux. Ses actions apparaissent chez toi avec ~1 s de décalage.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "manual": true,
+  "sound": true,
+  "timeout_s": 1200,
+  "wait_players": 1,
+  "max_turns": 200,
+  "shots_every_s": 6,
+  "defense": ["manual"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=2"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_manual.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "1200"] },
+  "expect": { "battle_end": "any" }
+}
