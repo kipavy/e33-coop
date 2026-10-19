@@ -43,6 +43,7 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.UEPSEUDO_PAT }}
+          fetch-depth: 0   # historique complet : diff avec le commit du cache de build
 
       - name: Cache key
         id: key
@@ -66,8 +67,36 @@ jobs:
           path: |
             ${{ env.BUILD_DIR }}
             !${{ env.BUILD_DIR }}/_deps
-          key: build-${{ env.BUILD_MODE }}-${{ steps.key.outputs.sub }}-${{ hashFiles('native/mod/**', 'native/common/**', 'native/CMakeLists.txt') }}
+          # Une clé par commit : chaque build sauvegarde son état ; le suivant repart du plus récent.
+          key: build-${{ env.BUILD_MODE }}-${{ steps.key.outputs.sub }}-${{ github.sha }}
           restore-keys: build-${{ env.BUILD_MODE }}-${{ steps.key.outputs.sub }}-
+
+      # Ninja compare les dates : après un checkout, tous les fichiers sont « neufs » et tout serait recompilé
+      # (UE4SS compris). On date tout au 2001-01-01, puis on remet « maintenant » uniquement sur les fichiers
+      # modifiés depuis le commit du cache restauré (les sous-modules sont couverts par la clé).
+      - name: Restore file dates for incremental build
+        run: |
+          $old = [datetime]'2001-01-01'
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $n = 0
+          foreach ($f in [IO.Directory]::EnumerateFiles("${{ github.workspace }}", "*", [IO.SearchOption]::AllDirectories)) {
+            if ($f -match '[\\/](build_mod|build_deps|build_tools|\.git)[\\/]') { continue }
+            try { [IO.File]::SetLastWriteTimeUtc($f, $old); $n++ } catch {}
+          }
+          "dates remises : $n fichiers en $([int]$sw.Elapsed.TotalSeconds) s"
+          # Sans commit de référence utilisable, nos sources (hors UE4SS) sont toutes marquées modifiées.
+          $touchOurs = { Get-ChildItem native -Recurse -File | Where-Object FullName -notmatch 'third_party' | ForEach-Object { $_.LastWriteTimeUtc = [datetime]::UtcNow } }
+          $marker = Join-Path $env:BUILD_DIR ".cache_commit"
+          $base = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { "" }
+          if ($base) { git cat-file -e "$base^{commit}" 2>$null }
+          if ($base -and $LASTEXITCODE -eq 0) {
+            $changed = @(git diff --name-only $base HEAD -- native)
+            "cache du commit $base ; fichiers modifiés depuis : $($changed.Count)"
+            foreach ($c in $changed) { if (Test-Path $c) { (Get-Item $c).LastWriteTimeUtc = [datetime]::UtcNow; "  $c" } }
+          } else {
+            "pas de commit de référence dans le cache : toutes nos sources sont recompilées (UE4SS reste en cache)"
+            & $touchOurs
+          }
 
       - uses: ilammy/msvc-dev-cmd@v1
         with: { arch: x64, vsversion: "18" }
@@ -95,6 +124,8 @@ jobs:
           Copy-Item (& $f E33Coop.dll).FullName pkg/ue4ss/Mods/E33Coop/dlls/main.dll
           $pdb = & $f E33Coop.pdb; if ($pdb) { Copy-Item $pdb.FullName pkg/ue4ss/Mods/E33Coop/dlls/main.pdb }
           "ue4ss=$(git -C native/third_party/RE-UE4SS rev-parse HEAD)`nmod=${{ github.sha }}" | Set-Content pkg/build-info.txt
+          # commit de cet état de build, pour le prochain build incrémental
+          "${{ github.sha }}" | Set-Content (Join-Path $env:BUILD_DIR ".cache_commit")
           Get-ChildItem pkg -Recurse | Select-Object FullName, Length
 
       - uses: actions/upload-artifact@v4
