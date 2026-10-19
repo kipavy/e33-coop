@@ -8,7 +8,7 @@
   "max_turns": 60,
   "shots_every_s": 4,
   "defense": ["fail"],
-  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=0:1"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=0:1", "-e33seed=16250036901998647475"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_basic.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
   "expect": { "battle_end": "any" }
 }
