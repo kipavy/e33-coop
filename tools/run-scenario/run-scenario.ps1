@@ -45,7 +45,8 @@ function Start-FakePeer {
 }
 if ($sc.fakepeer -and $sc.fakepeer.start -ne "after_game") { $peer = Start-FakePeer; Start-Sleep -Seconds 1 }
 
-$gameArgs = @("-windowed", "-ResX=1280", "-ResY=720", "-nosound", "-e33test=`"$scenario`"", "-e33run=`"$run`"")
+$gameArgs = @("-windowed", "-ResX=1280", "-ResY=720", "-e33test=`"$scenario`"", "-e33run=`"$run`"")
+if (-not $sc.sound) { $gameArgs += "-nosound" }   # "sound": true pour les tests manuels (timing des parades)
 if ($sc.launch_args) { $gameArgs += @($sc.launch_args) }
 if ($ExtraArgs) { $gameArgs += $ExtraArgs }
 Log "lancement : steam -applaunch 1903340 $($gameArgs -join ' ')"

@@ -1,0 +1,14 @@
+{
+  "name": "p2_manual_client",
+  "description": "Validation manuelle (Killian) : vrai jeu client face au faux hôte. Le runner choisit les actions du héros, mais c'est le joueur qui pare / saute les coups ennemis. Vérifie que la défense locale est instantanée et que son résultat part vers l'hôte. Les PV peuvent différer de l'enregistrement de l'hôte (parades différentes) : ces écarts sont relevés, pas bloquants.",
+  "save": "e33coop-test/TEST_A",
+  "encounter": "L_LumiereCitizenFleuret_Male*1",
+  "timeout_s": 900,
+  "max_turns": 60,
+  "action_delay_s": 1.5,
+  "sound": true,
+  "defense": ["manual"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--timeout", "900"] },
+  "expect": { "battle_end": "any", "hp_overrides": "any", "draw_mismatches": "any" }
+}

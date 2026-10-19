@@ -161,8 +161,12 @@ struct Check { std::string name, expected, actual; bool ok; };
 void finish(bool pass_if_checks_ok, const std::string& reason)
 {
     std::vector<Check> checks;
-    auto add = [&](const std::string& n, const std::string& e, const std::string& a, bool ok) { checks.push_back({n, e, a, ok}); };
     const auto& ex = g.sc.expect;
+    // "expect": {"<nom>": "any"} : la vérification est relevée mais ne bloque pas (ex. défense manuelle).
+    auto add = [&](const std::string& n, const std::string& e, const std::string& a, bool ok) {
+        const bool waived = ex[n].is_string() && ex[n].as_string("") == "any" && n != "battle_end";
+        checks.push_back({n, waived ? "any" : e, a, ok || waived});
+    };
     if (!ex["battle_end"].is_null()) {
         const std::string want = ex["battle_end"].as_string("any");
         const bool ok = g.end_result >= 0 && (want == "any" || std::to_string(g.end_result) == want);
@@ -289,7 +293,7 @@ void subscribe()
         g.decision[stats] = decision;
         bool started = false;
         if (decision == "parry") { ++g.parry_cmd; started = game::start_parry(defender); }
-        else ++g.fail_cmd;
+        else if (decision != "manual") ++g.fail_cmd;   // "manual" : le joueur pare lui-même
         log().write("tr_incoming_hit", JsonObj().add("defender", game::char_class(defender)).add("decision", decision).add("parry_started", started).add("hit", g.hit_index), g.turn);
     });
 
@@ -302,7 +306,9 @@ void subscribe()
         g.decision.erase(it);
         auto verdict = ue::read_out_bool(ctx, f, STR("Successful"));
         bool forced = false;
-        if (decision == "parry") {
+        if (decision == "manual") {
+            if (verdict.value_or(false)) ++g.parry_ok; else ++g.fail_ok;
+        } else if (decision == "parry") {
             if (verdict.value_or(false)) ++g.parry_ok;
             else if (ue::write_out_bool(ctx, f, STR("Successful"), true)) { forced = true; ++g.parry_forced; ++g.parry_ok; }
         } else if (!verdict.value_or(false)) {
@@ -322,7 +328,8 @@ void subscribe()
         std::string decision = d.empty() ? "fail" : d[static_cast<size_t>(g.hit_index) % d.size()];
         ++g.hit_index;
         bool started = false;
-        if (decision != "fail") { decision = "jump"; ++g.jump_cmd; started = game::start_jump(defender); }
+        if (decision == "manual") {}   // le joueur saute lui-même
+        else if (decision != "fail") { decision = "jump"; ++g.jump_cmd; started = game::start_jump(defender); }
         else ++g.fail_cmd;
         g.jump_decision[ctx.Context] = decision;
         log().write("tr_incoming_hit", JsonObj().add("defender", game::char_class(defender)).add("decision", decision).add("jumpable", true).add("jump_started", started).add("hit", g.hit_index), g.turn);
@@ -333,7 +340,7 @@ void subscribe()
         const std::string decision = it->second;
         g.jump_decision.erase(it);
         const bool dodged = ue::read_out_bool(ctx, f, STR("DodgeSuccess")).value_or(false);
-        if (decision == "jump" && dodged) ++g.jump_ok;
+        if ((decision == "jump" || decision == "manual") && dodged) ++g.jump_ok;
         if (decision == "fail" && !dodged) ++g.fail_ok;
         log().write("tr_jump_verdict", JsonObj().add("decision", decision).add("dodged", dodged), g.turn);
     });
