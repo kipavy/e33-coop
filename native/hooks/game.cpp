@@ -151,7 +151,15 @@ bool in_battle()
     return c.out_bool(STR("ReturnValue"));
 }
 
-std::vector<UObject*> players() { return ue::get_object_array(battle_manager(), STR("PlayerCharacters")); }
+// Un héros mort quitte PlayerCharacters pour DeadPlayerCharacters (vu le 2026-10-19) : les deux listes.
+std::vector<UObject*> players()
+{
+    UObject* bm = battle_manager();
+    auto out = ue::get_object_array(bm, STR("PlayerCharacters"));
+    for (UObject* d : ue::get_object_array(bm, STR("DeadPlayerCharacters")))
+        if (d && std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);
+    return out;
+}
 std::vector<UObject*> enemies() { return ue::get_object_array(battle_manager(), STR("Enemies")); }
 UObject* current_character() { return ue::get_object(battle_manager(), STR("CurrentCharacter")); }
 UObject* stats(UObject* ch) { return ue::get_object(ch, STR("AC_jRPG_CharacterStats")); }

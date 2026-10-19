@@ -36,7 +36,7 @@ UObject* main_menu();         // WBP_MM_MainMenu_C s'il existe
 bool map_change_in_progress();
 bool in_battle();
 
-std::vector<UObject*> players();   // personnages joueurs du combat courant (morts compris)
+std::vector<UObject*> players();   // héros du combat courant, morts compris (PlayerCharacters + DeadPlayerCharacters)
 std::vector<UObject*> enemies();
 UObject* current_character();
 UObject* stats(UObject* character);
