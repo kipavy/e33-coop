@@ -59,6 +59,7 @@ struct Battle {
     uint16_t draw_index = 0;                            // tirages d'IA ennemie dans le tour courant
     std::map<uint64_t, double> host_draws;              // client : (tour<<16|rang) -> valeur tirée par l'hôte
     int traced_draws = 0;                               // diagnostic : tirages loggés dans ce combat
+    std::vector<UObject*> enemies_cache;                // ennemis au dernier début de tour (comparaison de pointeurs seulement)
 };
 
 struct State {
@@ -79,6 +80,11 @@ struct State {
     Battle battle;
     uint32_t next_battle_id = 1;
     std::map<int, uint8_t> owner_overrides;              // -e33owners=0:1,1:0  (emplacement:joueur)
+    DWORD game_thread = 0;                               // fixé par tick()
+    std::optional<proto::BattleStart> pending_start;     // client : combat de l'hôte, lancé une fois le monde prêt
+    double world_ready_s = 0;                            // client : durée depuis laquelle le monde est stable
+    double next_trigger_try = 0;
+    int off_thread_draws = 0;                            // tirages hors thread de jeu (ignorés)
 };
 
 State s;
@@ -157,6 +163,14 @@ int hero_spot(UObject* ch) { return static_cast<int>(ue::get_int(ch, STR("Battle
 int enemy_index(UObject* ch)
 {
     auto es = game::enemies();
+    auto it = std::find(es.begin(), es.end(), ch);
+    return it == es.end() ? -1 : static_cast<int>(it - es.begin());
+}
+
+// Version sans appel au jeu (pour les hooks très fréquents) : liste figée au début du tour.
+int cached_enemy_index(UObject* ch)
+{
+    const auto& es = s.battle.enemies_cache;
     auto it = std::find(es.begin(), es.end(), ch);
     return it == es.end() ? -1 : static_cast<int>(it - es.begin());
 }
@@ -321,13 +335,13 @@ void handle(Peer& p, proto::Message& m)
         s.rejected = true;
         log().write("session_rejected", JsonObj().add("reason", static_cast<int>(r->reason)).add("detail", r->detail));
     } else if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
-        s.battle = Battle{};
+        // Le combat ne démarre qu'une fois le monde local prêt (voir tick) : l'hôte peut être en avance
+        // (client encore au menu ou en chargement).
+        s.pending_start = *bs;
+        s.battle = Battle{};   // remis à zéro dès maintenant : les messages suivants de l'hôte s'y accumulent
         s.battle.id = bs->battle_id;
-        s.battle.active = true;
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
-        log().write("coop_battle_start", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
-        std::string err;
-        if (!game::in_battle() && !game::trigger_battle(ue::from_utf8(bs->encounter), err)) log().write("coop_error", JsonObj().add("what", "trigger_battle: " + err));
+        log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
     } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
         s.battle.host_turn_seen = std::max(s.battle.host_turn_seen, ts->turn);
     } else if (auto* ar = std::get_if<proto::ActionResult>(&m)) {
@@ -385,6 +399,8 @@ proto::ActionResult snapshot_result(UObject* actor)
 
 // Diagnostic des tirages aléatoires : qui appelle quoi, depuis quelle fonction BP.
 // 5 premiers appels par fonction (combat ou non), puis 300 par combat au plus.
+bool on_game_thread() { return s.game_thread != 0 && GetCurrentThreadId() == s.game_thread; }
+
 void trace_random(HookCtx& ctx, const std::string& fname)
 {
     static std::map<std::string, int> seen;
@@ -395,7 +411,7 @@ void trace_random(HookCtx& ctx, const std::string& fname)
     UObject* caller = ctx.TheStack.Object();
     UFunction* node = ctx.TheStack.Node();
     log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).add("caller", ue::full_name(caller))
-                                 .add("node", ue::short_name(node)).add("enemy", caller ? enemy_index(caller) : -1)
+                                 .add("node", ue::short_name(node)).add("enemy", cached_enemy_index(caller))
                                  .add("has_result", ctx.RESULT_DECL != nullptr), s.battle.turn);
 }
 
@@ -430,6 +446,7 @@ void subscribe()
             }
             ++s.battle.turn;
             s.battle.draw_index = 0;
+            s.battle.enemies_cache = game::enemies();
             const bool hero = game::is_player(actor);
             broadcast(proto::TurnStart{s.battle.id, s.battle.turn, hero ? proto::ActorKind::Hero : proto::ActorKind::Enemy,
                                        static_cast<uint8_t>(hero ? hero_spot(actor) : enemy_index(actor)), game::char_class(actor)});
@@ -441,6 +458,7 @@ void subscribe()
         } else if (s.role == Role::Client && s.battle.active) {
             ++s.battle.turn;
             s.battle.draw_index = 0;
+            s.battle.enemies_cache = game::enemies();
             // l'hôte rythme les tours : attendre son TurnStart et ses résultats pour ce tour
             wait_for([&] { return s.battle.host_turn_seen >= s.battle.turn; }, 10.0);
             apply_results();
@@ -549,7 +567,7 @@ void subscribe()
 
     // Diagnostic (temporaire) : ciblage aléatoire, lecture seule.
     bus.post(L"/Script/Engine.KismetArrayLibrary:Array_Random", [](HookCtx& ctx, UFunction*) {
-        if (s.role != Role::Solo) trace_random(ctx, "Array_Random");
+        if (s.role != Role::Solo && on_game_thread()) trace_random(ctx, "Array_Random");
     });
 
     // Tirages aléatoires de l'IA ennemie (D9) : fonctions natives de KismetMathLibrary appelées depuis un ennemi.
@@ -563,11 +581,13 @@ void subscribe()
         const std::string fname = ue::to_utf8(rf.name);
         bus.post(std::wstring(L"/Script/Engine.KismetMathLibrary:") + rf.name, [kind, fname](HookCtx& ctx, UFunction*) {
             if (s.role == Role::Solo) return;
+            // Threads d'animation, chargement… : jamais un choix d'IA, et aucun accès au jeu permis ici.
+            if (!on_game_thread()) { ++s.off_thread_draws; return; }
             trace_random(ctx, fname);
             if (!s.battle.active || !ctx.RESULT_DECL) return;
             UObject* caller = ctx.TheStack.Object();
             if (!caller) return;
-            const int ei = enemy_index(caller);
+            const int ei = cached_enemy_index(caller);
             if (ei < 0) return;   // seulement les tirages faits par un ennemi (choix de l'IA)
             const uint16_t idx = s.battle.draw_index++;
             double v = kind == 0 ? static_cast<double>(*static_cast<int32_t*>(ctx.RESULT_DECL))
@@ -593,7 +613,7 @@ void subscribe()
         if (!s.battle.active) return;
         const int result = static_cast<int>(ue::read_param_int(ctx, f, STR("BattleEndResult")).value_or(-1));
         if (s.role == Role::Host) broadcast(proto::BattleEnd{s.battle.id, static_cast<uint8_t>(std::max(result, 0))});
-        log().write("coop_battle_end", JsonObj().add("battle", s.battle.id).add("result", result).add("desyncs", s.desyncs));
+        log().write("coop_battle_end", JsonObj().add("battle", s.battle.id).add("result", result).add("desyncs", s.desyncs).add("off_thread_draws", s.off_thread_draws));
         s.battle.active = false;
     });
 }
@@ -671,11 +691,34 @@ void init()
     subscribe();
 }
 
+// Client : lance le combat reçu de l'hôte quand le monde local est chargé et stable depuis quelques secondes.
+void start_pending_battle()
+{
+    if (!s.pending_start || s.now < s.next_trigger_try) return;
+    constexpr double kStep = 0.5;   // FindFirstOf parcourt tous les objets : pas à chaque image
+    s.next_trigger_try = s.now + kStep;
+    const bool ready = game::controller() && !game::map_change_in_progress() && !game::main_menu();
+    s.world_ready_s = ready ? s.world_ready_s + kStep : 0;
+    if (s.world_ready_s < 5.0) return;
+    const proto::BattleStart bs = *s.pending_start;
+    std::string err;
+    if (!game::in_battle() && !game::trigger_battle(ue::from_utf8(bs.encounter), err)) {
+        log().write("coop_error", JsonObj().add("what", "trigger_battle: " + err));
+        s.next_trigger_try = s.now + 2.0;
+        return;
+    }
+    s.pending_start.reset();
+    s.battle.active = true;
+    log().write("coop_battle_start", JsonObj().add("battle", bs.battle_id).add("encounter", bs.encounter));
+}
+
 void tick(double dt)
 {
     if (s.role == Role::Solo) return;
+    s.game_thread = GetCurrentThreadId();
     s.now += dt;
     pump_network();
+    if (s.role == Role::Client) start_pending_battle();
     // Hôte : exécuter la commande reçue d'un client pour son héros.
     if (s.role == Role::Host && s.battle.active && s.battle.pending_command) {
         UObject* cur = game::current_character();

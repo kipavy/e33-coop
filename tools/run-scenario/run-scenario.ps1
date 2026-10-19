@@ -68,6 +68,11 @@ else {
         Start-Sleep -Seconds 2
         if (Test-Path $result) { Start-Sleep -Seconds 1; $status = "finished" }
         elseif ($game.HasExited) { $status = "game_exited" }
+        else {
+            # Crash : le jeu affiche une boîte « Fatal error » qui attend un clic. On note son texte et on la ferme.
+            $dlg = & (Join-Path $repo "tools\dev\close-crash-dialog.ps1") -ProcessId $game.Id -Out (Join-Path $run "crash-dialog.txt")
+            if ($dlg) { $dlg | ForEach-Object { Log "dialogue du jeu fermé : $_" }; $status = "crashed" }
+        }
         elseif (((Get-Date) - $t0).TotalSeconds -gt $TimeoutSec) { $status = "timeout" }
     }
     if (-not $game.HasExited) {
@@ -92,6 +97,15 @@ Copy-Item (Join-Path $ue "UE4SS.log") $run -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $env:LOCALAPPDATA "Sandfall\Saved\Logs\Sandfall.log") (Join-Path $run "game.log") -ErrorAction SilentlyContinue
 $crash = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Sandfall\Saved\Crashes") -Directory -ErrorAction SilentlyContinue | Where-Object LastWriteTime -gt $t0
 if ($crash) { Log "CRASH détecté : $($crash.FullName -join ', ')"; $crash | ForEach-Object { Copy-Item $_.FullName (Join-Path $run "crash-$($_.Name)") -Recurse } }
+# Dumps écrits par UE4SS (ue4ss\crash_*.dmp) : copiés dans le run et résumés (exception, module fautif).
+$dumps = Get-ChildItem $ue -Filter "crash_*.dmp" -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -gt $t0
+$dumpInfo = @()
+foreach ($d in $dumps) {
+    Log "dump de crash UE4SS : $($d.Name)"
+    Move-Item $d.FullName $run -Force
+    try { $dumpInfo += & (Join-Path $repo "tools\dev\dmp-info.ps1") (Join-Path $run $d.Name) -StackWords 0 } catch { $dumpInfo += "dmp-info : $_" }
+}
+if ($dumpInfo) { Set-Content (Join-Path $run "crash-summary.txt") $dumpInfo -Encoding utf8 }
 
 # Verdict
 $ok = $false
@@ -110,6 +124,8 @@ if ($res) {
         foreach ($c in $res.checks) { $report += "| $($c.name) | $($c.expected) | $($c.actual) | $(if ($c.ok) { 'oui' } else { 'NON' }) |" } }
 }
 if ($peer) { $report += "- Faux pair : code de sortie $peerCode$(if ($peerCode -ne 0) { ' (ÉCHEC)' })" }
+if (Test-Path (Join-Path $run "crash-dialog.txt")) { $report += "- **Crash** : " + ((Get-Content (Join-Path $run "crash-dialog.txt")) -join " / ") }
+if ($dumpInfo) { $report += "- Dump : " + ($dumpInfo[0..1] -join " ; ") }
 $shots = Get-ChildItem (Join-Path $run "shots") -File -ErrorAction SilentlyContinue
 if ($shots) { $report += ""; $report += "Captures : " + (($shots | ForEach-Object Name) -join ", ") }
 Set-Content (Join-Path $run "report.md") $report -Encoding utf8

@@ -223,7 +223,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                 }
             }
             link->update(now_s());
-            if (link->timed_out(now_s(), 30.0)) { log.write("error", JsonObj().add("what", "client timed out")); break; }
+            // Le client ne répond pas pendant un chargement de niveau (thread de jeu bloqué) : marge large.
+            if (link->timed_out(now_s(), 120.0)) { log.write("error", JsonObj().add("what", "client timed out")); break; }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
