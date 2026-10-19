@@ -2,13 +2,13 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-19, midi) — **phase 2 : critères atteints, EN ATTENTE de la validation de Killian** (`docs/VALIDATION-PHASE2.md`)
+## État courant (2026-10-19, après-midi) — **phase 2 FINIE et validée par Killian** (fusionnée dans `main`)
 
 | Phase | État | Branche |
 |---|---|---|
 | 0 — exploration | **finie** | `phase-0` (fusionnée dans `main`) |
 | 1 — environnement de test autonome | **finie** | `phase-1` (fusionnée dans `main`) |
-| 2 — preuve de concept réseau | **critères atteints** (validation de Killian à venir) | `phase-2` |
+| 2 — preuve de concept réseau | **finie** (validée en jeu le 2026-10-19) | `phase-2` (fusionnée dans `main`) |
 
 Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions gratuite. Pas encore de `LICENSE` (choix de Killian).
 
@@ -23,6 +23,10 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
   - corrections : crash du client au chargement de la save (hook de tirage qui appelait le jeu pendant le démontage du monde) ; `BattleStart` mis en attente jusqu'à un monde prêt ; vrai appelant BP des fonctions natives via `PreviousFrame`.
   - outillage : fermeture auto de la boîte « Fatal error » + résumé du dump (`tools/dev/dmp-info.ps1`) ; `tools/dev/draw-preview.ps1` (prévoit les tirages d'une graine, vérifié contre le jeu) ; défense `manual` et `"sound": true` pour les tests à la main ; `p2_manual_client`.
 
+### Validation de Killian (2026-10-19 12:16–12:25)
+- Les 3 tests passent. Test manuel : il a fait « raté, réussi, raté » sur les 3 coups sautables, et le client a envoyé exactement `Fail`, `Jump`, `Fail` à l'hôte, au moment de chaque coup.
+- **Problème signalé** : écran noir pendant les attaques ennemies (interface visible), et caméra dans le décor pendant le reste du combat. C'est l'environnement de test (combat forcé dans le hub de Lumière), pas la synchro : voir GAME-INTERNALS §15. Le déclenchement prend désormais l'arène la plus proche (`a8e7b61`), ce qui ne suffit pas.
+
 ### En cours
 - Doute sur D10 levé : sans aucun remplacement, le tirage naturel 2 donne le même tour sans coup ; D10 ne change pas le comportement (GAME-INTERNALS §15). Les tests de phase 2 exercent le **saut** distant ; la parade distante a été vérifiée au run du 2026-10-19 09:25 (verdict de l hôte conforme) et en phase 1.
 
@@ -30,11 +34,11 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 - Rien.
 
 ### Prochaines étapes
-1. Attendre le retour de Killian sur `docs/VALIDATION-PHASE2.md` (scénario manuel testé à vide : il démarre et se termine bien).
-2. Après validation : fusionner `phase-2` dans `main`, ouvrir `phase-3`.
-3. Phase 3 : `Array_Random` (ciblage), compétences, objets, buffs, attaques de groupe, mort/réanimation, récompenses ; resynchronisation complète sur désync.
+1. Environnement de test : une save dans une vraie zone de combat (demandée à Killian) pour supprimer l'écran noir.
+2. Phase 3 : `Array_Random` (ciblage), compétences, objets, buffs, attaques de groupe, mort/réanimation, récompenses ; resynchronisation complète sur désync.
 
 ## Historique
 - 2026-10-18 : démarrage ; phase 0 complète ; test runner écrit.
 - 2026-10-19 (nuit) : phase 1 complète (3/3) ; phase 2 : protocole, fakepeer, module coop, premier combat hôte vs faux client sans désync. Pause.
 - 2026-10-19 (matin) : reprise. Crash client au chargement corrigé ; fermeture auto des crashs ; écarts de PV rendus visibles ; D10 ; les deux sens verts 3/3 avec 0 écart.
+- 2026-10-19 (après-midi) : validation de Killian OK ; écran noir identifié (environnement de test) ; phase 2 fusionnée dans `main`.
