@@ -85,6 +85,8 @@ struct State {
     double world_ready_s = 0;                            // client : durée depuis laquelle le monde est stable
     double next_trigger_try = 0;
     int off_thread_draws = 0;                            // tirages hors thread de jeu (ignorés)
+    int hp_overrides = 0;                                // client : PV locaux corrigés par ceux de l hôte (écart réel)
+    int hashes_compared = 0;
 };
 
 State s;
@@ -218,6 +220,7 @@ void check_hash(uint32_t turn)
     auto l = s.battle.local_hash.find(turn);
     auto r = s.battle.remote_hash.find(turn);
     if (l == s.battle.local_hash.end() || r == s.battle.remote_hash.end()) return;
+    ++s.hashes_compared;
     char a[24], b[24];
     std::snprintf(a, sizeof a, "%016llx", static_cast<unsigned long long>(l->second));
     std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(r->second));
@@ -372,6 +375,7 @@ void apply_results()
             if (h.kind == proto::ActorKind::Hero) for (UObject* x : ps) if (hero_spot(x) == h.index) c = x;
             UObject* st = game::stats(c);
             if (auto* hp = ue::value_ptr<double>(st, STR("CurrentHP"))) {
+                if (std::fabs(*hp - h.hp_after) > 0.5) ++s.hp_overrides;
                 if (std::fabs(*hp - h.hp_after) > 0.5) log().write("coop_hp_override", JsonObj().add("c", game::char_class(c)).add("local", *hp).add("host", h.hp_after), ar.turn);
                 *hp = h.hp_after;
             }
@@ -461,8 +465,11 @@ void subscribe()
             s.battle.enemies_cache = game::enemies();
             // l'hôte rythme les tours : attendre son TurnStart et ses résultats pour ce tour
             wait_for([&] { return s.battle.host_turn_seen >= s.battle.turn; }, 10.0);
+            // Hash avant correction : c'est lui qui dit si la simulation locale a suivi celle de l'hôte.
+            const uint64_t raw = state_hash(actor);
             apply_results();
             const uint64_t h = state_hash(actor);
+            if (raw != h) log().write("coop_raw_hash_differs", JsonObj().add("battle", s.battle.id).raw("state_after_override", state_detail()), s.battle.turn);
             s.battle.local_hash[s.battle.turn] = h;
             for (auto& p : s.peers) send_to(p, proto::StateHash{s.battle.id, s.battle.turn, h});
             check_hash(s.battle.turn);
@@ -631,6 +638,8 @@ int connected_players()
     return n;
 }
 int invalid_count() { return s.invalid; }
+int hp_override_count() { return s.hp_overrides; }
+int hashes_compared() { return s.hashes_compared; }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
 
 bool controls_spot(int spot)

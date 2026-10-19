@@ -196,6 +196,9 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         add("coop_session", "ok", coop::session_ok() ? "ok" : "ko", coop::session_ok());
         add("desyncs", "0", std::to_string(coop::desync_count()), coop::desync_count() == 0);
         add("invalid_messages", "0", std::to_string(coop::invalid_count()), coop::invalid_count() == 0);
+        add("hashes_compared", ">0", std::to_string(coop::hashes_compared()), coop::hashes_compared() > 0);
+        if (coop::role() == coop::Role::Client)
+            add("hp_overrides", "0", std::to_string(coop::hp_override_count()), coop::hp_override_count() == 0);
     }
     bool all = pass_if_checks_ok && g.errors.empty();
     for (auto& c : checks) all = all && c.ok;
