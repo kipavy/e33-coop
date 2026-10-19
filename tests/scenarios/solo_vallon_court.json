@@ -1,0 +1,25 @@
+﻿{
+    "name":  "solo_vallon_court",
+    "description":  "Combat court de routine (TEST_B, Prairies printanières) : un Lancelier ; Verso n\u0027enchaîne aucun coup de combo, pour que l\u0027ennemi survive et attaque.",
+    "save":  "e33coop-test/TEST_B",
+    "encounter":  "SM_Lancelier_Alpha",
+    "timeout_s":  600,
+    "action_delay_s":  1.5,
+    "combo_auto_success":  0,
+    "max_turns":  60,
+    "shots_every_s":  4,
+    "actions":  [
+                    {
+                        "type":  "attack",
+                        "target":  0
+                    }
+                ],
+    "defense":  [
+                    "parry",
+                    "fail"
+                ],
+    "expect":  {
+                   "battle_end":  "any",
+                   "min_player_turns":  1
+               }
+}

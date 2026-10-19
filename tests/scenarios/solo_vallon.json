@@ -1,0 +1,15 @@
+﻿{
+  "name": "solo_vallon",
+  "description": "Combat solo dans une vraie zone de combat (save TEST_B : NG+ de Killian, Prairies printaniÃ¨res, drapeau Ã‰vÃªque) contre l'Évêque (gardien de la zone, assez solide pour attaquer). Sert Ã  vÃ©rifier le rendu (Ã©cran noir de TEST_A) et les combats Ã  plusieurs hÃ©ros.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Eveque*1",
+  "timeout_s": 600,
+  "action_delay_s": 1.5,
+  "combo_auto_success": 10,
+  "max_turns": 60,
+  "shots_every_s": 4,
+  "actions": [ { "type": "attack", "target": 0 } ],
+  "defense": ["parry", "fail"],
+  "expect": { "battle_end": "any", "min_player_turns": 1 }
+}
+
