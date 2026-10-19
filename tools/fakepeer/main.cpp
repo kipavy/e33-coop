@@ -67,6 +67,18 @@ json::Value load_json(const std::string& path, std::string& err)
 
 // --- Faux client ---------------------------------------------------------------------------
 
+// Résultat de QTE scripté : bit0 réussi, bit1 parfait.
+uint8_t combo_bits(const std::string& c) { return c == "perfect" ? 3 : c == "success" ? 1 : 0; }
+
+proto::Defense defense_of(const std::string& d, bool jumpable)
+{
+    if (jumpable) return d == "fail" ? proto::Defense::Fail : proto::Defense::Jump;
+    if (d == "parry") return proto::Defense::Parry;
+    if (d == "dodge") return proto::Defense::Dodge;
+    if (d == "perfect_dodge") return proto::Defense::PerfectDodge;
+    return proto::Defense::Fail;
+}
+
 int run_client(const Args& a, JsonLog& log, Recorder& rec)
 {
     std::string err;
@@ -91,44 +103,83 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     std::vector<std::string> defense;
     for (size_t i = 0; i < script["defense"].size(); ++i) defense.push_back(script["defense"][i].as_string("fail"));
     if (defense.empty()) defense = {"parry"};
-    const int action_type = static_cast<int>(script["action_type"].as_int(1));
-    const int combo_hits = static_cast<int>(script["combo_hits"].as_int(10));
+    // Actions : même format que les scénarios du test runner ({hero, type, skill|item, target, combo}).
+    const json::Value& actions = script["actions"];
+    std::map<std::string, size_t> action_index;
 
     uint8_t my_id = 0xFF;
-    std::vector<uint8_t> my_spots;
+    std::vector<proto::SpotOwner> owners;
     int defense_index = 0, turns_played = 0;
     bool ended = false, rejected = false;
+    double ended_at = -1;
     const double deadline = now_s() + a.timeout;
-    while (!ended && now_s() < deadline) {
+    auto spot_of_hero = [&](const std::string& name) -> int {
+        for (auto& o : owners) if (o.character.find(name) != std::string::npos) return o.spot;
+        return -1;
+    };
+    auto hero_of_spot = [&](uint8_t spot) -> std::string {
+        for (auto& o : owners) if (o.spot == spot) return o.character;
+        return {};
+    };
+    while ((ended_at < 0 || now_s() < ended_at + 3.0) && now_s() < deadline) {
         net::Datagram d;
         while (t->poll(d)) if (d.peer == a.connect) link.on_datagram(d.data.data(), d.data.size(), now_s());
         proto::Message m;
         while (link.pop(m)) {
-            if (auto* w = std::get_if<proto::Welcome>(&m)) my_id = w->player_id;
-            else if (auto* r = std::get_if<proto::Reject>(&m)) { log.write("rejected", JsonObj().add("detail", r->detail)); rejected = true; ended = true; }
-            else if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
-                my_spots.clear();
-                for (auto& o : bs->owners) if (o.player_id == my_id) my_spots.push_back(o.spot);
+            if (auto* w = std::get_if<proto::Welcome>(&m)) {
+                my_id = w->player_id;
+            } else if (auto* r = std::get_if<proto::Reject>(&m)) {
+                log.write("rejected", JsonObj().add("detail", r->detail));
+                rejected = ended = true;
+                ended_at = now_s() - 3.0;
+            } else if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
+                owners = bs->owners;
             } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
-                const bool mine = ts->kind == proto::ActorKind::Hero && std::find(my_spots.begin(), my_spots.end(), ts->index) != my_spots.end();
-                if (mine) {
-                    proto::ActionCommand ac;
-                    ac.battle_id = ts->battle_id; ac.turn = ts->turn; ac.actor_spot = ts->index;
-                    ac.action_type = static_cast<uint8_t>(action_type); ac.targets = {0};
-                    ac.combo_hits = static_cast<uint8_t>(combo_hits); ac.combo_perfect = 0;
-                    link.send(ac);
-                    ++turns_played;
+                bool mine = false;
+                for (auto& o : owners) if (ts->kind == proto::ActorKind::Hero && o.spot == ts->index && o.player_id == my_id) mine = true;
+                if (!mine) continue;
+                const std::string cls = hero_of_spot(ts->index);
+                // Prochaine action scriptée pour ce héros ("hero" absent = tout héros).
+                std::vector<size_t> candidates;
+                for (size_t i = 0; i < actions.size(); ++i) {
+                    const std::string h = actions[i]["hero"].as_string("");
+                    if (h.empty() || cls.find(h) != std::string::npos) candidates.push_back(i);
                 }
+                proto::ActionCommand ac;
+                ac.battle_id = ts->battle_id;
+                ac.turn = ts->turn;
+                ac.actor_spot = ts->index;
+                ac.action_type = 1;
+                ac.targets = {{proto::ActorKind::Enemy, proto::kAutoSpot}};
+                if (!candidates.empty()) {
+                    const json::Value& act = actions[candidates[action_index[cls]++ % candidates.size()]];
+                    const std::string type = act["type"].as_string("attack");
+                    ac.action_type = static_cast<uint8_t>(type == "skill" ? 5 : type == "item" ? 3 : 1);
+                    ac.secondary = act["skill"].is_string() ? act["skill"].as_string() : act["item"].as_string();
+                    const std::string target = act["target"].as_string("auto");
+                    if (target.rfind("hero:", 0) == 0) {
+                        const int sp = spot_of_hero(target.substr(5));
+                        if (sp >= 0) ac.targets = {{proto::ActorKind::Hero, static_cast<uint8_t>(sp)}};
+                    }
+                    const json::Value& combo = act["combo"];
+                    for (size_t k = 0; combo.size() > 0 && k < 16; ++k) ac.combo.push_back(combo_bits(combo[k % combo.size()].as_string("success")));
+                }
+                if (ac.combo.empty()) ac.combo.assign(16, 1);   // par défaut : QTE réussis (comme DEBUG_ComboAutoSuccessCount)
+                link.send(ac);
+                ++turns_played;
             } else if (auto* dq = std::get_if<proto::DefenseRequest>(&m)) {
                 proto::DefenseResult dr;
-                dr.battle_id = dq->battle_id; dr.turn = dq->turn; dr.hit = dq->hit;
-                const std::string& dec = defense[static_cast<size_t>(defense_index++) % defense.size()];
-                dr.result = dec == "parry" ? proto::Defense::Parry : dec == "dodge" ? proto::Defense::Dodge : proto::Defense::Fail;
+                dr.battle_id = dq->battle_id;
+                dr.turn = dq->turn;
+                dr.spot = dq->spot;
+                dr.hit = dq->hit;
+                dr.result = defense_of(defense[static_cast<size_t>(defense_index++) % defense.size()], dq->jumpable != 0);
                 link.send(dr);
             } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
                 link.send(*sh);   // le faux client n'a pas d'état propre : il renvoie le hash de l'hôte
             } else if (std::get_if<proto::BattleEnd>(&m)) {
                 ended = true;
+                ended_at = now_s();   // quelques secondes de plus pour les récompenses
             } else if (auto* p = std::get_if<proto::Ping>(&m)) {
                 link.send(proto::Pong{p->t_us}, false);
             }
@@ -147,6 +198,19 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
 // --- Faux hôte (rejeu) -------------------------------------------------------------------------
 
 struct RecLine { std::string dir; proto::Message msg; };
+
+// Champs qui doivent être identiques entre un message client enregistré et celui du client rejoué
+// (sinon l'hôte enregistré a appliqué autre chose : le rejeu ne compare plus la même partie).
+std::string c2h_key(const proto::Message& m)
+{
+    if (auto* ac = std::get_if<proto::ActionCommand>(&m))
+        return "action t" + std::to_string(ac->turn) + " s" + std::to_string(ac->actor_spot) + " a" + std::to_string(ac->action_type) + " " + ac->secondary;
+    if (auto* dr = std::get_if<proto::DefenseResult>(&m))
+        return "defense t" + std::to_string(dr->turn) + " s" + std::to_string(dr->spot) + " h" + std::to_string(dr->hit) + " r" + std::to_string(static_cast<int>(dr->result));
+    if (auto* cr = std::get_if<proto::ComboResult>(&m))
+        return "combo t" + std::to_string(cr->turn) + " s" + std::to_string(cr->spot) + " q" + std::to_string(cr->seq) + " " + std::to_string(cr->success) + std::to_string(cr->perfect);
+    return {};
+}
 
 int run_host(const Args& a, JsonLog& log, Recorder& rec)
 {
@@ -171,16 +235,16 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
     log.write("listening", JsonObj().add("port", a.port).add("lines", static_cast<int64_t>(lines.size())));
 
     std::unique_ptr<net::Link> link;
-    int invalid = 0, desyncs = 0, hashes = 0;
+    int invalid = 0, desyncs = 0, hashes = 0, mismatches = 0;
     std::map<uint64_t, uint64_t> host_hash;   // (battle<<32|turn) -> hash enregistré
     size_t cursor = 0;
     std::vector<proto::Message> client_msgs;
     const double deadline = now_s() + a.timeout;
-    bool finished = false;
+    double finished_at = -1;
 
     auto key = [](uint32_t b, uint32_t tn) { return (static_cast<uint64_t>(b) << 32) | tn; };
 
-    while (!finished && now_s() < deadline) {
+    while ((finished_at < 0 || now_s() < finished_at + 3.0) && now_s() < deadline) {
         net::Datagram d;
         while (t->poll(d)) {
             if (!link) {
@@ -212,16 +276,21 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                 if (l.dir == "h2c") {
                     if (auto* sh = std::get_if<proto::StateHash>(&l.msg)) host_hash[key(sh->battle_id, sh->turn)] = sh->hash;
                     link->send(l.msg);
-                    if (std::get_if<proto::BattleEnd>(&l.msg)) finished = true;
                     ++cursor;
                 } else {
                     const auto want = proto::type_of(l.msg);
                     auto it = std::find_if(client_msgs.begin(), client_msgs.end(), [&](const proto::Message& c) { return proto::type_of(c) == want; });
                     if (it == client_msgs.end()) break;   // barrière
+                    const std::string k_rec = c2h_key(l.msg), k_live = c2h_key(*it);
+                    if (k_rec != k_live) {
+                        ++mismatches;
+                        log.write("c2h_mismatch", JsonObj().add("recorded", k_rec).add("live", k_live));
+                    }
                     client_msgs.erase(it);
                     ++cursor;
                 }
             }
+            if (cursor >= lines.size() && finished_at < 0) finished_at = now_s();
             link->update(now_s());
             // Le client ne répond pas pendant un chargement de niveau (thread de jeu bloqué) : marge large.
             if (link->timed_out(now_s(), 120.0)) { log.write("error", JsonObj().add("what", "client timed out")); break; }
@@ -229,8 +298,9 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     for (int i = 0; i < 40 && link; ++i) { link->update(now_s() + i); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-    const bool ok = finished && invalid == 0 && desyncs == 0;
-    log.write("done", JsonObj().add("ok", ok).add("replayed", static_cast<int64_t>(cursor)).add("of", static_cast<int64_t>(lines.size())).add("hashes", hashes).add("desyncs", desyncs).add("invalid", invalid));
+    const bool ok = finished_at >= 0 && invalid == 0 && desyncs == 0 && mismatches == 0;
+    log.write("done", JsonObj().add("ok", ok).add("replayed", static_cast<int64_t>(cursor)).add("of", static_cast<int64_t>(lines.size())).add("hashes", hashes)
+                          .add("desyncs", desyncs).add("c2h_mismatches", mismatches).add("invalid", invalid));
     return ok ? 0 : 1;
 }
 

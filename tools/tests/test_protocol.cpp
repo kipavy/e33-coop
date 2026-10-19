@@ -18,13 +18,20 @@ static std::vector<proto::Message> samples()
 {
     proto::Hello h; h.game_build = 23765773; h.mod_version = "0.2.0"; h.gameplay_mods = {"A", "B"}; h.player_name = "Killian"; h.instance_id = 42;
     proto::BattleStart bs; bs.battle_id = 7; bs.encounter = "L_LumiereCitizenFleuret_Male*1"; bs.owners = {{0, "Verso", 0}, {1, "Maelle", 1}}; bs.rng_seed = 0x0123456789ABCDEFull;
-    proto::ActionCommand ac; ac.battle_id = 7; ac.turn = 3; ac.actor_spot = 1; ac.targets = {0, 2}; ac.combo_hits = 3; ac.combo_perfect = 1;
-    proto::ActionResult ar; ar.battle_id = 7; ar.turn = 3; ar.targets = {0}; ar.hits = {{proto::ActorKind::Enemy, 0, 123.5, true, 10.0}};
-    proto::DefenseRequest dq; dq.battle_id = 7; dq.turn = 4; dq.hit = 2; dq.defender_spots = {1};
-    proto::DefenseResult dr; dr.battle_id = 7; dr.turn = 4; dr.hit = 2; dr.result = proto::Defense::Parry;
+    bs.party = {"Verso", "Maelle", "Lune"};
+    proto::ActionCommand ac; ac.battle_id = 7; ac.turn = 3; ac.actor_spot = 1; ac.action_type = 5; ac.secondary = "Combo1";
+    ac.targets = {{proto::ActorKind::Enemy, 0}, {proto::ActorKind::Hero, 2}}; ac.combo = {3, 1, 0};
+    proto::DefenseRequest dq; dq.battle_id = 7; dq.turn = 4; dq.spot = 1; dq.hit = 2; dq.jumpable = 1;
+    proto::DefenseResult dr; dr.battle_id = 7; dr.turn = 4; dr.spot = 1; dr.hit = 2; dr.result = proto::Defense::Parry;
+    proto::StateSync ss; ss.battle_id = 7; ss.turn = 4; ss.gradient_charges = 2; ss.gradient_progress = 0.5;
+    proto::UnitState us; us.unit = {proto::ActorKind::Hero, 2}; us.cls = "BP_Verso_Battle2_C"; us.hp = 13965; us.ap = 9; us.shield = 1; us.break_bar = 1234567890123ll;
+    us.buffs = {{"BP_BattleBuff_Burn_C", 1, 3, false}, {"BP_BattleBuff_Shell_C", 2, 0, true}};
+    ss.units = {us, proto::UnitState{{proto::ActorKind::Enemy, 0}, "BP_Enemy", 5.5, 0, 0, 0, true, {}}};
+    proto::BattleRewards rw; rw.battle_id = 7; rw.xp = 521235; rw.gold = 10448; rw.loot = {{"Lumicolor", 5}, {"ChromaCatalyst", 2}};
     return {h, proto::Welcome{1, 99}, proto::Reject{proto::RejectReason::GameBuildMismatch, "host 1 vs client 2"}, proto::Bye{"bye"},
-            proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, ar, dq, dr,
-            proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}}};
+            proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, dq, dr,
+            proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}},
+            proto::ComboResult{7, 3, 1, 2, true, true}, ss, rw};
 }
 
 static void test_roundtrip()

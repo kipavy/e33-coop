@@ -98,6 +98,33 @@ bool set_int(UObject* o, const wchar_t* name, int64_t v)
     }
 }
 
+bool set_double(UObject* o, const wchar_t* name, double v)
+{
+    auto* d = value_ptr<double>(o, name);
+    if (!d || prop(o, name)->GetSize() != 8) return false;
+    *d = v;
+    return true;
+}
+
+UClass* find_class_by_short_name(const std::string& short_name)
+{
+    const std::wstring w = from_utf8(short_name);
+    std::vector<UObject*> classes;
+    UObjectGlobals::FindAllOf(STR("BlueprintGeneratedClass"), classes);
+    for (UObject* o : classes)
+        if (o && o->GetName() == w) return static_cast<UClass*>(o);
+    return nullptr;
+}
+
+bool is_a(UObject* o, const wchar_t* class_short_name)
+{
+    if (!o) return false;
+    for (UStruct* s = o->GetClassPrivate(); s; s = s->GetSuperStruct()) {
+        if (s->GetName() == class_short_name) return true;
+    }
+    return false;
+}
+
 UObject* get_object(UObject* o, const wchar_t* name)
 {
     auto* v = value_ptr<UObject*>(o, name);
@@ -217,6 +244,37 @@ UObject* Call::out_object(const wchar_t* name)
     return d ? *static_cast<UObject**>(d) : nullptr;
 }
 
+int64_t Call::out_int(const wchar_t* name, int64_t def)
+{
+    FProperty* p = param(name);
+    if (!p) return def;
+    void* v = p->ContainerPtrToValuePtr<void>(buf_.data());
+    switch (p->GetSize()) {
+    case 1: return *static_cast<uint8_t*>(v);
+    case 4: return *static_cast<int32_t*>(v);
+    case 8: return *static_cast<int64_t*>(v);
+    default: return def;
+    }
+}
+
+double Call::out_double(const wchar_t* name, double def)
+{
+    FProperty* p = param(name);
+    if (!p) return def;
+    void* v = p->ContainerPtrToValuePtr<void>(buf_.data());
+    return p->GetSize() == 8 ? *static_cast<double*>(v) : p->GetSize() == 4 ? *static_cast<float*>(v) : def;
+}
+
+std::vector<UObject*> Call::out_object_array(const wchar_t* name)
+{
+    std::vector<UObject*> out;
+    auto* arr = static_cast<FScriptArray*>(param_ptr(name));
+    if (!arr) return out;
+    auto** data = static_cast<UObject**>(arr->GetData());
+    for (int32 i = 0; i < arr->Num(); ++i) out.push_back(data[i]);
+    return out;
+}
+
 // --- Cadres de hooks -------------------------------------------------------------
 
 std::optional<bool> read_out_bool(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name)
@@ -237,6 +295,29 @@ bool write_out_bool(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, con
     void* addr = FindOutParamValueAddress(ctx.TheStack, bp);
     if (!addr) return false;
     bp->SetPropertyValue(addr, v);
+    return true;
+}
+
+void* out_param_address(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, FProperty** prop_out)
+{
+    if (!fn) return nullptr;
+    FProperty* p = fn->FindProperty(FName(name, FNAME_Find));
+    if (!p) return nullptr;
+    if (prop_out) *prop_out = p;
+    return FindOutParamValueAddress(ctx.TheStack, p);
+}
+
+UObject* read_out_object(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name)
+{
+    void* addr = out_param_address(ctx, fn, name);
+    return addr ? *static_cast<UObject**>(addr) : nullptr;
+}
+
+bool write_out_object(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, UObject* v)
+{
+    void* addr = out_param_address(ctx, fn, name);
+    if (!addr) return false;
+    *static_cast<UObject**>(addr) = v;
     return true;
 }
 

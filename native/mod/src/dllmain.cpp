@@ -25,7 +25,7 @@ using namespace RC::Unreal;
 
 namespace {
 
-constexpr const char* kModVersion = "0.2.0";
+constexpr const char* kModVersion = "0.3.0";
 
 void subscribe_logging_hooks()
 {
@@ -57,7 +57,7 @@ public:
     E33CoopMod() : CppUserModBase()
     {
         ModName = STR("E33Coop");
-        ModVersion = STR("0.2.0");
+        ModVersion = STR("0.3.0");
         ModDescription = STR("Coop en ligne pour Clair Obscur: Expedition 33");
         ModAuthors = STR("kipavy");
     }
