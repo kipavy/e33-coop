@@ -1,6 +1,7 @@
 #include "coop.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -67,6 +68,27 @@ struct Window {                                            // fenêtre de QTE of
 
 struct Press { UObject* timeline = nullptr; SteadyClock::time_point at; };
 
+struct FreeAimOwner {                                      // visée libre d'un héros contrôlé ici
+    bool active = false;
+    int spot = -1;
+    SteadyClock::time_point t0;
+    uint16_t fires = 0, shots = 0;
+    double next_aim_s = 0;
+    bool in_raycast = false;
+    bool have_point = false, raycast_point = false;
+    std::array<double, 3> point{}, shot_point{};
+};
+
+struct FreeAimReplay {                                     // visée libre rejouée (héros d'un autre joueur)
+    std::pair<uint32_t, int> key{0, -1};
+    bool started = false, done = false;
+    SteadyClock::time_point t0;
+    size_t next = 0;
+    uint16_t raycasts = 0;
+    bool have_override = false;
+    std::array<double, 3> point{};
+};
+
 struct LocalHit {                                          // coup reçu par un héros contrôlé ici (résultat à publier)
     int spot = 0;
     uint16_t hit = 0;
@@ -91,6 +113,9 @@ struct Battle {
     std::map<int, uint16_t> combo_seq;                     // emplacement -> n° de fenêtre dans le tour
     std::map<UObject*, Window> windows;                    // timeline -> fenêtre en cours
     std::vector<Press> presses;                            // appuis à rejouer (héros d'un autre joueur)
+    // Visée libre
+    std::map<std::pair<uint32_t, int>, std::vector<proto::FreeAimEvent>> fa_events;   // (tour, emplacement) -> événements reçus
+    std::map<std::pair<uint32_t, int>, double> fa_arrival;                           // réception du Start (s.now)
     // Défenses
     std::map<TurnSpotSeq, proto::Defense> defenses;
     std::map<int, uint16_t> hit_seq;                       // emplacement -> n° de coup reçu dans le tour
@@ -146,6 +171,9 @@ struct State {
     bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
     bool input_enabled = true;
     std::map<std::string, int> counters;
+    FreeAimOwner fa_own;                                   // visée d'un héros d'ici
+    FreeAimReplay fa_rep;                                  // visée rejouée d'un héros d'un autre joueur
+    std::optional<std::array<double, 3>> local_aim;        // test runner : point visé par le « joueur » (set_local_aim)
 };
 
 State s;
@@ -221,9 +249,9 @@ std::vector<std::string> read_gameplay_mods()
 void send_to(Peer& p, const proto::Message& m, bool reliable = true) { if (p.link) p.link->send(m, reliable); }
 void broadcast(const proto::Message& m) { for (auto& p : s.peers) if (p.accepted) send_to(p, m); }
 // Hôte : à tous les clients sauf l'émetteur ; client : à l'hôte.
-void publish(const proto::Message& m, const Peer* origin = nullptr)
+void publish(const proto::Message& m, const Peer* origin = nullptr, bool reliable = true)
 {
-    for (auto& p : s.peers) if (p.accepted && &p != origin) send_to(p, m);
+    for (auto& p : s.peers) if (p.accepted && &p != origin) send_to(p, m, reliable);
 }
 
 uint8_t owner_of_spot(int spot)
@@ -348,6 +376,15 @@ bool handle_battle_common(Peer& p, proto::Message& m)
         if (s.role == Role::Host && owner_of_spot(cr->spot) != p.player_id) return true;
         b.combos[{cr->turn, cr->spot, cr->seq}] = *cr;
         if (s.role == Role::Host) publish(*cr, &p);
+        return true;
+    }
+    if (auto* fa = std::get_if<proto::FreeAimEvent>(&m)) {
+        if (fa->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(fa->spot) != p.player_id) return true;
+        const std::pair<uint32_t, int> key{fa->turn, fa->spot};
+        if (fa->kind == proto::FreeAimKind::Start) { b.fa_events[key].clear(); b.fa_arrival[key] = s.now; }
+        b.fa_events[key].push_back(*fa);
+        if (s.role == Role::Host) publish(*fa, &p, fa->kind != proto::FreeAimKind::Aim);
         return true;
     }
     if (auto* dr = std::get_if<proto::DefenseResult>(&m)) {
@@ -674,6 +711,8 @@ void begin_turn_common()
     s.battle.action_wait_logged = false;
     refresh_enemy_spots();
     s.battle.turn_started_at = s.now;
+    s.fa_own = FreeAimOwner{};
+    s.fa_rep = FreeAimReplay{};
 }
 
 void host_turn_start(UObject* actor)
@@ -1061,6 +1100,109 @@ void subscribe()
         }
     });
 
+    // Visée libre (D11). Le tir part vers le point que renvoie BM.ComputeFreeAim3rdPersonTargetLocation au moment du
+    // rayon du projectile (vu en jeu le 2026-10-19). Propriétaire : on publie le début, le point visé (~20 fois/s, pour
+    // l'affichage), chaque tir (instant) et son point exact, puis l'annulation. Ailleurs : rejoué avec le même décalage
+    // que ses actions, en imposant ce point visé.
+    bus.post(fn(game::path::BattleMgr, L"ComputeFreeAim3rdPersonTargetLocation"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        auto* loc = static_cast<double*>(ue::out_param_address(ctx, f, STR("HitLocation")));
+        if (!loc) return;
+        if (s.fa_rep.started && !s.fa_rep.done && s.fa_rep.have_override) {
+            loc[0] = s.fa_rep.point[0]; loc[1] = s.fa_rep.point[1]; loc[2] = s.fa_rep.point[2];
+            return;
+        }
+        if (!s.fa_own.active) return;
+        if (s.local_aim) { loc[0] = (*s.local_aim)[0]; loc[1] = (*s.local_aim)[1]; loc[2] = (*s.local_aim)[2]; }   // « joueur » simulé (tests)
+        s.fa_own.point = {loc[0], loc[1], loc[2]};
+        s.fa_own.have_point = true;
+        if (s.fa_own.in_raycast) { s.fa_own.shot_point = s.fa_own.point; s.fa_own.raycast_point = true; }
+    });
+    auto fa_event = [](proto::FreeAimKind kind, uint16_t seq, const std::array<double, 3>& p) {
+        proto::FreeAimEvent e;
+        e.battle_id = s.battle.id;
+        e.turn = s.battle.turn;
+        e.spot = static_cast<uint8_t>(s.fa_own.spot);
+        e.kind = kind;
+        e.seq = seq;
+        e.t_ms = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count());
+        e.x = p[0]; e.y = p[1]; e.z = p[2];
+        return e;
+    };
+    bus.pre(fn(game::path::BattleMgr, L"StartFreeAimFromUI"), [fa_event](HookCtx&, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* cur = game::current_character();
+        if (!cur || !game::is_player(cur) || !controls(game::spot(cur))) return;
+        s.fa_own = FreeAimOwner{};
+        s.fa_own.active = true;
+        s.fa_own.spot = game::spot(cur);
+        s.fa_own.t0 = SteadyClock::now();
+        bump("free_aims_published");
+        publish(fa_event(proto::FreeAimKind::Start, 0, {}));
+    });
+    bus.pre(fn(game::FreeAimComp, L"OnFreeAimShootAction"), [fa_event](HookCtx& ctx, UFunction*) {
+        if (!s.fa_own.active || ue::component_owner(ctx.Context) != game::find_unit(true, s.fa_own.spot)) return;
+        publish(fa_event(proto::FreeAimKind::Fire, ++s.fa_own.fires, s.fa_own.point));
+    });
+    bus.pre(fn(game::FreeAimProjectile, L"TriggerRaycast"), [](HookCtx& ctx, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* caster = ue::get_object(ctx.Context, STR("Caster"));
+        if (!caster || !game::is_player(caster)) return;
+        if (s.fa_own.active && game::spot(caster) == s.fa_own.spot) {
+            s.fa_own.in_raycast = true;
+            s.fa_own.raycast_point = false;
+            return;
+        }
+        // Rejeu : point exact du tir du propriétaire (attente bornée ; avec le décalage, il est déjà là).
+        auto& r = s.fa_rep;
+        if (!r.started || r.done || game::spot(caster) != r.key.second) return;
+        const uint16_t seq = ++r.raycasts;
+        std::optional<proto::FreeAimEvent> shot;   // copie : le vecteur grandit pendant l'attente
+        wait_for([&] {
+            for (auto& e : s.battle.fa_events[r.key]) if (e.kind == proto::FreeAimKind::Shot && e.seq == seq) { shot = e; return true; }
+            return false;
+        }, 2.0);
+        if (!shot) { bump("free_aim_timeouts"); return; }
+        std::array<double, 3> p{shot->x, shot->y, shot->z};
+        if (shot->target.spot != proto::kAutoSpot) {   // point relatif à un combattant (faux client)
+            double a[3];
+            if (game::location(game::find_unit(shot->target.kind == proto::ActorKind::Hero, shot->target.spot), a)) p = {a[0] + p[0], a[1] + p[1], a[2] + p[2]};
+        }
+        r.point = p;
+        r.have_override = true;
+        bump("free_aim_shots_replayed");
+        log().write("coop_free_aim_shot", JsonObj().add("spot", r.key.second).add("seq", static_cast<int>(seq)).add("x", p[0]).add("y", p[1]).add("z", p[2]), s.battle.turn);
+    });
+    bus.post(fn(game::FreeAimProjectile, L"TriggerRaycast"), [fa_event](HookCtx& ctx, UFunction*) {
+        if (!s.fa_own.in_raycast) return;
+        UObject* caster = ue::get_object(ctx.Context, STR("Caster"));
+        if (!caster || game::spot(caster) != s.fa_own.spot) return;
+        s.fa_own.in_raycast = false;
+        const auto p = s.fa_own.raycast_point ? s.fa_own.shot_point : s.fa_own.point;
+        publish(fa_event(proto::FreeAimKind::Shot, ++s.fa_own.shots, p));
+        log().write("coop_free_aim_local_shot", JsonObj().add("seq", static_cast<int>(s.fa_own.shots)).add("x", p[0]).add("y", p[1]).add("z", p[2])
+                                                 .add("from_raycast", s.fa_own.raycast_point), s.battle.turn);
+    });
+    bus.post(fn(game::FreeAimComp, L"OnFreeAimProjectileHit"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* target = ue::read_param_object(ctx, f, STR("Character"));
+        bump("free_aim_hits");
+        log().write("coop_free_aim_hit", JsonObj().add("target", game::char_class(target)).add("spot", game::spot(target))
+                                          .add("body_part", ue::read_param_int(ctx, f, STR("BodyPart")).value_or(-1)), s.battle.turn);
+    });
+    for (const wchar_t* name : {L"CancelFreeAimFromUI"}) {
+        bus.pre(fn(game::path::BattleMgr, name), [fa_event](HookCtx&, UFunction*) {
+            if (!s.fa_own.active) return;
+            publish(fa_event(proto::FreeAimKind::Cancel, 0, s.fa_own.point));
+            s.fa_own.active = false;
+        });
+    }
+    bus.post(fn(game::FreeAimComp, L"EndFreeAim"), [fa_event](HookCtx& ctx, UFunction*) {
+        if (!s.fa_own.active || ue::component_owner(ctx.Context) != game::find_unit(true, s.fa_own.spot)) return;
+        publish(fa_event(proto::FreeAimKind::End, 0, s.fa_own.point));
+        s.fa_own.active = false;
+    });
+
     // Défenses : TryParryHitFromCharacter (coups parables) ou ReceiveDamageFromObject (coups sautables).
     bus.pre(fn(game::path::Stats, L"TryParryHitFromCharacter"), [](HookCtx& ctx, UFunction*) {
         if (s.role == Role::Solo || !s.battle.active) return;
@@ -1246,6 +1388,11 @@ int connected_players()
 }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
 bool battle_finalized() { return s.battle.finalized; }
+void set_local_aim(const double* point)
+{
+    if (point) s.local_aim = std::array<double, 3>{point[0], point[1], point[2]};
+    else s.local_aim.reset();
+}
 const std::map<std::string, int>& counters() { return s.counters; }
 int counter(const std::string& name)
 {
@@ -1347,6 +1494,53 @@ void start_pending_battle()
     log().write("coop_battle_start", JsonObj().add("battle", bs.battle_id).add("encounter", bs.encounter));
 }
 
+// Visée libre d'un héros d'un autre joueur : rejouée au même rythme que chez lui (décalée de replay_lag_s).
+// Renvoie true tant qu'elle est en cours (l'action du tour attend).
+bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
+{
+    auto& b = s.battle;
+    auto ev = b.fa_events.find(key);
+    if (ev == b.fa_events.end() || ev->second.empty()) return false;
+    auto& r = s.fa_rep;
+    if (r.key != key) r = FreeAimReplay{key};
+    if (r.done) return false;
+    if (!r.started) {
+        if (s.now - b.turn_started_at < s.action_delay_s || s.now - b.fa_arrival[key] < s.replay_lag_s) return true;
+        ue::Call c(game::battle_manager(), STR("StartFreeAimFromUI"));
+        if (c) c.invoke();
+        r.started = true;
+        r.t0 = SteadyClock::now();
+        bump("free_aims_replayed");
+        log().write("coop_free_aim_start", JsonObj().add("spot", key.second), b.turn);
+        return true;
+    }
+    const auto elapsed = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - r.t0).count());
+    const auto& events = ev->second;
+    // Point visé (affichage) : le plus récent déjà atteint.
+    const proto::FreeAimEvent* aim = nullptr;
+    for (auto& e : events) if (e.kind == proto::FreeAimKind::Aim && e.t_ms <= elapsed && (!aim || e.t_ms >= aim->t_ms)) aim = &e;
+    if (aim && aim->target.spot == proto::kAutoSpot) { r.point = {aim->x, aim->y, aim->z}; r.have_override = true; }
+    // Événements fiables, dans l'ordre.
+    while (r.next < events.size() && events[r.next].t_ms <= elapsed) {
+        const auto& e = events[r.next++];
+        if (e.kind == proto::FreeAimKind::Fire) {
+            ue::Call c(ue::get_object(hero, STR("BP_FreeAimShooterBattleComponent")), STR("OnFreeAimShootAction"));
+            if (c) c.invoke();
+        } else if (e.kind == proto::FreeAimKind::Cancel || e.kind == proto::FreeAimKind::End) {
+            // Fin chez le propriétaire : si la visée est encore ouverte ici, on l'annule pareil.
+            if (ue::get_bool(ue::get_object(hero, STR("BP_FreeAimShooterBattleComponent")), STR("IsAiming"))) {
+                ue::Call c(game::battle_manager(), STR("CancelFreeAimFromUI"));
+                if (c) c.invoke();
+            }
+            r.done = true;
+            r.have_override = false;
+            log().write("coop_free_aim_end", JsonObj().add("spot", key.second).add("kind", static_cast<int>(e.kind)).add("raycasts", static_cast<int>(r.raycasts)), b.turn);
+            return true;
+        }
+    }
+    return true;
+}
+
 // Tour d'un héros contrôlé par un autre joueur : exécuter sa commande (reçue de lui ou relayée par l'hôte).
 void run_remote_action()
 {
@@ -1358,6 +1552,7 @@ void run_remote_action()
     if (controls(spot)) return;
     const std::pair<uint32_t, int> key{b.turn, spot};
     if (b.executed.count(key)) return;
+    if (replay_free_aim(key, cur)) return;   // visée libre du propriétaire d'abord (elle ne termine pas le tour)
     auto it = b.commands.find(key);
     if (it == b.commands.end()) {
         if (!b.action_wait_logged && s.now - b.turn_started_at > 30.0) {
@@ -1412,6 +1607,18 @@ void tick(double dt)
     pump_network();
     if (s.role == Role::Client) start_pending_battle();
     run_remote_action();
+    // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
+    if (s.fa_own.active && s.fa_own.have_point && s.now >= s.fa_own.next_aim_s) {
+        s.fa_own.next_aim_s = s.now + 0.05;
+        proto::FreeAimEvent e;
+        e.battle_id = s.battle.id;
+        e.turn = s.battle.turn;
+        e.spot = static_cast<uint8_t>(s.fa_own.spot);
+        e.kind = proto::FreeAimKind::Aim;
+        e.t_ms = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count());
+        e.x = s.fa_own.point[0]; e.y = s.fa_own.point[1]; e.z = s.fa_own.point[2];
+        publish(e, nullptr, false);
+    }
     // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
     if (auto& b = s.battle; b.end_flow_at >= 0 && !b.finalized && (s.role == Role::Host || b.host_end >= 0 || s.now - b.end_flow_at > 8.0))
         finalize_battle("end_flow");

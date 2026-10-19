@@ -506,4 +506,12 @@ bool add_buff(UObject* st, const std::string& cls_name, int stacks, int turns, b
 
 UObject* gradient_gauge() { return ue::get_object(battle_manager(), STR("GradientGaugeSystem")); }
 
+bool location(UObject* actor, double out[3])
+{
+    auto l = actor_location(actor);
+    if (!l) return false;
+    out[0] = (*l)[0]; out[1] = (*l)[1]; out[2] = (*l)[2];
+    return true;
+}
+
 } // namespace e33::game

@@ -31,7 +31,8 @@ static std::vector<proto::Message> samples()
     return {h, proto::Welcome{1, 99}, proto::Reject{proto::RejectReason::GameBuildMismatch, "host 1 vs client 2"}, proto::Bye{"bye"},
             proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, dq, dr,
             proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}},
-            proto::ComboResult{7, 3, 1, 2, true, true, 880}, proto::ComboResult{7, 3, 1, 3, false, false, proto::kNoPress}, ss, rw};
+            proto::ComboResult{7, 3, 1, 2, true, true, 880}, proto::ComboResult{7, 3, 1, 3, false, false, proto::kNoPress}, ss, rw,
+            proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}}};
 }
 
 static void test_roundtrip()

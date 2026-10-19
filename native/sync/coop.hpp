@@ -20,6 +20,8 @@ int connected_players();     // hôte : clients acceptés ; client : 1 si accept
 bool session_ok();           // connecté et accepté (ou solo)
 // Fin de combat traitée (récompenses comparées, derniers tirages vérifiés) : le test runner peut conclure.
 bool battle_finalized();
+// Test runner : point visé par le « joueur » simulé pendant une visée libre d'un héros d'ici (nullptr = aucun).
+void set_local_aim(const double* point);
 // Compteurs pour le test runner (desyncs, raw_hash_diffs, gameplay_draws, defense_timeouts…).
 const std::map<std::string, int>& counters();
 int counter(const std::string& name);

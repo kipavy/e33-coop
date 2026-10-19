@@ -100,5 +100,10 @@ bool add_buff(UObject* stats, const std::string& cls, int stacks, int turns, boo
 
 // Jauge gradient (globale)
 UObject* gradient_gauge();
+// Position monde d'un acteur (K2_GetActorLocation).
+bool location(UObject* actor, double out[3]);
+// Visée libre
+inline const wchar_t* const FreeAimComp = L"/Game/Gameplay/FreeAim/BP_FreeAimShooterBattleComponent.BP_FreeAimShooterBattleComponent_C:";
+inline const wchar_t* const FreeAimProjectile = L"/Game/Gameplay/WorldSkills/BP_FreeAimProjectile_Base.BP_FreeAimProjectile_Base_C:";
 
 } // namespace e33::game

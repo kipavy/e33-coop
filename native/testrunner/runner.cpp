@@ -50,6 +50,8 @@ const char* phase_name(Phase p)
 
 using Clock = std::chrono::steady_clock;
 
+constexpr int kActFreeAim = 100;   // action du runner : visée libre (pas un E_jRPG_ActionType)
+
 // Action scriptée d'un héros. "target" : auto | enemy:N | all_enemies | self | hero:<Nom> | dead_hero.
 // "combo" : résultat voulu pour chaque fenêtre de QTE (perfect | success | fail), joué par de vrais appuis.
 struct Action {
@@ -59,6 +61,8 @@ struct Action {
     std::string target = "auto";
     std::vector<std::string> combo;
     std::shared_ptr<Action> fallback;    // "else" : si l'action est impossible (PA, objet, aucune cible)
+    int shots = 0;                       // "freeaim" : nombre de tirs (visée sur "target", puis action "then")
+    std::shared_ptr<Action> then;
 };
 
 struct Scenario {
@@ -102,6 +106,8 @@ struct State {
     std::vector<std::string> combo_plan;
     int combo_window = 0;
     std::vector<Clock::time_point> presses;
+    // Visée libre en cours (action "freeaim") : étapes horodatées
+    struct FreeAim { bool active = false; UObject* actor = nullptr; Action action; int fired = 0; double next = 0; int step = 0; } fa;
     std::map<std::string, int> metrics;       // compteurs du runner (actions par type, morts, réanimations…)
     int end_result = -1;
     double end_at = -1;
@@ -133,6 +139,7 @@ int action_type_of(const std::string& t)
     if (t == "item") return game::ActItem;
     if (t == "skip") return game::ActSkip;
     if (t == "flee") return game::ActFlee;
+    if (t == "freeaim") return kActFreeAim;
     return game::ActAttack;
 }
 
@@ -145,6 +152,8 @@ Action parse_action(const json::Value& a)
     act.target = a["target"].is_string() ? a["target"].as_string("auto") : "auto";
     for (size_t i = 0; i < a["combo"].size(); ++i) act.combo.push_back(a["combo"][i].as_string("success"));
     if (a["else"].is_object()) act.fallback = std::make_shared<Action>(parse_action(a["else"]));
+    act.shots = static_cast<int>(a["shots"].as_int(0));
+    if (a["then"].is_object()) act.then = std::make_shared<Action>(parse_action(a["then"]));
     return act;
 }
 
@@ -381,7 +390,8 @@ bool playable(UObject* actor, const Action& a, std::vector<UObject*>& targets, s
     }
     if (a.type == game::ActItem && game::battle_item_count(a.secondary) <= 0) { why = "no item left"; return false; }
     if (a.type == game::ActSkip || a.type == game::ActFlee) { targets.clear(); return true; }
-    targets = resolve_targets(actor, a);
+    if (a.type == kActFreeAim && ue::get_double(game::stats(actor), STR("CurrentAP")) < a.shots) { why = "not enough AP to shoot"; return false; }
+    targets = resolve_targets(actor, a.type == kActFreeAim ? Action{} : a);
     if (targets.empty()) { why = "no target"; return false; }
     return true;
 }
@@ -395,10 +405,58 @@ const Action* next_action(UObject* actor)
     return mine[static_cast<size_t>(g.action_index[hero]++) % mine.size()];
 }
 
-void play_turn(UObject* actor)
+// Point visé par le « joueur » simulé : la cible + 1 m (milieu du corps).
+bool aim_point(UObject* target, double out[3])
+{
+    if (!game::location(target, out)) return false;
+    out[2] += 100.0;
+    return true;
+}
+
+void play_action(UObject* actor, const Action* a);
+
+void play_turn(UObject* actor) { play_action(actor, next_action(actor)); }
+
+// Visée libre (action "freeaim") : début, tirs toutes les 1,2 s sur la cible, annulation, puis action "then".
+// Même chronologie que le faux client (fakepeer) : le rejeu d'un enregistrement voit les mêmes tirs aux mêmes instants.
+void tick_free_aim()
+{
+    auto& fa = g.fa;
+    if (!fa.active || g.t < fa.next) return;
+    UObject* bm = game::battle_manager();
+    if (fa.step == 0) {
+        ue::Call c(bm, STR("StartFreeAimFromUI"));
+        if (c) c.invoke();
+        fa.step = 1;
+        fa.next = g.t + 1.5;
+        ++g.metrics["actions_freeaim"];
+        log().write("tr_free_aim", JsonObj().add("step", "start").add("shots", fa.action.shots), g.turn);
+    } else if (fa.step == 1 && fa.fired < fa.action.shots) {
+        auto targets = resolve_targets(fa.actor, fa.action);
+        double p[3];
+        if (!targets.empty() && aim_point(targets.front(), p)) coop::set_local_aim(p);
+        ue::Call c(ue::get_object(fa.actor, STR("BP_FreeAimShooterBattleComponent")), STR("OnFreeAimShootAction"));
+        if (c) c.invoke();
+        ++fa.fired;
+        fa.next = g.t + 1.2;
+        log().write("tr_free_aim", JsonObj().add("step", "fire").add("n", fa.fired), g.turn);
+    } else if (fa.step == 1) {
+        ue::Call c(bm, STR("CancelFreeAimFromUI"));
+        if (c) c.invoke();
+        coop::set_local_aim(nullptr);
+        fa.step = 2;
+        fa.next = g.t + 1.0;
+        log().write("tr_free_aim", JsonObj().add("step", "cancel"), g.turn);
+    } else {
+        fa.active = false;
+        static const Action basic{};
+        play_action(fa.actor, fa.action.then ? fa.action.then.get() : &basic);
+    }
+}
+
+void play_action(UObject* actor, const Action* a)
 {
     static const Action basic{};
-    const Action* a = next_action(actor);
     if (!a) a = &basic;
     std::vector<UObject*> targets;
     std::string why;
@@ -407,6 +465,14 @@ void play_turn(UObject* actor)
         a = a->fallback ? a->fallback.get() : (a == &basic ? nullptr : &basic);
     }
     if (!a) { fail("no playable action for " + game::hardcoded_name(actor)); return; }
+    if (a->type == kActFreeAim) {
+        g.fa = {};
+        g.fa.active = true;
+        g.fa.actor = actor;
+        g.fa.action = *a;
+        g.fa.next = g.t;
+        return;
+    }
     g.combo_plan = a->combo;
     g.combo_window = 0;
     g.presses.clear();
@@ -690,6 +756,7 @@ void tick(float dt)
         if (g.phase_t > (coop::role() == coop::Role::Client ? 300.0 : 60.0)) fail("battle did not start");
         break;
     case Phase::Battle:
+        tick_free_aim();
         if (g.pending_action_at >= 0 && g.t >= g.pending_action_at) {
             g.pending_action_at = -1;
             if (game::current_character() != g.pending_actor) { log().write("tr_action_skipped", JsonObj().add("why", "actor changed"), g.turn); break; }

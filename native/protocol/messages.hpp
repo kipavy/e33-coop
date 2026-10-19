@@ -15,7 +15,7 @@ namespace e33::proto {
 
 // v2 : AiDraws ; v3 : graine de combat + Draws (D10) ;
 // v4 : modèle de rejeu symétrique (D11) : cibles (camp, emplacement), compétences/objets, ComboResult,
-//      défenses par héros relayées, StateSync (état complet), BattleRewards, équipe imposée.
+//      défenses par héros relayées, StateSync (état complet), BattleRewards, équipe imposée, visée libre (FreeAimEvent).
 inline constexpr uint16_t kProtocolVersion = 4;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
@@ -23,7 +23,7 @@ enum class MsgType : uint16_t {
     Hello = 1, Welcome = 2, Reject = 3, Bye = 4, Ping = 5, Pong = 6,
     BattleStart = 20, TurnStart = 21, ActionCommand = 22,
     DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, Draws = 28,
-    ComboResult = 29, StateSync = 30, BattleRewards = 32,
+    ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33,
 };
 
 const char* type_name(MsgType t);
@@ -146,10 +146,24 @@ struct BattleRewards {
     int32_t gold = 0;
     std::vector<LootEntry> loot;
 };
+// Visée libre d'un héros, chez son propriétaire (D11) : rejouée par les autres instances avec le même décalage
+// que ses actions. t_ms : temps écoulé depuis le début de la visée. Point visé : absolu, ou relatif à un
+// combattant (target.spot != kAutoSpot : position de l'acteur + point, utilisé par le faux client).
+enum class FreeAimKind : uint8_t { Start = 0, Aim = 1, Fire = 2, Shot = 3, Cancel = 4, End = 5 };
+struct FreeAimEvent {
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    uint8_t spot = 0;
+    FreeAimKind kind = FreeAimKind::Start;
+    uint16_t seq = 0;                     // Fire / Shot : n° du tir dans la visée
+    uint32_t t_ms = 0;
+    double x = 0, y = 0, z = 0;           // Aim / Shot : point visé
+    Unit target{ActorKind::Enemy, kAutoSpot};
+};
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
                              DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,
-                             BattleRewards>;
+                             BattleRewards, FreeAimEvent>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

@@ -152,7 +152,28 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ac.action_type = 1;
                 ac.targets = {{proto::ActorKind::Enemy, proto::kAutoSpot}};
                 if (!candidates.empty()) {
-                    const json::Value& act = actions[candidates[action_index[cls]++ % candidates.size()]];
+                    const json::Value* actp = &actions[candidates[action_index[cls]++ % candidates.size()]];
+                    // Visée libre : même chronologie que le test runner (tirs à 1,5 s puis toutes les 1,2 s sur le premier
+                    // ennemi, à 1 m du sol ; annulation 1,2 s après le dernier), puis l'action "then".
+                    if ((*actp)["type"].as_string("") == "freeaim") {
+                        const int shots = static_cast<int>((*actp)["shots"].as_int(1));
+                        auto ev = [&](proto::FreeAimKind k, uint16_t seq, uint32_t t) {
+                            proto::FreeAimEvent e;
+                            e.battle_id = ts->battle_id; e.turn = ts->turn; e.spot = ts->index; e.kind = k; e.seq = seq; e.t_ms = t;
+                            if (k == proto::FreeAimKind::Shot) { e.z = 100.0; e.target = {proto::ActorKind::Enemy, 0}; }
+                            link.send(e);
+                        };
+                        ev(proto::FreeAimKind::Start, 0, 0);
+                        for (int i = 1; i <= shots; ++i) {
+                            const uint32_t t = 1500 + static_cast<uint32_t>(i - 1) * 1200;
+                            ev(proto::FreeAimKind::Fire, static_cast<uint16_t>(i), t);
+                            ev(proto::FreeAimKind::Shot, static_cast<uint16_t>(i), t);
+                        }
+                        ev(proto::FreeAimKind::Cancel, 0, 1500 + static_cast<uint32_t>(shots) * 1200);
+                        static const json::Value attack;   // "then" absent : attaque
+                        actp = (*actp)["then"].is_object() ? &(*actp)["then"] : &attack;
+                    }
+                    const json::Value& act = *actp;
                     const std::string type = act["type"].as_string("attack");
                     ac.action_type = static_cast<uint8_t>(type == "skill" ? 5 : type == "item" ? 3 : type == "skip" ? 6 : type == "flee" ? 4 : 1);
                     ac.secondary = act["skill"].is_string() ? act["skill"].as_string() : act["item"].as_string();
