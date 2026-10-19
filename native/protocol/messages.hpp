@@ -13,13 +13,13 @@
 
 namespace e33::proto {
 
-inline constexpr uint16_t kProtocolVersion = 1;
+inline constexpr uint16_t kProtocolVersion = 3;   // v2 : AiDraws ; v3 : graine de combat + Draws (D10)
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
 enum class MsgType : uint16_t {
     Hello = 1, Welcome = 2, Reject = 3, Bye = 4, Ping = 5, Pong = 6,
     BattleStart = 20, TurnStart = 21, ActionCommand = 22, ActionResult = 23,
-    DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27,
+    DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, Draws = 28,
 };
 
 const char* type_name(MsgType t);
@@ -52,6 +52,7 @@ struct BattleStart {
     uint32_t battle_id = 0;
     std::string encounter;
     std::vector<SpotOwner> owners;        // qui contrôle quel héros
+    uint64_t rng_seed = 0;                // graine des tirages de gameplay (D10)
 };
 enum class ActorKind : uint8_t { Hero = 0, Enemy = 1 };
 struct TurnStart {
@@ -99,9 +100,15 @@ struct DefenseResult {                    // client -> hôte : résolu localemen
 };
 struct StateHash { uint32_t battle_id = 0; uint32_t turn = 0; uint64_t hash = 0; };
 struct BattleEnd { uint32_t battle_id = 0; uint8_t result = 0; };
+struct Draw { uint32_t key = 0; uint16_t rank = 0; double value = 0; };   // flux (appelant BP + fonction), rang dans le tour
+struct Draws {                            // hôte -> clients : tirages de gameplay faits pendant un tour (vérification D10)
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    std::vector<Draw> draws;
+};
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
-                             ActionResult, DefenseRequest, DefenseResult, StateHash, BattleEnd>;
+                             ActionResult, DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

@@ -94,3 +94,41 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Détection de désync** : à chaque début de tour, `StateHash` = FNV-1a 64 de (PV arrondis, PA, bouclier, mort) des héros puis des ennemis, dans l'ordre des emplacements, + acteur courant. En cas d'écart : log détaillé des deux états puis resynchronisation complète depuis l'hôte (phase 3).
 
 **Hors phase 2** : forcer l'IA ennemie du client sur le choix de l'hôte (`PerformActionByAI`), compétences, objets, buffs — phase 3.
+
+---
+
+## D9 — Décisions de l'IA ennemie : l'hôte tire, les clients rejouent les tirages (2026-10-19, à implémenter en phase 3)
+
+**Constat** : pas de `FRandomStream` ; l'IA d'un ennemi choisit sa compétence par `KismetMathLibrary::RandomIntegerInRange` appelé depuis son propre Blueprint, et sa cible via `FL_TargetingHelpers_C:GetRandomAliveHero` (`Array_Random`). Les tirages cosmétiques (VFX, caméra, répliques) utilisent le même générateur global, en nombre variable selon la machine → impossible de simplement « seeder » le RNG.
+
+**Décision** : intercepter les fonctions de tirage natives (`RandomIntegerInRange`, `RandomInteger`, `RandomFloat(InRange)`, `RandomBool*`) **et** les helpers de ciblage BP (`GetRandomAliveHero`, `AcquireTargetRandomHero`, `GetRandomEnemy`) en post-hook, et filtrer par **appelant** (objet du cadre de script : un combattant, un skill script, un `BP_BattleDamages`) :
+- hôte : enregistre chaque tirage de gameplay (appelant, fonction, n°, valeur) et l'envoie avec le tour ;
+- client : remplace la valeur retournée par celle de l'hôte, au même rang pour le même appelant (attente bornée si elle n'est pas encore arrivée) ;
+- tests : un scénario peut imposer une séquence de tirages → runs reproductibles à l'identique.
+
+**Pourquoi pas forcer directement la compétence** : il faudrait connaître les événements `Skill_*` de chaque ennemi (des centaines de BP). Rejouer les tirages est générique : même état + mêmes tirages ⇒ même décision.
+
+**Critère de fin de phase 1 en attendant** : même *verdict* sur 3 runs (toutes les vérifications vertes, ordres de défense tous obéis), pas mêmes compteurs.
+
+---
+
+## D10 — Tirages de gameplay : graine de l'hôte + flux par appelant, sans attente réseau (2026-10-19, amende D9)
+
+**Constats (traces `rng_trace`, run hôte du 2026-10-19 10:30)** :
+- Un combat de 6 tours fait environ 450 appels aux fonctions de tirage. L'immense majorité est cosmétique : AnimBP (visage, `ABP_Battle_Global`), sons (`BP_Audio_Spline_Random*`), répliques (`BP_BattleLineGatherer_C`), caméra (`AC_jRPG_DynamicCameraManager_C`), FX. Leur nombre varie d'une machine à l'autre.
+- Les tirages de gameplay viennent de quelques appelants : l'IA ennemie (`PerformActionByAI` → `RandomIntegerInRange` dans l'ubergraph de l'ennemi, 1 par tour ennemi), les critiques (`BP_BattleDamages_C:RollCriticalHit`, à chaque coup), les effets de Luminas (`BP_LU_*:ProcessDealtRawDamages`) et l'activation de buffs (`AC_jRPG_CharacterBattleStats_C:ActivateBuff`).
+- Avec D9 tel quel, le client attendrait les valeurs de l'hôte **en bloquant le thread de jeu**. Or, quand c'est le client qui attaque, il joue l'action *avant* l'hôte, donc chaque jet de critique coûterait environ RTT/2 de gel. C'est inacceptable : la raison d'être du projet est le zéro latence.
+
+**Décision** :
+- L'hôte choisit une **graine** par combat (dans `BattleStart`, protocole v3 ; `-e33seed=N` pour des runs reproductibles).
+- Un tirage est « de gameplay » selon son premier appelant BP (liste ci-dessus). Les autres ne sont pas touchés.
+- Chaque tirage de gameplay appartient à un **flux** = `Classe:Fonction BP:Fonction de tirage` (+ n° d'ennemi). Sa valeur vaut `f(graine, tour, flux, rang dans le tour)` et elle est convertie selon la fonction (`Min`/`Max`/`Weight` lus dans le cadre). Elle **remplace** le résultat natif, sur l'hôte comme sur les clients.
+- Le nombre variable de tirages cosmétiques ne décale donc rien, et personne n'attend le réseau.
+- **Vérification** : l'hôte publie chaque tirage (`Draws` : flux, rang, valeur). À chaque début de tour, le client compare les tirages du tour précédent ; tout écart (`coop_draw_mismatch`) fait échouer le test et nomme le flux fautif.
+- L'hôte reste l'autorité : c'est lui qui choisit la graine, et ses PV écrasent toujours ceux des clients (`ActionResult`). Un écart de PV n'est plus silencieux : `hp_overrides` doit valoir 0 côté client.
+
+**Limites connues** :
+- `Array_Random` (ciblage `GetRandomAliveHero`, variantes d'anim dans l'ubergraph des personnages) n'est pas encore remplacé : sa sortie est un élément de tableau générique. À traiter en phase 3 (avec 1 seul héros, sans effet).
+- La liste des appelants de gameplay sera complétée au fil des compétences (phase 3).
+
+**Remise en cause si** : un tirage de gameplay dépend d'un appelant que l'on ne sait pas classer de façon stable, ou si les ordres d'appel dans un même flux diffèrent entre machines (détecté immédiatement par `coop_draw_mismatch`).

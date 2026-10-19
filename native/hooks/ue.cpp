@@ -249,6 +249,16 @@ UObject* read_param_object(UnrealScriptFunctionCallableContext& ctx, UFunction* 
     return *static_cast<UObject**>(p->ContainerPtrToValuePtr<void>(locals));
 }
 
+void* param_address(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, int* size)
+{
+    if (!fn) return nullptr;
+    FProperty* p = fn->FindProperty(FName(name, FNAME_Find));
+    void* locals = ctx.TheStack.Locals();
+    if (!p || !locals) return nullptr;
+    if (size) *size = p->GetSize();
+    return p->ContainerPtrToValuePtr<void>(locals);
+}
+
 std::optional<int64_t> read_param_int(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name)
 {
     if (!fn) return std::nullopt;

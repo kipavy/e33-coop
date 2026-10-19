@@ -29,6 +29,11 @@
 #include "minijson.hpp"
 #include "transport.hpp"
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#include <timeapi.h>
+
 using namespace e33;
 
 namespace {
@@ -218,7 +223,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                 }
             }
             link->update(now_s());
-            if (link->timed_out(now_s(), 30.0)) { log.write("error", JsonObj().add("what", "client timed out")); break; }
+            // Le client ne répond pas pendant un chargement de niveau (thread de jeu bloqué) : marge large.
+            if (link->timed_out(now_s(), 120.0)) { log.write("error", JsonObj().add("what", "client timed out")); break; }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -232,6 +238,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
 
 int main(int argc, char** argv)
 {
+    timeBeginPeriod(1);   // sommeils de 1 ms réels (sinon ~15 ms)
     Args a;
     if (argc < 2) { std::fprintf(stderr, "usage: fakepeer client|host [options]\n"); return 2; }
     a.mode = argv[1];

@@ -21,7 +21,7 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $run = Join-Path $repo "runs\$stamp-$Name"
 New-Item -ItemType Directory -Force $run | Out-Null
 Copy-Item $scenario (Join-Path $run "scenario.json")
-function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Output $line; Add-Content (Join-Path $run "runner.log") $line }
+function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Host $line; Add-Content (Join-Path $run "runner.log") $line }
 
 if (-not $NoReset) {
     # Pas de mod d'exploration pendant les tests : seul E33Coop tourne.
@@ -38,11 +38,15 @@ function Start-FakePeer {
     $peerArgs = @($sc.fakepeer.args | ForEach-Object { $_.Replace("{repo}", $repo).Replace("{run}", $run) }) + @("--log", (Join-Path $run "fakepeer.jsonl"))
     $quoted = $peerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
     Log "démarrage du faux pair : $fp $($quoted -join ' ')"
-    return Start-Process $fp -ArgumentList $quoted -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $run "fakepeer.out") -RedirectStandardError (Join-Path $run "fakepeer.err")
+    $p = Start-Process $fp -ArgumentList $quoted -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $run "fakepeer.out") -RedirectStandardError (Join-Path $run "fakepeer.err")
+    # Ouvrir le handle tout de suite : sinon ExitCode reste vide une fois le processus terminé.
+    $null = $p.Handle
+    return $p
 }
 if ($sc.fakepeer -and $sc.fakepeer.start -ne "after_game") { $peer = Start-FakePeer; Start-Sleep -Seconds 1 }
 
-$gameArgs = @("-windowed", "-ResX=1280", "-ResY=720", "-nosound", "-e33test=`"$scenario`"", "-e33run=`"$run`"")
+$gameArgs = @("-windowed", "-ResX=1280", "-ResY=720", "-e33test=`"$scenario`"", "-e33run=`"$run`"")
+if (-not $sc.sound) { $gameArgs += "-nosound" }   # "sound": true pour les tests manuels (timing des parades)
 if ($sc.launch_args) { $gameArgs += @($sc.launch_args) }
 if ($ExtraArgs) { $gameArgs += $ExtraArgs }
 Log "lancement : steam -applaunch 1903340 $($gameArgs -join ' ')"
@@ -61,11 +65,25 @@ else {
     if ($sc.fakepeer -and $sc.fakepeer.start -eq "after_game") { $peer = Start-FakePeer }
     $result = Join-Path $run "result.json"
     $status = $null
+    $nextShot = 0.0
+    if ($sc.shots_every_s) { New-Item -ItemType Directory -Force (Join-Path $run "shots") | Out-Null }
     while (-not $status) {
         Start-Sleep -Seconds 2
+        # "shots_every_s": N -> capture de la fenêtre du jeu toutes les N secondes (shots\tNNN.png)
+        if ($sc.shots_every_s -and ((Get-Date) - $t0).TotalSeconds -ge $nextShot) {
+            $nextShot += [double]$sc.shots_every_s
+            $shotPath = Join-Path $run ("shots\t{0:D3}.png" -f [int]((Get-Date) - $t0).TotalSeconds)
+            # processus séparé et non bloquant (Add-Type répété dans une même session peut échouer)
+            Start-Process powershell -WindowStyle Hidden -ArgumentList @("-NoProfile", "-File", "`"$(Join-Path $repo 'tools\dev\screenshot.ps1')`"", "-Out", "`"$shotPath`"") | Out-Null
+        }
         if (Test-Path $result) { Start-Sleep -Seconds 1; $status = "finished" }
         elseif ($game.HasExited) { $status = "game_exited" }
-        elseif (((Get-Date) - $t0).TotalSeconds -gt $TimeoutSec) { $status = "timeout" }
+        else {
+            # Crash : le jeu affiche une boîte « Fatal error » qui attend un clic. On note son texte et on la ferme.
+            $dlg = & (Join-Path $repo "tools\dev\close-crash-dialog.ps1") -ProcessId $game.Id -Out (Join-Path $run "crash-dialog.txt")
+            if ($dlg) { $dlg | ForEach-Object { Log "dialogue du jeu fermé : $_" }; $status = "crashed" }
+            elseif (((Get-Date) - $t0).TotalSeconds -gt $TimeoutSec) { $status = "timeout" }
+        }
     }
     if (-not $game.HasExited) {
         if ($status -ne "finished") {
@@ -89,6 +107,15 @@ Copy-Item (Join-Path $ue "UE4SS.log") $run -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $env:LOCALAPPDATA "Sandfall\Saved\Logs\Sandfall.log") (Join-Path $run "game.log") -ErrorAction SilentlyContinue
 $crash = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Sandfall\Saved\Crashes") -Directory -ErrorAction SilentlyContinue | Where-Object LastWriteTime -gt $t0
 if ($crash) { Log "CRASH détecté : $($crash.FullName -join ', ')"; $crash | ForEach-Object { Copy-Item $_.FullName (Join-Path $run "crash-$($_.Name)") -Recurse } }
+# Dumps écrits par UE4SS (ue4ss\crash_*.dmp) : copiés dans le run et résumés (exception, module fautif).
+$dumps = Get-ChildItem $ue -Filter "crash_*.dmp" -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -gt $t0
+$dumpInfo = @()
+foreach ($d in $dumps) {
+    Log "dump de crash UE4SS : $($d.Name)"
+    Move-Item $d.FullName $run -Force
+    try { $dumpInfo += & (Join-Path $repo "tools\dev\dmp-info.ps1") (Join-Path $run $d.Name) -StackWords 0 } catch { $dumpInfo += "dmp-info : $_" }
+}
+if ($dumpInfo) { Set-Content (Join-Path $run "crash-summary.txt") $dumpInfo -Encoding utf8 }
 
 # Verdict
 $ok = $false
@@ -107,6 +134,8 @@ if ($res) {
         foreach ($c in $res.checks) { $report += "| $($c.name) | $($c.expected) | $($c.actual) | $(if ($c.ok) { 'oui' } else { 'NON' }) |" } }
 }
 if ($peer) { $report += "- Faux pair : code de sortie $peerCode$(if ($peerCode -ne 0) { ' (ÉCHEC)' })" }
+if (Test-Path (Join-Path $run "crash-dialog.txt")) { $report += "- **Crash** : " + ((Get-Content (Join-Path $run "crash-dialog.txt")) -join " / ") }
+if ($dumpInfo) { $report += "- Dump : " + ($dumpInfo[0..1] -join " ; ") }
 $shots = Get-ChildItem (Join-Path $run "shots") -File -ErrorAction SilentlyContinue
 if ($shots) { $report += ""; $report += "Captures : " + (($shots | ForEach-Object Name) -join ", ") }
 Set-Content (Join-Path $run "report.md") $report -Encoding utf8
