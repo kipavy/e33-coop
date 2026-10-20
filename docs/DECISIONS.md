@@ -187,3 +187,19 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 - Filet de sécurité : l'empreinte des personnages entre dans le hash d'état d'exploration ; un écart persistant est réparé par un nouvel instantané.
 
 > Idée notée le 2026-10-20 (Killian), **pas retenue pour l'instant** : exploration libre (chacun déplace son personnage, avatars des autres joueurs visibles, combat lancé par n'importe qui avec téléportation des autres, regroupement aux transitions et cinématiques). Faisable mais de la taille d'une phase entière (ennemis du monde à synchroniser) : à reconsidérer après la phase 6.
+
+---
+
+## D14 — Robustesse de la session (2026-10-20, phase 5)
+
+**Décision** :
+1. **Lien** : chaque `Link` tire une **époque** ; un changement d'époque à la même adresse = le pair a redémarré (nouveau processus, ou même compte Steam). Pendant un chargement (thread de jeu bloqué 30 à 60 s), un thread à part envoie des paquets « occupé » (`ack = 0xFFFFFFFF`, aucun message). Perte : 15 s de silence total, ou 300 s de seuls « occupé ». Les 6 premiers octets d'un paquet (magic, protocole) ne changeront plus : un pair d'une autre version reçoit un paquet de la nôtre et affiche les deux versions.
+2. **Départ d'un client** : l'hôte le retire, reprend ses héros (`Owners`), joue lui-même un tour en attente, prévient les autres (`Roster`, message). Retour = chemin « rejoindre » (`JoinWait` en combat, instantané après ; un instantané devenu périmé par un combat commencé pendant le chargement est refait).
+3. **Départ de l'hôte** : `Bye`, ou silence → fin de session côté client, message clair, retour au menu principal (la partie chargée est celle de l'hôte). Pas de migration d'hôte (brief).
+4. **Démarrage coordonné** : l'hôte tient son premier tour en pause jusqu'au `BattleReady` de chaque client de la partie. Pause du jeu partagée entre plusieurs raisons (barrière, pause d'un joueur, démarrage) et **réappliquée** si le jeu l'enlève (fin de cinématique).
+5. **Hash d'exploration** (or, inventaire, objets utilisés, ennemis vaincus, drapeaux, GPE, cinématiques et dialogues vus) au calme ; deux écarts de suite → nouvel instantané. Filet de sécurité, pas mécanisme principal.
+6. **Builds par état** (D13) : empreinte de `SaveCharacterState` hors menu ; état sérialisé par le jeu (save réduite aux personnages) ; propriétaire vérifié par l'hôte ; modification d'un personnage d'un autre joueur annulée avec l'état de l'hôte. Pourquoi pas le rejeu des clics : les menus modifient parfois les données directement (Luminas).
+7. **Ressources communes par variations** (D13 option 1) : or, quantités, niveaux d'équipement relevés au calme ; une variation sans événement rejoué entre deux relevés est locale (achat, amélioration) et part en `EconomyDelta` ; l'hôte vérifie qu'elle est possible, l'applique avec les fonctions du jeu et la relaie ; sinon refus et resynchro de l'auteur.
+8. **Textes** : cartes « toast » du jeu (`WBP_ToastCard`), une persistante pour les indicateurs, une par message ; table FR/EN dans `native/ui`.
+
+**Remise en cause si** : un achat coïncide souvent avec un événement rejoué (la variation est alors absorbée et la resynchro reprend l'état de l'hôte) ; ou si `LoadCharacterState` ne reproduit plus l'empreinte de l'émetteur (compteur `build_hash_mismatches`).
