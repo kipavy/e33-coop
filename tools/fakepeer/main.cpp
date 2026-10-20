@@ -617,6 +617,11 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                         log.write("snapshot_sent", JsonObj().add("size", static_cast<int64_t>(bytes.size())));
                     }
                     ++cursor;
+                } else if (std::holds_alternative<proto::NarrativeState>(l.msg) || std::holds_alternative<proto::PauseState>(l.msg) ||
+                           std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg)) {
+                    // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
+                    // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
+                    ++cursor;
                 } else {
                     const auto want = proto::type_of(l.msg);
                     auto it = std::find_if(client_msgs.begin(), client_msgs.end(), [&](const proto::Message& c) { return proto::type_of(c) == want; });
