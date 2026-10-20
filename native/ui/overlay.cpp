@@ -66,15 +66,15 @@ bool make_text(const std::string& s, std::vector<uint8_t>& out)
 
 UObject* create_card(UObject* pc, const std::string& text, double duration, int slot)
 {
-    UObject* cls = ue::find_object(kCardClass);
+    UObject* cls = game::load_asset(kCardClass);
     UObject* wbl = ue::find_object(STR("/Script/UMG.Default__WidgetBlueprintLibrary"));
-    if (!cls || !wbl) return nullptr;
+    if (!cls || !wbl) { log().write("ui_overlay_error", JsonObj().add("what", "class").add("cls", cls != nullptr).add("wbl", wbl != nullptr)); return nullptr; }
     ue::Call create(wbl, STR("Create"));
     if (!create) return nullptr;
     create.set_object(STR("WorldContextObject"), pc).set_object(STR("WidgetType"), cls).set_object(STR("OwningPlayer"), pc);
     if (!create.invoke()) return nullptr;
     UObject* w = create.out_object(STR("ReturnValue"));
-    if (!w) return nullptr;
+    if (!w) { log().write("ui_overlay_error", JsonObj().add("what", "Create returned null")); return nullptr; }
     ue::set_double(w, STR("Duration"), duration);
     ue::Call add(w, STR("AddToViewport"));
     if (add) add.set_int(STR("ZOrder"), 500 + slot).invoke();
@@ -87,7 +87,10 @@ UObject* create_card(UObject* pc, const std::string& text, double duration, int 
     }
     std::vector<uint8_t> ft;
     ue::Call init(w, STR("Init"));
-    if (init && make_text(text, ft)) init.set_raw(STR("Text"), ft.data()).set_int(STR("Theme"), 1).invoke();
+    const bool text_ok = make_text(text, ft);
+    if (init && text_ok) init.set_raw(STR("Text"), ft.data()).set_int(STR("Theme"), 1).invoke();
+    log().write("ui_overlay_card", JsonObj().add("slot", slot).add("widget", ue::short_name(w)).add("init", static_cast<bool>(init)).add("text_ok", text_ok)
+                                         .add("text_size", static_cast<int64_t>(ft.size())));
     return w;
 }
 

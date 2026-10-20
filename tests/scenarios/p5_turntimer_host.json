@@ -6,6 +6,7 @@
   "timeout_s": 700,
   "wait_players": 1,
   "max_turns": 60,
+  "shots_every_s": 3,
   "defense": ["fail"],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=0:1", "-e33seed=16250036901998647475", "-e33turntimer=8", "-e33lang=fr"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_timer.json", "--timeout", "700"] },

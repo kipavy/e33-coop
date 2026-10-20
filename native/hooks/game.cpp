@@ -33,6 +33,8 @@ UObject* g_gi = nullptr;
 std::wstring g_last_encounter;
 std::vector<std::wstring> g_last_party;
 
+} // namespace
+
 UObject* load_asset(const wchar_t* object_path)
 {
     if (UObject* o = ue::find_object(object_path)) return o;
@@ -42,6 +44,8 @@ UObject* load_asset(const wchar_t* object_path)
     if (!data.PackageName().GetComparisonIndex()) return nullptr;
     return UAssetRegistryHelpers::GetAsset(data);
 }
+
+namespace {
 
 bool set_member_object(UStruct* st, void* base, const wchar_t* name, UObject* v)
 {

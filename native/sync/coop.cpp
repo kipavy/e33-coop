@@ -166,6 +166,7 @@ struct Battle {
     // Minuteur de tour (option, 0 = aucun)
     uint16_t turn_timer_s = 0;
     std::set<std::pair<uint32_t, int>> forced;             // actions imposées par l'hôte (minuteur écoulé)
+    double timer_elapsed = 0;                              // temps de jeu du tour (hors pauses et attente des joueurs)
 };
 
 struct State {
@@ -982,6 +983,7 @@ void begin_turn_common()
     s.battle.action_wait_logged = false;
     refresh_enemy_spots();
     s.battle.turn_started_at = s.now;
+    s.battle.timer_elapsed = 0;
     s.fa_own = FreeAimOwner{};
     s.fa_rep = FreeAimReplay{};
 }
@@ -2117,7 +2119,7 @@ void run_remote_action()
     if (it == b.commands.end()) {
         // Minuteur de tour (option, désactivé par défaut) : l'hôte impose une attaque automatique au héros du joueur muet.
         if (s.role == Role::Host && b.turn_timer_s > 0 && !game::pause_menu_visible() && !explore::remote_paused()) {
-            const double left = b.turn_timer_s - (s.now - b.turn_started_at);
+            const double left = b.turn_timer_s - b.timer_elapsed;
             ui::set_status("turn", "turn_timer", {player_name(owner_of_spot(spot)), std::to_string(static_cast<int>(std::max(0.0, std::ceil(left))))});
             if (left <= 0) {
                 proto::ActionCommand ac;
@@ -2237,6 +2239,7 @@ void tick(double dt)
             log().write("coop_battle_hold", JsonObj(), b.turn);
         }
     }
+    if (s.battle.active && !s.battle.hold && !explore::remote_paused() && !game::pause_menu_visible()) s.battle.timer_elapsed += dt;
     if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
     explore::tick(s.now);

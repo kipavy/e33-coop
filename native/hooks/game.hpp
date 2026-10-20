@@ -30,6 +30,7 @@ enum ActionType : int { ActNone = 0, ActAttack = 1, ActDefend = 2, ActItem = 3, 
 enum BattleEnd : int { EndInvalid = 0, EndVictory = 1, EndDefeat = 2, EndNeutral = 3 };
 
 UObject* gi();                // BP_jRPG_GI_Custom_C (persistant)
+UObject* load_asset(const wchar_t* object_path);   // objet par chemin, chargé par le registre d'assets s'il ne l'est pas encore
 UObject* controller();        // BP_jRPG_Controller_World_C du niveau courant (nul au menu)
 UObject* battle_manager();
 UObject* save_manager();
