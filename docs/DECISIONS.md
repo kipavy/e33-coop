@@ -175,3 +175,13 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 8. **Tests** : l'enregistrement d'une session ne contient pas les octets de la save (repo public, données de Killian) : le faux hôte lit l'instantané depuis `.tools/testsaves/` et le reprend du hash noté dans `SaveOffer`.
 
 **Remise en cause si** : la conduite du pion suiveur dérive trop (escaliers, sauts, escalade) : téléportation plus fréquente ; ou si rejouer une interaction chez un suiveur produit un effet différent de l'hôte (détecté par un hash d'état d'exploration : or, objets, drapeaux).
+
+---
+
+## D13 — Builds et ressources communes en coop (2026-10-20, phase 5, choix de Killian)
+
+**Décision** :
+- Chaque joueur gère les personnages qu'il contrôle (niveau, attributs, compétences, équipement, Luminas). Répartition hors combat = même règle qu'en combat (k-ième personnage de l'équipe au k-ième joueur, l'hôte garde le reste), réattribuable.
+- Chaque joueur ouvre ses menus sur sa propre instance. Ses opérations (attribuer un point, débloquer/équiper une compétence, équiper un objet…) sont envoyées à l'hôte, qui vérifie (propriétaire, conditions du jeu) puis les rejoue chez tout le monde, comme les décisions de combat (D11). Une opération sur un personnage d'un autre joueur est refusée et annulée chez son auteur.
+- L'inventaire, l'or et les matériaux sont **communs** (save de l'hôte). **Option 1 retenue par Killian** : tout le monde peut dépenser (améliorations d'armes, achats, consommables) ; l'hôte arbitre dans l'ordre d'arrivée, une dépense devenue impossible est refusée et annulée.
+- Filet de sécurité : l'empreinte des personnages entre dans le hash d'état d'exploration ; un écart persistant est réparé par un nouvel instantané.
