@@ -191,6 +191,9 @@ struct State {
     std::map<std::string, uint8_t> owner_overrides;        // -e33owners=0:1,Lune:1  (emplacement ou nom : joueur)
     DWORD game_thread = 0;
     std::optional<proto::BattleStart> pending_start;       // client : combat de l'hôte, lancé une fois le monde prêt
+    std::optional<proto::BattleStart> last_start;          // client : dernier BattleStart (le StartBattle local peut suivre son lancement)
+    std::optional<proto::BattleStart> early_start;         // client : avis précoce de l'hôte (battle_id 0)
+    double early_start_at = -1;
     double world_ready_s = 0;
     double next_trigger_try = 0;
     double action_delay_s = 1.5;                           // délai minimal (depuis le début du tour) avant d'exécuter l'action d'un héros d'un autre joueur
@@ -764,7 +767,14 @@ void handle(Peer& p, proto::Message& m)
     }
     if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
         // Le combat ne démarre qu'une fois le monde local prêt (voir tick) : l'hôte peut être en avance.
+        if (bs->battle_id == 0) {   // avis précoce (StartBattle de l'hôte) : ennemi, équipe, engagement ; le vrai suit
+            s.early_start = *bs;
+            s.early_start_at = s.now;
+            log().write("coop_battle_notice_received", JsonObj().add("enemy", bs->world_enemy).add("engage", static_cast<int>(bs->engage)));
+            return;
+        }
         s.pending_start = *bs;
+        s.last_start = *bs;
         s.battle = Battle{};   // remis à zéro dès maintenant : les messages suivants de l'hôte s'y accumulent
         s.battle.id = bs->battle_id;
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
@@ -1493,8 +1503,20 @@ void subscribe()
     // le lance) : même équipe et même engagement que chez l'hôte. Vu le 2026-10-21 : attaque surprise de l'hôte vue
     // comme « pris par surprise » chez le client, et combat avec l'ancienne équipe (Verso seul).
     bus.pre(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Enemy_World_Base_Seamless.BP_jRPG_Enemy_World_Base_Seamless_C:StartBattle", [](HookCtx& ctx, UFunction* f) {
-        if (s.role != Role::Client || !s.pending_start) return;
-        const proto::BattleStart& bs = *s.pending_start;
+        if (s.role != Role::Client) return;
+        // Le pion suiveur peut engager avant que le mod lance le combat : le jeu se dit « en combat » (transition) et le
+        // mod marque le combat lancé, mais StartBattle n'arrive qu'après (vu le 2026-10-21 : ~0,4 s plus tard). On
+        // garde donc le dernier BattleStart tant que ce combat n'a pas commencé son premier tour.
+        const proto::BattleStart* p = s.pending_start ? &*s.pending_start
+                                    : (s.last_start && s.last_start->battle_id == s.battle.id && s.battle.turn == 0 && !s.battle.finalized) ? &*s.last_start
+                                    : (s.early_start && s.now - s.early_start_at < 20.0) ? &*s.early_start
+                                    : nullptr;
+        if (!p) {
+            bump("world_battle_without_host_start");
+            log().write("coop_world_battle_early", JsonObj().add("enemy", ue::short_name(ctx.Context)));
+            return;
+        }
+        const proto::BattleStart& bs = *p;
         const std::string enemy = ue::short_name(ctx.Context);
         if (bs.world_enemy.empty() || enemy != bs.world_enemy) {
             bump("world_battle_other_enemy");
@@ -1508,6 +1530,19 @@ void subscribe()
             *e = bs.engage;
             bump("engages_forced");
         }
+    });
+    // Hôte : avis précoce dès le lancement d'un combat de la carte (le BattleStart complet ne part qu'au premier tour,
+    // après l'animation d'entrée ; le pion suiveur du client touchait l'ennemi ~3 s avant, vu le 2026-10-21).
+    bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Enemy_World_Base_Seamless.BP_jRPG_Enemy_World_Base_Seamless_C:StartBattle", [](HookCtx& ctx, UFunction* f) {
+        if (s.role != Role::Host || s.battle.active) return;
+        proto::BattleStart n;
+        n.battle_id = 0;
+        n.world_enemy = ue::short_name(ctx.Context);
+        n.engage = static_cast<uint8_t>(ue::read_param_int(ctx, f, STR("EngagementType")).value_or(0));
+        n.party = game::party_names();
+        broadcast(n);
+        bump("battle_notices_sent");
+        log().write("coop_battle_notice", JsonObj().add("enemy", n.world_enemy).add("engage", static_cast<int>(n.engage)));
     });
 
     // Client : le personnage qui joue est celui de l'hôte, pas celui que le jeu local a calculé. L'ordre dépend de

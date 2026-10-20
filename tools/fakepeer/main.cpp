@@ -272,6 +272,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++counts["join_waits"];
             } else if (std::get_if<proto::Owners>(&m)) {
                 ++counts["owner_updates"];
+            } else if (auto* notice = std::get_if<proto::BattleStart>(&m); notice && notice->battle_id == 0) {
+                ++counts["battle_notices"];   // avis précoce de l'hôte : le vrai BattleStart suit
             } else if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
                 owners = bs->owners;
                 ++counts["battle_starts"];
