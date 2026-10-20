@@ -894,6 +894,18 @@ std::vector<std::string> party_names()
     return out;
 }
 
+bool set_party_names(const std::vector<std::string>& names, std::string& err)
+{
+    UObject* mgr = ue::get_object(controller(), STR("AC_jRPG_CharactersManager"));
+    if (!mgr) { err = "no characters manager"; return false; }
+    ue::Call c(mgr, STR("SetParty"));
+    if (!c) { err = "SetParty not found"; return false; }
+    std::vector<std::wstring> wide;
+    for (auto& n : names) wide.push_back(ue::from_utf8(n));
+    c.set_fname_array(STR("InputPin"), wide).invoke();
+    return true;
+}
+
 UObject* character_data(const std::string& wanted)
 {
     std::vector<std::pair<void*, void*>> pairs;

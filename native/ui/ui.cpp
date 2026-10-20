@@ -21,6 +21,9 @@ struct Entry { const char* key; const char* fr; const char* en; };
 // Table de traduction. Les textes restent courts : ils s'affichent en surimpression pendant le jeu.
 constexpr Entry kTexts[] = {
     {"turn_of", "Tour de {0}", "{0}'s turn"},
+    {"keys_host", "Coop : F7 inviter des amis · F8 prendre la main · F6 (hors combat) changer le joueur d'un personnage",
+                  "Coop: F7 invite friends · F8 take control · F6 (out of battle) change a character's player"},
+    {"keys_client", "Coop : F8 prendre la main", "Coop: F8 take control"},
     {"your_turn", "À vous de jouer", "Your turn"},
     {"turn_timer", "Tour de {0} : {1} s", "{0}'s turn: {1} s"},
     {"turn_forced", "Temps écoulé : {0} attaque automatiquement", "Time is up: {0} attacks automatically"},

@@ -156,6 +156,8 @@ bool skip_cinematic();
 // --- Builds des personnages (phase 5, D13) ---
 std::vector<std::string> character_names();   // personnages connus (GI.CharactersCollection), triés
 std::vector<std::string> party_names();       // équipe courante, dans l'ordre (GI.CurrentParty)
+// Remplace l'équipe courante (CharactersManager du contrôleur : SetParty).
+bool set_party_names(const std::vector<std::string>& names, std::string& err);
 UObject* character_data(const std::string& name);
 // Empreinte du build (SaveCharacterState sans PV/PM).
 bool character_build(const std::string& name, uint64_t& hash, std::string* summary = nullptr);

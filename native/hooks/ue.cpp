@@ -238,6 +238,19 @@ Call& Call::set_object_array(const wchar_t* name, const std::vector<UObject*>& v
     return *this;
 }
 
+Call& Call::set_fname_array(const wchar_t* name, const std::vector<std::wstring>& v)
+{
+    void* d = param_ptr(name);
+    if (!d) return *this;
+    auto* arr = new (d) FScriptArray{};
+    if (!v.empty()) {
+        arr->AddZeroed(static_cast<int32>(v.size()), static_cast<int32>(sizeof(FName)), static_cast<uint32>(alignof(FName)));
+        auto* data = static_cast<FName*>(arr->GetData());
+        for (size_t i = 0; i < v.size(); ++i) data[i] = FName(v[i].c_str(), FNAME_Add);
+    }
+    return *this;
+}
+
 bool Call::invoke()
 {
     if (!fn_ || !target_) return false;

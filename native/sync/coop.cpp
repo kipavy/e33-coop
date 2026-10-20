@@ -1070,7 +1070,7 @@ void host_turn_start(UObject* actor)
                 bs.enemy_global_id = gid;
                 bs.engage = static_cast<uint8_t>(engage);
                 bs.world_enemy = explore::take_world_enemy();
-                bs.party.clear();
+                bs.party = game::party_names();   // équipe réelle : celle du client peut être restée l'ancienne
                 bump("world_battles");
             }
         }
@@ -1470,10 +1470,45 @@ void on_turn_start(UObject* actor)
     }
 }
 
+// Client : équipe de l'hôte imposée avant un combat (le joueur de l'hôte a pu la changer depuis l'instantané).
+void apply_host_party(const proto::BattleStart& bs)
+{
+    if (bs.party.empty() || game::party_names() == bs.party) return;
+    std::string err, mine;
+    for (auto& n : game::party_names()) mine += (mine.empty() ? "" : ",") + n;
+    std::string host;
+    for (auto& n : bs.party) host += (host.empty() ? "" : ",") + n;
+    const bool ok = game::set_party_names(bs.party, err);
+    const bool same = ok && game::party_names() == bs.party;
+    bump(same ? "parties_applied" : "party_apply_failures");
+    log().write("coop_party_applied", JsonObj().add("local", mine).add("host", host).add("ok", same).add("err", err));
+}
+
 void subscribe()
 {
     using game::path::fn;
     auto& bus = HookBus::get();
+
+    // Client : combat lancé par un ennemi de la carte (le nôtre, ou notre pion suiveur qui l'a touché avant que le mod
+    // le lance) : même équipe et même engagement que chez l'hôte. Vu le 2026-10-21 : attaque surprise de l'hôte vue
+    // comme « pris par surprise » chez le client, et combat avec l'ancienne équipe (Verso seul).
+    bus.pre(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Enemy_World_Base_Seamless.BP_jRPG_Enemy_World_Base_Seamless_C:StartBattle", [](HookCtx& ctx, UFunction* f) {
+        if (s.role != Role::Client || !s.pending_start) return;
+        const proto::BattleStart& bs = *s.pending_start;
+        const std::string enemy = ue::short_name(ctx.Context);
+        if (bs.world_enemy.empty() || enemy != bs.world_enemy) {
+            bump("world_battle_other_enemy");
+            log().write("coop_world_battle_other_enemy", JsonObj().add("local", enemy).add("host", bs.world_enemy));
+            return;
+        }
+        apply_host_party(bs);
+        int size = 0;
+        if (auto* e = static_cast<uint8_t*>(ue::param_address(ctx, f, STR("EngagementType"), &size)); e && size == 1 && *e != bs.engage) {
+            log().write("coop_engage_forced", JsonObj().add("local", static_cast<int>(*e)).add("host", static_cast<int>(bs.engage)));
+            *e = bs.engage;
+            bump("engages_forced");
+        }
+    });
 
     // Client : le personnage qui joue est celui de l'hôte, pas celui que le jeu local a calculé. L'ordre dépend de
     // l'initiative, de l'engagement (attaque surprise) et des buffs de vitesse, qui peuvent différer : le 2026-10-20
@@ -2458,6 +2493,16 @@ void tick(double dt)
     }
     pump_network();
     if (s.ended) return;
+    // Rappel des touches du mod tant que le menu pause est ouvert.
+    {
+        static bool keys_shown = false;
+        const bool show = game::pause_menu_visible();
+        if (show != keys_shown) {
+            keys_shown = show;
+            if (show) ui::set_status("keys", s.role == Role::Host ? "keys_host" : "keys_client");
+            else ui::clear_status("keys");
+        }
+    }
     // F6 (hôte, hors combat, fenêtre du jeu au premier plan) : le personnage suivant de l'équipe change de joueur (menu de
     // réattribution du brief, version touche). Diffusé aux clients ; vaut pour les builds et les combats suivants.
     {
