@@ -108,6 +108,10 @@ struct S {
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
 
+// Les événements d'exploration ne concernent que les joueurs entrés dans la partie (hôte : au moins un client
+// entré ; client : instantané chargé, ou session sans « rejoindre » des tests de combat).
+bool sharing();
+
 bool world_ready()
 {
     return game::controller() && !game::map_change_in_progress() && game::explore_pawn() && !game::in_battle();
@@ -442,6 +446,8 @@ void poll_tick()
     }
 }
 
+bool sharing() { return s.host ? joined_players() > 0 : (!s.want_join || s.cj == S::ClientJoin::Joined); }
+
 } // namespace
 
 // --- API --------------------------------------------------------------------------------------------
@@ -521,6 +527,10 @@ bool handle(uint8_t from, const proto::Message& m)
         return true;
     }
     if (auto* pc = std::get_if<proto::PilotChange>(&m)) { if (!s.host) set_pilot(pc->pilot, "host"); return true; }
+    // Client pas encore entré (instantané en cours) : les événements d'exploration ne le concernent pas encore.
+    if (!s.host && !sharing() && (std::holds_alternative<proto::WorldInteract>(m) || std::holds_alternative<proto::DialogueChoice>(m) ||
+                                  std::holds_alternative<proto::MapChange>(m) || std::holds_alternative<proto::PilotState>(m)))
+        return true;
     if (auto* wi = std::get_if<proto::WorldInteract>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
         s.interactions.push_back(*wi);
@@ -586,7 +596,7 @@ void subscribe()
     };
     for (const wchar_t* cls : kInteractables) {
         bus.pre(std::wstring(cls) + L"OnInteractionRequested", [](HookCtx& ctx, UFunction* f) {
-            if (s.replaying || !s.active) return;
+            if (s.replaying || !s.active || !sharing()) return;
             const bool instant = ue::read_param_int(ctx, f, STR("Instant")).value_or(0) != 0;
             const std::string path = object_path(ctx.Context);
             if (!is_pilot()) {
@@ -600,7 +610,7 @@ void subscribe()
         });
     }
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
-        if (s.replaying || !s.active) return;
+        if (s.replaying || !s.active || !sharing()) return;
         const int index = static_cast<int>(ue::read_param_int(ctx, f, STR("ChoiceIndex")).value_or(-1));
         if (!is_pilot()) {
             bump("local_actions_on_follower");
@@ -613,8 +623,7 @@ void subscribe()
         log().write("coop_choice", JsonObj().add("index", index));
     });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:ChangeMap", [](HookCtx&, UFunction*) {
-        if (s.replaying || !s.active || !is_pilot()) return;
-        if (!s.host && s.want_join && s.cj != S::ClientJoin::Joined) return;   // chargement de l'instantané
+        if (s.replaying || !s.active || !is_pilot() || !sharing()) return;   // pas pendant le chargement de l'instantané
         std::string level, tag;
         if (!game::map_destination(level, tag)) return;
         s.net.publish(proto::MapChange{++s.seq, level, tag}, true);

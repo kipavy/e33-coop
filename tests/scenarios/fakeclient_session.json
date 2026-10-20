@@ -1,0 +1,11 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "0.4.0",
+  "gameplay_mods": [],
+  "join": true,
+  "session": true,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "expect": { "snapshots": "1", "pilot_states": ">=40", "map_changes": ">=1", "interactions": ">=1", "choices": ">=1", "world_battles": ">=1" }
+}

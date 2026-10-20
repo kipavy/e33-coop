@@ -1529,6 +1529,16 @@ int connected_players()
 }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
 bool battle_finalized() { return s.battle.finalized; }
+void shutdown(const char* reason)
+{
+    if (s.role == Role::Solo) return;
+    for (auto& p : s.peers) if (p.accepted) send_to(p, proto::Bye{reason ? reason : ""});
+    for (int i = 0; i < 3; ++i) {
+        for (auto& p : s.peers) if (p.link) p.link->update(s.now + 0.3 * (i + 1));
+        Sleep(30);
+    }
+    log().write("session_shutdown", JsonObj().add("reason", reason ? reason : ""));
+}
 void set_local_aim(const double* point)
 {
     if (point) s.local_aim = std::array<double, 3>{point[0], point[1], point[2]};

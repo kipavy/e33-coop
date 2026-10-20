@@ -358,6 +358,7 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         std::fwrite(result.data(), 1, result.size(), f);
         std::fclose(f);
     }
+    coop::shutdown(all ? "test passed" : "test failed");
     set_phase(Phase::Done);
     log().close();
     // Fermeture brutale mais sûre : aucune save n'est écrite (autosave coupée), le résultat est sur disque.

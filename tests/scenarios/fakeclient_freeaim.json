@@ -1,7 +1,7 @@
 {
   "player_name": "FakeClient",
   "game_build": 23765773,
-  "mod_version": "0.3.0",
+  "mod_version": "0.4.0",
   "gameplay_mods": [],
   "actions": [
     { "hero": "Verso", "type": "freeaim", "shots": 3, "target": "enemy:0", "then": { "type": "attack" } },
