@@ -1386,6 +1386,7 @@ void finalize_battle(const char* why)
         if (!b.left) compare_draws(b.turn);
     }
     b.finalized = true;
+    bump("battles_finalized");
     b.active = false;
     set_local_input(true, "battle end");
     ui::clear_status("turn");
@@ -1848,6 +1849,7 @@ void subscribe()
         bus.pre(fn(game::path::BattleMgr, name), [fa_event](HookCtx&, UFunction*) {
             if (!s.fa_own.active) return;
             publish(fa_event(proto::FreeAimKind::Cancel, 0, s.fa_own.point));
+            bump("free_aim_cancels_published");
             s.fa_own.active = false;
         });
     }
@@ -2418,6 +2420,7 @@ bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
             }
             r.done = true;
             r.have_override = false;
+            bump("free_aim_replays_ended");
             log().write("coop_free_aim_end", JsonObj().add("spot", key.second).add("kind", static_cast<int>(e.kind)).add("raycasts", static_cast<int>(r.raycasts)), b.turn);
             return true;
         }
@@ -2432,6 +2435,7 @@ bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
         r.done = true;
         r.have_override = false;
         bump("free_aim_closed_by_action");
+        bump("free_aim_replays_ended");
         log().write("coop_free_aim_end", JsonObj().add("spot", key.second).add("kind", -1).add("raycasts", static_cast<int>(r.raycasts)), b.turn);
     }
     return true;
@@ -2642,6 +2646,7 @@ void tick(double dt)
             publish(e);
             s.fa_own.active = false;
             bump("free_aim_exits_detected");
+            bump("free_aim_cancels_published");
             log().write("coop_free_aim_local_exit", JsonObj().add("spot", s.fa_own.spot), s.battle.turn);
         }
     }

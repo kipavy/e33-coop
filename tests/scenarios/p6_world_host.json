@@ -1,0 +1,27 @@
+{
+  "name": "p6_world_host",
+  "description": "Phase 6 (bugs du premier essai à deux PC, 2026-10-21) : vrai jeu hôte face au faux client qui rejoint. Save TEST_B (Verso seul) ; après l'instantané, l'hôte passe à Maelle, Verso, Monoco (le client garde l'ancienne équipe), puis attaque surprise (engagement 1) sur un ennemi de la carte. Maelle ouvre la visée libre et la quitte par la touche d'annulation (TryCancelFreeAim), puis attaque ; Verso est au faux client ; Monoco fuit. Produit l'enregistrement rejoué par p6_world_client.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 900,
+  "max_turns": 12,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Maelle", "type": "freeaim", "shots": 0, "cancel": "key", "then": { "type": "attack" } },
+    { "hero": "Monoco", "type": "flee" },
+    { "type": "attack" }
+  ],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 3 },
+    { "do": "set_party", "party": ["Maelle", "Verso", "Monoco"] },
+    { "do": "wait", "s": 3 },
+    { "do": "world_battle", "engage": 1 },
+    { "do": "wait_world", "s": 3 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865", "-e33owners=Verso:1"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_session.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "party_changes": "1", "battle_notices_sent": ">=1", "world_battles": ">=1",
+              "actions_freeaim": ">=1", "free_aim_cancels_published": ">=1", "snapshot_errors": "0" }
+}

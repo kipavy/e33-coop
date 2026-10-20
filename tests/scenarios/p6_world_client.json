@@ -1,0 +1,20 @@
+{
+  "name": "p6_world_client",
+  "description": "Phase 6 (bugs du premier essai à deux PC, 2026-10-21) : vrai jeu client face au faux hôte qui rejoue p6_world_host. L'instantané a encore l'ancienne équipe (Verso seul) : le client doit prendre l'équipe et l'engagement de l'hôte, ne jamais lancer de combat lui-même (ennemis passifs), suivre l'ordre des tours de l'hôte, jouer Verso, et fermer la visée libre de Maelle quittée par la touche d'annulation.",
+  "join": true,
+  "timeout_s": 1000,
+  "max_turns": 12,
+  "shots_every_s": 6,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "until": "world_battles", "is": ">=1", "timeout": 600 },
+    { "do": "wait", "until": "battles_finalized", "is": ">=1", "timeout": 400 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p6_world_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p6_world_snapshot.sav", "--paced", "1", "--timeout", "1000"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "world_battles": ">=1", "parties_applied": "1", "party_apply_failures": "0",
+              "world_battle_without_host_start": "0", "world_battle_other_enemy": "0", "actor_mismatches": "0", "actor_wait_timeouts": "0",
+              "free_aim_replays_ended": ">=1", "remote_actions": ">=1", "desyncs": "0" }
+}

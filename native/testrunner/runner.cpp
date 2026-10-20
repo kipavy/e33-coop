@@ -65,6 +65,7 @@ struct Action {
     std::vector<std::string> combo;
     std::shared_ptr<Action> fallback;    // "else" : si l'action est impossible (PA, objet, aucune cible)
     int shots = 0;                       // "freeaim" : nombre de tirs (visée sur "target", puis action "then")
+    bool cancel_key = false;             // "freeaim" + "cancel": "key" : sortie par la touche d'annulation (TryCancelFreeAim du perso)
     std::shared_ptr<Action> then;
 };
 
@@ -175,6 +176,7 @@ Action parse_action(const json::Value& a)
     for (size_t i = 0; i < a["combo"].size(); ++i) act.combo.push_back(a["combo"][i].as_string("success"));
     if (a["else"].is_object()) act.fallback = std::make_shared<Action>(parse_action(a["else"]));
     act.shots = static_cast<int>(a["shots"].as_int(0));
+    act.cancel_key = a["cancel"].as_string("") == "key";
     if (a["then"].is_object()) act.then = std::make_shared<Action>(parse_action(a["then"]));
     return act;
 }
@@ -476,12 +478,13 @@ void tick_free_aim()
         fa.next = g.t + 1.2;
         log().write("tr_free_aim", JsonObj().add("step", "fire").add("n", fa.fired), g.turn);
     } else if (fa.step == 1) {
-        ue::Call c(bm, STR("CancelFreeAimFromUI"));
+        // Touche d'annulation : chemin du joueur (TryCancelFreeAim), qui ne passe pas par CancelFreeAimFromUI (2026-10-21).
+        ue::Call c(fa.action.cancel_key ? fa.actor : bm, fa.action.cancel_key ? STR("TryCancelFreeAim") : STR("CancelFreeAimFromUI"));
         if (c) c.invoke();
         coop::set_local_aim(nullptr);
         fa.step = 2;
         fa.next = g.t + 1.0;
-        log().write("tr_free_aim", JsonObj().add("step", "cancel"), g.turn);
+        log().write("tr_free_aim", JsonObj().add("step", "cancel").add("key", fa.action.cancel_key).add("found", static_cast<bool>(c)), g.turn);
     } else {
         fa.active = false;
         static const Action basic{};
@@ -869,6 +872,13 @@ void run_explore_step(float dt)
             if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
         }
         // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
+    } else if (what == "set_party") {   // change l'équipe comme le menu d'équipe du jeu (après l'instantané : le client garde l'ancienne)
+        std::vector<std::string> names;
+        for (size_t i = 0; i < st["party"].size(); ++i) names.push_back(st["party"][i].as_string(""));
+        if (!game::set_party_names(names, err)) { fail("set_party: " + err); return; }
+        if (game::party_names() != names) { fail("set_party: party not applied"); return; }
+        ++g.metrics["party_changes"];
+        next_step("done");
     } else if (what == "reassign") {   // réattribution d'un personnage (touche F6 de l'hôte)
         coop::reassign_character(static_cast<size_t>(st["index"].as_int(0)));
         next_step("done");
