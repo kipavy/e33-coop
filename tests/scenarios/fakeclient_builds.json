@@ -7,5 +7,5 @@
   "session": true,
   "defense": ["fail"],
   "build_send": [{ "after_ok": 1, "names": ["Lune"] }, { "after_ok": 1, "names": ["Verso"] }],
-  "expect": { "snapshots": "1", "build_offers": ">=2", "builds_received_ok": ">=2", "build_rejections": "1", "builds_sent": "2" }
+  "expect": { "snapshots": "1", "build_offers": ">=2", "builds_received_ok": ">=2", "build_rejections": "1", "builds_sent": "2", "owner_updates": ">=1" }
 }

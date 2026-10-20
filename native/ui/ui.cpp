@@ -44,6 +44,7 @@ constexpr Entry kTexts[] = {
     {"build_applied", "{1} a modifié {0}", "{1} changed {0}"},
     {"economy_rejected", "Achat ou amélioration impossible chez l'hôte : resynchronisation", "Purchase or upgrade not possible on the host: resynchronizing"},
     {"session_open", "Partie ouverte au coop", "Game open for coop"},
+    {"owner_changed", "{0} est maintenant contrôlé par {1}", "{0} is now controlled by {1}"},
     {"you", "vous", "you"},
     {"host", "l'hôte", "the host"},
 };

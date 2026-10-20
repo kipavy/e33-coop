@@ -29,6 +29,8 @@ bool session_ended();
 bool action_forced(int spot);
 // Nom affiché d'un joueur (« vous » pour soi).
 std::string name_of(uint8_t player);
+// Hôte : le personnage d'indice index dans l'équipe passe au joueur suivant (touche F6, test runner).
+void reassign_character(size_t index);
 // Fin de session propre (fin de test, sortie) : Bye à tous les pairs, envoyé immédiatement.
 void shutdown(const char* reason);
 // Test runner : point visé par le « joueur » simulé pendant une visée libre d'un héros d'ici (nullptr = aucun).

@@ -5,9 +5,10 @@
   "timeout_s": 600,
   "explore": [
     { "do": "wait", "until": "builds_applied", "is": ">=1", "timeout": 400 },
-    { "do": "wait", "s": 5 }
+    { "do": "wait", "until": "owner_maps_received", "is": ">=1", "timeout": 120 },
+    { "do": "wait", "s": 3 }
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33owners=Verso:0,Lune:1"],
   "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p5_builds_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p5_builds_snapshot.sav", "--paced", "1", "--timeout", "600"] },
-  "expect": { "builds_applied": ">=1", "build_hash_mismatches": "0", "build_errors": "0", "build_offers_sent": "0" }
+  "expect": { "builds_applied": ">=1", "build_hash_mismatches": "0", "build_errors": "0", "build_offers_sent": "0", "owner_maps_received": "1" }
 }

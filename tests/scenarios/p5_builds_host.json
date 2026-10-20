@@ -10,9 +10,10 @@
     { "do": "wait", "until": "build_offers_authoritative", "is": ">=1", "timeout": 60 },
     { "do": "wait", "until": "builds_rejected", "is": ">=1", "timeout": 120 },
     { "do": "wait", "until": "builds_applied", "is": ">=1", "timeout": 60 },
+    { "do": "reassign", "index": 0 },
     { "do": "wait", "s": 5 }
   ],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:0,Lune:1", "-e33name=Killian"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_builds.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
-  "expect": { "build_offers_authoritative": ">=2", "builds_applied": ">=1", "builds_rejected": "1", "build_errors": "0", "build_changes_detected": ">=1", "ui:build_applied": ">=1" }
+  "expect": { "build_offers_authoritative": ">=2", "builds_applied": ">=1", "builds_rejected": "1", "build_errors": "0", "build_changes_detected": ">=1", "ui:build_applied": ">=1", "owner_reassignments": "1", "ui:owner_changed": "1" }
 }

@@ -869,6 +869,9 @@ void run_explore_step(float dt)
             if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
         }
         // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
+    } else if (what == "reassign") {   // réattribution d'un personnage (touche F6 de l'hôte)
+        coop::reassign_character(static_cast<size_t>(st["index"].as_int(0)));
+        next_step("done");
     } else if (what == "economy") {   // dépense / gain local, comme un achat ou une amélioration dans un menu (phase 5)
         std::string e1;
         if (!game::economy_apply(st["key"].as_string("gold"), st["delta"].as_int(-50), e1)) { fail("economy: " + e1); return; }

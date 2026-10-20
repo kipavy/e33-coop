@@ -323,6 +323,36 @@ uint8_t character_owner(const std::string& name)
     return idx < players.size() ? players[idx] : 0;
 }
 
+// Hôte : répartition actuelle des personnages de l'équipe, envoyée aux clients (ils l'appliquent telle quelle).
+proto::Owners character_owner_map()
+{
+    proto::Owners ow;
+    ow.battle_id = 0;
+    for (auto& [name, player] : s.owner_overrides) ow.owners.push_back({0, name, player});
+    return ow;
+}
+
+void cycle_owner(size_t index)
+{
+    const auto party = game::party_names();
+    if (party.empty()) return;
+    std::map<std::string, uint8_t> current;
+    for (auto& c : party) current[c] = character_owner(c);
+    const std::string ch = party[index % party.size()];
+    std::vector<uint8_t> players{0};
+    for (auto& [id, n] : s.roster) if (id != 0) players.push_back(id);
+    std::sort(players.begin() + 1, players.end());
+    const auto pos = std::find(players.begin(), players.end(), current[ch]);
+    const uint8_t next = players[pos == players.end() ? 0 : static_cast<size_t>(pos - players.begin() + 1) % players.size()];
+    current[ch] = next;
+    s.owner_overrides.clear();
+    for (auto& [c, p] : current) s.owner_overrides[c] = p;
+    broadcast(character_owner_map());
+    bump("owner_reassignments");
+    ui::toast("owner_changed", {ch, player_name(next)});
+    log().write("coop_owner_reassigned", JsonObj().add("character", ch).add("player", static_cast<int>(next)));
+}
+
 // --- Battement « occupé » --------------------------------------------------------------------------
 // Pendant un chargement de niveau, le thread de jeu ne tourne plus pendant 30 à 60 s : un thread à part envoie alors
 // à chaque pair un paquet « occupé » (net::Link::busy_packet), pour qu'il ne nous croie pas partis.
@@ -648,6 +678,7 @@ void handle(Peer& p, proto::Message& m)
             explore::on_peer_accepted(p.player_id, h->join);
             send_roster();
             bump("sessions_accepted");
+            if (!s.owner_overrides.empty()) send_to(p, character_owner_map());
             ui::toast("player_joined", {p.name});
             log().write("session_join", JsonObj().add("player", p.name).add("player_id", static_cast<int>(p.player_id)).add("join", h->join));
             return;
@@ -693,6 +724,13 @@ void handle(Peer& p, proto::Message& m)
         return;
     }
     if (auto* ow = std::get_if<proto::Owners>(&m)) {
+        if (ow->battle_id == 0) {   // répartition des personnages hors combat (réattribution par l'hôte, F6)
+            s.owner_overrides.clear();
+            for (auto& o : ow->owners) s.owner_overrides[o.character] = o.player_id;
+            bump("owner_maps_received");
+            log().write("coop_character_owners", JsonObj().raw("msg", proto::to_json(m)));
+            return;
+        }
         if (ow->battle_id == s.battle.id) {
             for (auto& o : ow->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
             bump("owner_updates");
@@ -1869,6 +1907,8 @@ void subscribe_session()
 }
 } // namespace
 
+void reassign_character(size_t index) { if (s.role == Role::Host) cycle_owner(index); }
+
 Role role() { return s.role; }
 bool active() { return s.role != Role::Solo; }
 int connected_players()
@@ -2212,6 +2252,17 @@ void tick(double dt)
     }
     pump_network();
     if (s.ended) return;
+    // F6 (hôte, hors combat, fenêtre du jeu au premier plan) : le personnage suivant de l'équipe change de joueur (menu de
+    // réattribution du brief, version touche). Diffusé aux clients ; vaut pour les builds et les combats suivants.
+    {
+        static bool f6_down = false;
+        static size_t f6_index = 0;
+        const bool down = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        if (down && !f6_down && pid == GetCurrentProcessId() && s.role == Role::Host && !s.battle.active) cycle_owner(f6_index++);
+        f6_down = down;
+    }
     // Héros repris à un joueur parti : si c'est le tour de l'un d'eux, le joueur de l'hôte le joue (entrées rendues).
     if (s.takeover && s.battle.active) {
         s.takeover = false;
