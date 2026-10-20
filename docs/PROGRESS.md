@@ -42,6 +42,13 @@
 - Minuteur de tour : ne compte que le temps de jeu (pas l'attente du démarrage coordonné).
 - Batterie : 31 scénarios (`battery.ps1`), à repasser en entier avant la validation commune.
 
+### Phase 6 : transport Steam (branche `phase-6`)
+- `native/net/steam.cpp` : Steam Networking Messages (P2P + relais SDR) derrière `net::Transport`, par l'API « flat » du `steam_api64.dll` du jeu (Steamworks 1.57, résolue à l'exécution : pas de SDK, pas d'initialisation de Steam par le mod). Adresse `steam:<SteamID64>` ; le lien fiable reste le même qu'en UDP. `-e33transport=steam` ; UDP inchangé par défaut.
+- Lobbies : l'hôte crée un lobby « amis seulement » (3 places) au premier tick ; **F7** ouvre la fenêtre d'invitation de l'overlay ; les membres du lobby sont « ouverts » (paquet `E33P` + acceptation de session). Client : `-e33lobby=<id>`, `+connect_lobby <id>` (invitation acceptée jeu fermé), invitation acceptée jeu ouvert (callback `GameLobbyJoinRequested_t`, même déclaration de `CCallbackBase` que le SDK), ou **F7** au menu principal (lobby coop d'un ami). Nom affiché = nom Steam.
+- Vérifié seul : `p6_steam_selftest` (API résolue, 26/26 messages P2P à son propre SteamID, sans lobby). Tests unitaires : adresses Steam, chargement sans Steam. Lobby, invitation et liaison entre deux comptes : validation à deux PC.
+- Paquet joueur : `tools/package/make-player-package.ps1` (UE4SS épinglé + E33Coop, liste de mods fixe, `install.ps1` / `uninstall.ps1`). Partie normale : journaux dans `ue4ss/Mods/E33Coop/logs/<date-heure>/`.
+- Checklist : `docs/VALIDATION-PHASE5-6.md`.
+
 ### Limites connues (phase 5)
 - Une dépense faite dans les 2 s d'un événement rejoué (coffre, combat) est absorbée dans la référence : le hash d'exploration la détecte et la resynchro reprend l'état de l'hôte (dépense perdue).
 - Réattribution des personnages : touche F6 de l'hôte (hors combat), pas de vrai menu.
