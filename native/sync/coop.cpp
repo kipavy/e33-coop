@@ -213,6 +213,7 @@ struct State {
     bool takeover = false;                                 // hôte : héros repris, entrées locales à rendre
     uint16_t turn_timer_s = 0;                             // hôte : -e33turntimer=N (0 = aucun, par défaut)
     std::set<std::string> version_rejected;                // adresses d'un autre protocole déjà refusées
+    std::map<std::pair<std::string, uint32_t>, double> tombstones;   // hôte : (adresse, époque) d'un pair retiré -> fin d'oubli
 };
 
 State s;
@@ -413,6 +414,7 @@ void sweep_peers()
         const bool was_player = p.accepted;
         const uint8_t id = p.player_id;
         const std::string name = p.name, why = p.drop;
+        if (p.link && p.link->remote_epoch()) s.tombstones[{p.link->peer(), p.link->remote_epoch()}] = s.now + 60.0;
         log().write("session_peer_removed", JsonObj().add("peer", p.link ? p.link->peer() : "").add("player_id", static_cast<int>(id)).add("why", why));
         s.peers.erase(s.peers.begin() + static_cast<std::ptrdiff_t>(i));
         changed = true;
@@ -441,6 +443,10 @@ void pump_network()
                 bump("peer_restarts");
                 peer = nullptr;
                 sweep_peers();
+            }
+            if (!peer && ep) {   // derniers paquets d'un pair qui vient d'être retiré (même processus) : ignorés
+                auto ts = s.tombstones.find({d.peer, ep});
+                if (ts != s.tombstones.end() && s.now < ts->second) continue;
             }
             if (!peer) {
                 const uint16_t pv = net::Link::packet_protocol(d.data.data(), d.data.size());
@@ -1056,6 +1062,7 @@ void client_turn_start(UObject* actor)
     }
     // L'hôte rythme les tours : attendre son début de tour (TurnStart, StateHash, StateSync, dans cet ordre).
     if (!wait_for([&] { return b.host_sync.count(b.turn) > 0; }, 15.0)) {
+        if (s.ended) return;   // l'hôte est parti pendant l'attente : ce n'est pas un tour manqué
         bump("turn_wait_timeouts");
         log().write("coop_turn_wait_timeout", JsonObj().add("battle", b.id), b.turn);
         return;

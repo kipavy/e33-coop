@@ -307,11 +307,13 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
     // sur un compteur du runner (actions_skill, hero_deaths…) ou du coop (raw_hash_diffs, targets_synced…).
     std::map<std::string, std::string> wants;
     if (coop::active()) {
-        add("coop_session", "ok", coop::session_ok() ? "ok" : "ko", coop::session_ok());
+        // Fin de session attendue (hôte parti, refus) : la session n'est plus « ok » et le combat n'a pas pu finir.
+        const bool session_end_test = g.sc.end_on_session_end;
+        if (!session_end_test) add("coop_session", "ok", coop::session_ok() ? "ok" : "ko", coop::session_ok());
         for (const char* c : {"desyncs", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages", "defense_timeouts", "combo_timeouts", "turn_wait_timeouts",
                               "actor_mismatches", "end_mismatches", "rewards_mismatches", "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_action_errors", "remote_action_invalid"})
             wants[c] = "0";
-        if (g.sc.explore.empty() || g.battles > 0) {   // scénario d'exploration sans combat : pas de contrôles de combat
+        if ((g.sc.explore.empty() || g.battles > 0) && !session_end_test) {   // scénario d'exploration sans combat : pas de contrôles de combat
             wants["hashes_compared"] = ">0";
             wants["gameplay_draws"] = ">0";
             wants["battle_finalized"] = "1";
@@ -1033,7 +1035,16 @@ void tick(float dt)
         // Attendre la fin de combat complète (récompenses tirées et comparées), bornée.
         const bool done = coop::active() ? coop::battle_finalized() : (g.rewards_rolled || g.end_result != game::EndVictory);
         if ((done && g.t >= g.end_at) || g.t >= g.end_at + 15.0) {
-            if (g.battle_from_explore) { resume_explore(done ? "battle ended" : "battle ended (end flow incomplete)"); break; }
+            if (g.battle_from_explore) {
+                // Écran de victoire (« On continue ») : refermé comme le ferait le joueur, sinon le jeu reste en combat.
+                if (g.end_result == game::EndVictory) {
+                    ue::Call c(game::battle_manager(), STR("OnVictoryScreenClosedFlow"));
+                    if (c) c.invoke();
+                    ++g.metrics["victory_screens_closed"];
+                }
+                resume_explore(done ? "battle ended" : "battle ended (end flow incomplete)");
+                break;
+            }
             finish(true, done ? "battle ended" : "battle ended (end flow incomplete)");
         }
         break;
