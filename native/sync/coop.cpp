@@ -1,20 +1,4 @@
-    // Nombre de tirages par flux de chaque côté : un tirage au-delà du dernier rang de l'autre côté vient d'un
-    // coup en plus (le nombre de coups d'une compétence varie d'un run à l'autre, même seul : GAME-INTERNALS §15),
-    // pas d'un tirage faux. Compté à part (draw_count_diffs) ; l'état complet de l'hôte corrige ses effets.
-    std::map<uint32_t, uint16_t> mine_n, host_n;
-    for (auto& [k, v] : mine) { auto& n = mine_n[static_cast<uint32_t>(k >> 16)]; n = std::max<uint16_t>(n, static_cast<uint16_t>((k & 0xFFFF) + 1)); }
-    for (auto& [k, v] : host) { auto& n = host_n[static_cast<uint32_t>(k >> 16)]; n = std::max<uint16_t>(n, static_cast<uint16_t>((k & 0xFFFF) + 1)); }
-    auto tail = [](const std::map<uint32_t, uint16_t>& other, uint64_t k) {
-        auto it = other.find(static_cast<uint32_t>(k >> 16));
-        return (k & 0xFFFF) >= (it == other.end() ? 0 : it->second);
-    };
-    for (auto& [k, v] : mine) {
-        auto it = host.find(k);
-        if (it == host.end() && tail(host_n, k)) {
-            bump("draw_count_diffs");
-            log().write("coop_draw_count_diff", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("extra", "local"), turn);
-        } else if (it == host.end() || std::fabs(it->second - v) > 1e-9) {
-            bump("draw_mismatches");#include "coop.hpp"
+#include "coop.hpp"
 
 #include <algorithm>
 #include <array>
