@@ -31,7 +31,7 @@ enum class MsgType : uint16_t {
     SaveOffer = 40, SaveChunk = 41, JoinWait = 42, JoinReady = 43, PilotState = 44, PilotRequest = 45, PilotChange = 46,
     WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52,
     Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
-    BuildOffer = 65, BuildChunk = 66,
+    BuildOffer = 65, BuildChunk = 66, EconomyDelta = 67,
 };
 
 const char* type_name(MsgType t);
@@ -237,13 +237,18 @@ struct ResyncRequest { std::string reason; };
 struct BuildName { std::string name; uint64_t hash = 0; };
 struct BuildOffer { uint32_t xfer = 0; uint8_t origin = 0; bool authoritative = false; uint32_t size = 0; uint64_t hash = 0; std::vector<BuildName> names; std::string reason; };
 struct BuildChunk { uint32_t xfer = 0; uint32_t offset = 0; std::vector<uint8_t> data; };
+// Ressources communes (D13, option 1) : variations faites hors événement rejoué (achat, amélioration, objet utilisé
+// dans un menu). Client -> hôte (vérifiées : assez d'or / d'objets), puis hôte -> autres. rejected : refus de l'hôte (l'auteur
+// se resynchronise).
+struct EconomyPart { std::string key; int64_t delta = 0; };
+struct EconomyDelta { uint32_t seq = 0; uint8_t origin = 0; bool authoritative = false; bool rejected = false; std::vector<EconomyPart> parts; };
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
                              DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,
                              BattleRewards, FreeAimEvent,
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
                              WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
-                             Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk>;
+                             Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk, EconomyDelta>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

@@ -1,0 +1,17 @@
+{
+  "name": "p5_economy_host",
+  "description": "Phase 5 : ressources communes (D13, option 1). L'hôte dépense 50 d'or hors de tout événement (comme un achat) : la variation part au client. Le faux client dépense 100 d'or (accepté et appliqué par l'hôte), puis une somme impossible (refusée : le client devra se resynchroniser). Produit l'enregistrement rejoué par p5_economy_client.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 5 },
+    { "do": "economy", "key": "gold", "delta": -50 },
+    { "do": "wait", "until": "economy_deltas_sent", "is": ">=1", "timeout": 30 },
+    { "do": "wait", "until": "economy_rejected", "is": ">=1", "timeout": 120 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33name=Killian"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_economy.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "economy_deltas_sent": "1", "economy_deltas_applied": "1", "economy_rejected": "1", "economy_errors": "0" }
+}

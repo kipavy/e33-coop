@@ -869,6 +869,11 @@ void run_explore_step(float dt)
             if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
         }
         // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
+    } else if (what == "economy") {   // dépense / gain local, comme un achat ou une amélioration dans un menu (phase 5)
+        std::string e1;
+        if (!game::economy_apply(st["key"].as_string("gold"), st["delta"].as_int(-50), e1)) { fail("economy: " + e1); return; }
+        ++g.metrics["economy_ops"];
+        next_step("done");
     } else if (what == "build") {   // modifie le build d'un personnage comme le ferait un menu (phase 5)
         UObject* cd = game::character_data(st["character"].as_string("Verso"));
         const std::string op = st["op"].as_string("reset_attributes");

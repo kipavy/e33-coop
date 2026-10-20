@@ -24,6 +24,8 @@ struct Net {
     std::function<std::string(uint8_t player)> name_of;
     std::function<uint8_t(const std::string& character)> owner_of;       // joueur qui contrôle ce personnage
     std::function<bool()> sharing;                                         // la partie est partagée (joueurs entrés)
+    std::function<double()> last_event_age;                                // calme de la partie (aucun événement rejoué récent)
+    std::function<void(const std::string& reason)> request_resync;          // client : nouvel instantané demandé à l'hôte
 };
 
 void init(bool host, const Net& net);

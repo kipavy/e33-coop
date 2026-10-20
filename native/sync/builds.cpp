@@ -255,6 +255,110 @@ void check_builds()
     }
 }
 
+
+// --- Ressources communes (D13, option 1) ---------------------------------------------------------
+// Or, objets et niveaux d'équipement relevés au calme (aucun événement rejoué depuis 2 s, hors combat). Une variation
+// entre deux relevés sans événement entre les deux vient d'ici (achat, amélioration, objet utilisé dans un menu) : elle
+// part en EconomyDelta. L'hôte vérifie qu'elle est possible chez lui, l'applique avec les fonctions du jeu et la relaie.
+
+struct Econ {
+    std::map<std::string, int64_t> prev;
+    double prev_at = -1;
+    uint32_t seq = 0;
+    double next = 0;
+};
+Econ e;
+
+std::map<std::string, int64_t> econ_diff(const std::map<std::string, int64_t>& cur, const std::map<std::string, int64_t>& prev)
+{
+    std::map<std::string, int64_t> d;
+    for (auto& [k, v] : cur) { auto it = prev.find(k); const int64_t p = it == prev.end() ? 0 : it->second; if (v != p) d[k] = v - p; }
+    for (auto& [k, v] : prev) if (!cur.count(k) && v != 0) d[k] = -v;
+    return d;
+}
+
+bool econ_apply(const std::vector<proto::EconomyPart>& parts, std::string& err)
+{
+    bool ok = true;
+    for (auto& p : parts) {
+        std::string e1;
+        if (!game::economy_apply(p.key, p.delta, e1)) { ok = false; err += (err.empty() ? "" : "; ") + p.key + ": " + e1; }
+    }
+    return ok;
+}
+
+void econ_resample()
+{
+    game::economy_sample(e.prev);
+    e.prev_at = s.now;
+}
+
+void econ_tick()
+{
+    if (s.now < e.next) return;
+    e.next = s.now + 2.0;
+    if (!game::controller() || game::in_battle() || game::map_change_in_progress() || !game::explore_pawn()) { e.prev_at = -1; return; }
+    const double age = s.net.last_event_age ? s.net.last_event_age() : 1e9;
+    if (age < 2.0) { e.prev_at = -1; return; }
+    std::map<std::string, int64_t> cur;
+    game::economy_sample(cur);
+    // Premier relevé, ou un événement (coffre, combat, butin…) depuis le précédent : nouvelle référence, rien à envoyer.
+    if (e.prev_at < 0 || age < s.now - e.prev_at) { e.prev = cur; e.prev_at = s.now; return; }
+    const auto d = econ_diff(cur, e.prev);
+    e.prev = cur;
+    e.prev_at = s.now;
+    if (d.empty() || !s.net.sharing || !s.net.sharing()) return;
+    proto::EconomyDelta m;
+    m.seq = ++e.seq;
+    m.origin = s.me;
+    m.authoritative = s.host;
+    std::string ks;
+    for (auto& [k, v] : d) { m.parts.push_back({k, v}); ks += (ks.empty() ? "" : ",") + k + "=" + std::to_string(v); }
+    s.net.publish(m);
+    bump("economy_deltas_sent");
+    log().write("coop_economy_delta", JsonObj().add("seq", m.seq).add("parts", ks).add("authoritative", m.authoritative));
+}
+
+void econ_receive(uint8_t from, const proto::EconomyDelta& m)
+{
+    std::string err;
+    if (!s.host) {
+        if (m.rejected) {
+            // L'hôte n'a pas pu appliquer notre dépense (or ou objets épuisés chez lui) : on reprend son état.
+            bump("economy_rejected");
+            ui::toast("economy_rejected");
+            log().write("coop_economy_rejected", JsonObj().add("seq", m.seq));
+            if (s.net.request_resync) s.net.request_resync("economy rejected");
+            return;
+        }
+        const bool ok = econ_apply(m.parts, err);
+        econ_resample();
+        bump(ok ? "economy_deltas_applied" : "economy_errors");
+        log().write("coop_economy_applied", JsonObj().add("seq", m.seq).add("origin", static_cast<int>(m.origin)).add("ok", ok).add("err", err));
+        return;
+    }
+    // Hôte : possible chez lui ? (dépenses : assez d'or et d'objets)
+    std::map<std::string, int64_t> have;
+    game::economy_sample(have);
+    bool affordable = true;
+    for (auto& p : m.parts)
+        if (p.delta < 0 && p.key.rfind("level:", 0) != 0 && (have.count(p.key) ? have[p.key] : 0) + p.delta < 0) affordable = false;
+    if (!affordable) {
+        proto::EconomyDelta r = m;
+        r.rejected = true;
+        s.net.send_to(from, r);
+        bump("economy_rejected");
+        log().write("coop_economy_reject", JsonObj().add("from", static_cast<int>(from)).add("seq", m.seq));
+        return;
+    }
+    const bool ok = econ_apply(m.parts, err);
+    econ_resample();
+    proto::EconomyDelta fwd = m;
+    fwd.authoritative = true;
+    s.net.relay(fwd, from);
+    bump(ok ? "economy_deltas_applied" : "economy_errors");
+    log().write("coop_economy_applied", JsonObj().add("seq", m.seq).add("origin", static_cast<int>(from)).add("ok", ok).add("err", err));
+}
 } // namespace
 
 void init(bool host, const Net& net)
@@ -263,7 +367,8 @@ void init(bool host, const Net& net)
     s.net = net;
     s.active = true;
     for (const char* c : {"build_offers_sent", "build_offers_authoritative", "builds_applied", "builds_rejected", "builds_reverted", "build_errors",
-                          "build_hash_mismatches", "build_changes_detected"})
+                          "build_hash_mismatches", "build_changes_detected",
+                          "economy_deltas_sent", "economy_deltas_applied", "economy_rejected", "economy_errors"})
         bump(c, 0);
 }
 
@@ -288,6 +393,7 @@ bool handle(uint8_t from, const proto::Message& m)
         if (o->size == 0) { on_complete(s.inbound[o->xfer]); s.inbound.erase(o->xfer); }
         return true;
     }
+    if (auto* ed = std::get_if<proto::EconomyDelta>(&m)) { econ_receive(from, *ed); return true; }
     if (auto* c = std::get_if<proto::BuildChunk>(&m)) {
         auto it = s.inbound.find(c->xfer);
         if (it == s.inbound.end() || c->offset != it->second.received || c->offset + c->data.size() > it->second.offer.size) {
@@ -310,6 +416,7 @@ void tick(double now)
 {
     if (!s.active) return;
     s.now = now;
+    econ_tick();
     if (now < s.next_check) return;
     s.next_check = now + kCheckPeriod;
     if (!can_check()) return;
@@ -318,6 +425,7 @@ void tick(double now)
 
 void rebaseline()
 {
+    e.prev_at = -1;
     s.have_baseline = false;
     s.baseline.clear();
     s.next_check = s.now + 3.0;

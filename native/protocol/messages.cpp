@@ -156,6 +156,10 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.str(x.reason);
         } else if constexpr (std::is_same_v<T, BuildChunk>) {
             w.u32(x.xfer); w.u32(x.offset); w.u16(static_cast<uint16_t>(x.data.size())); w.bytes(x.data.data(), x.data.size());
+        } else if constexpr (std::is_same_v<T, EconomyDelta>) {
+            w.u32(x.seq); w.u8(x.origin); w.boolean(x.authoritative); w.boolean(x.rejected);
+            w.u16(static_cast<uint16_t>(x.parts.size()));
+            for (auto& p : x.parts) { w.str(p.key); w.u64(static_cast<uint64_t>(p.delta)); }
         } else {
             static_assert(always_false<T>, "message non géré");
         }
@@ -334,6 +338,13 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         if (x.data.empty() || x.offset > kMaxSaveSize - x.data.size()) r.fail();
         return finish(x);
     }
+    case MsgType::EconomyDelta: {
+        EconomyDelta x; x.seq = r.u32(); x.origin = r.u8(); x.authoritative = r.boolean(); x.rejected = r.boolean();
+        if (x.origin > 3) r.fail();
+        const uint16_t n = r.count(kMaxList * 8);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) { EconomyPart p; p.key = r.str(128); p.delta = static_cast<int64_t>(r.u64()); x.parts.push_back(p); }
+        return finish(x);
+    }
     }
     err = "unknown message type " + std::to_string(static_cast<unsigned>(t));
     return std::nullopt;
@@ -382,6 +393,7 @@ const char* type_name(MsgType t)
     case MsgType::ResyncRequest: return "ResyncRequest";
     case MsgType::BuildOffer: return "BuildOffer";
     case MsgType::BuildChunk: return "BuildChunk";
+    case MsgType::EconomyDelta: return "EconomyDelta";
     }
     return "?";
 }
@@ -396,7 +408,7 @@ MsgType type_of(const Message& m)
                                         MsgType::PilotRequest, MsgType::PilotChange, MsgType::WorldInteract, MsgType::DialogueChoice,
                                         MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState,
                                         MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
-                                        MsgType::BuildOffer, MsgType::BuildChunk};
+                                        MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -527,6 +539,11 @@ std::string to_json(const Message& m)
             for (size_t i = 0; i < x.names.size(); ++i) { if (i) ns += ","; ns += "\"" + json_escape(x.names[i].name) + "\""; }
             o.add("xfer", x.xfer).add("origin", static_cast<int>(x.origin)).add("authoritative", x.authoritative).add("size", x.size).raw("names", ns + "]").add("reason", x.reason);
         } else if constexpr (std::is_same_v<T, BuildChunk>) { o.add("xfer", x.xfer).add("offset", x.offset).add("bytes", static_cast<int64_t>(x.data.size())); }
+        else if constexpr (std::is_same_v<T, EconomyDelta>) {
+            std::string ps = "{";
+            for (size_t i = 0; i < x.parts.size(); ++i) { if (i) ps += ","; ps += "\"" + json_escape(x.parts[i].key) + "\":" + std::to_string(x.parts[i].delta); }
+            o.add("seq", x.seq).add("origin", static_cast<int>(x.origin)).add("authoritative", x.authoritative).add("rejected", x.rejected).raw("parts", ps + "}");
+        }
     }, m);
     return o.str();
 }

@@ -1013,6 +1013,7 @@ void request_pilot()
 bool narrative_active() { return s.local_narr; }
 bool choice_pending() { return s.choice_pending; }
 bool sequence_playing() { return s.sequence_playing; }
+double last_event_age() { return s.now - s.last_event_at; }
 bool remote_paused() { return s.remote_paused_game; }
 double follow_error() { return s.follow_error; }
 std::string take_world_enemy()

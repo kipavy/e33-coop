@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -163,6 +164,11 @@ bool make_characters_blob(const std::wstring& slot, std::vector<uint8_t>& bytes,
 // Applique (LoadCharacterState) les personnages nommés d'un tel blob.
 bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>& bytes, const std::vector<std::string>& names,
                            std::vector<std::string>& applied, std::string& err);
+// --- Ressources communes (D13) : or, quantités d'objets ("item:<id>"), niveaux d'équipement ("level:<id>") ---
+UObject* inventory_manager();
+void economy_sample(std::map<std::string, int64_t>& out);
+// Applique une variation avec les fonctions du jeu (ReceiveGold / TrySpendGold, AddItemToInventory / RemoveItemFromInventory, ChangeLevel).
+bool economy_apply(const std::string& key, int64_t delta, std::string& err);
 
 // Visée libre
 inline const wchar_t* const FreeAimComp = L"/Game/Gameplay/FreeAim/BP_FreeAimShooterBattleComponent.BP_FreeAimShooterBattleComponent_C:";

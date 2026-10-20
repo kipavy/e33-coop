@@ -42,6 +42,7 @@ void request_pilot();         // demande la main (touche F8, test runner)
 bool narrative_active();      // dialogue ou cinématique en cours ici
 bool choice_pending();        // question de dialogue posée ici, sans réponse
 bool sequence_playing();      // séquence de cinématique en cours (OnSequenceStarted … OnSequenceFinished)
+double last_event_age();     // secondes depuis le dernier événement d'exploration (interaction, choix, transition, combat, narration)
 bool remote_paused();         // jeu mis en pause ici par la pause d'un autre joueur (combat)
 double follow_error();        // suiveur : dernier écart au pilote (u), -1 si inconnu
 // Dernier ennemi du monde qui a lancé un combat ici (nom d'acteur, engagement), pour BattleStart.

@@ -1021,4 +1021,89 @@ bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>&
     return true;
 }
 
+// --- Ressources communes (phase 5, D13 option 1) ---------------------------------------------------
+
+UObject* inventory_manager() { return ue::get_object(controller(), STR("AC_jRPG_InventoryManager")); }
+
+void economy_sample(std::map<std::string, int64_t>& out)
+{
+    out.clear();
+    UObject* g = gi();
+    if (!g) return;
+    if (auto* gold = ue::value_ptr<int32_t>(g, STR("Gold"))) out["gold"] = *gold;
+    // Objets : GI.Inventory (quantités par identifiant d'objet, toutes piles confondues).
+    if (auto* ap = CastField<FArrayProperty>(ue::prop(g, STR("Inventory")))) {
+        auto* inner = CastField<FStructProperty>(ap->GetInner());
+        auto* arr = ap->ContainerPtrToValuePtr<FScriptArray>(g);
+        if (inner && arr) {
+            UStruct* st = inner->GetStruct();
+            FProperty* stacks = ue::struct_member(st, STR("StacksAmount"));
+            auto* stat = CastField<FStructProperty>(ue::struct_member(st, STR("ItemStaticData")));
+            FProperty* id = stat ? ue::struct_member(stat->GetStruct(), STR("Item_HardcodedName")) : nullptr;
+            auto* data = static_cast<uint8_t*>(arr->GetData());
+            for (int32 i = 0; i < arr->Num() && stacks && id; ++i) {
+                uint8_t* e = data + static_cast<size_t>(i) * inner->GetSize();
+                const std::string name = ue::to_utf8(static_cast<FName*>(id->ContainerPtrToValuePtr<void>(stat->ContainerPtrToValuePtr<void>(e)))->ToString());
+                out["item:" + name] += *static_cast<int32_t*>(stacks->ContainerPtrToValuePtr<void>(e));
+            }
+        }
+    }
+    // Niveaux des équipements (armes, pictos) : instances du système d'amélioration.
+    std::vector<std::pair<void*, void*>> pairs;
+    if (reflect::map_pairs(ue::get_object(g, STR("InventorySystem")), STR("ItemInstances"), pairs, nullptr, nullptr)) {
+        for (auto& [k, v] : pairs) {
+            UObject* inst = *static_cast<UObject**>(v);
+            if (!inst || !ue::prop(inst, STR("CurrentLevel"))) continue;
+            out["level:" + ue::to_utf8(static_cast<FName*>(k)->ToString())] = ue::get_int(inst, STR("CurrentLevel"));
+        }
+    }
+}
+
+bool economy_apply(const std::string& key, int64_t delta, std::string& err)
+{
+    if (delta == 0) return true;
+    UObject* inv = inventory_manager();
+    if (key == "gold") {
+        if (!inv) { err = "no inventory manager"; return false; }
+        if (delta > 0) {
+            ue::Call c(inv, STR("ReceiveGold"));
+            if (!c) { err = "ReceiveGold not found"; return false; }
+            return c.set_int(STR("GoldAmount"), delta).set_string(STR("Reason"), STR("E33Coop")).invoke();
+        }
+        ue::Call c(inv, STR("TrySpendGold"));
+        if (!c) { err = "TrySpendGold not found"; return false; }
+        c.set_int(STR("GoldAmount"), -delta).set_string(STR("Reason"), STR("E33Coop")).invoke();
+        if (!c.out_bool(STR("Success"))) { err = "not enough gold"; return false; }
+        return true;
+    }
+    if (key.rfind("item:", 0) == 0) {
+        if (!inv) { err = "no inventory manager"; return false; }
+        const std::wstring id = ue::from_utf8(key.substr(5));
+        if (delta > 0) {
+            ue::Call c(inv, STR("AddItemToInventory"));
+            if (!c) { err = "AddItemToInventory not found"; return false; }
+            return c.set_fname(STR("ItemHardcodedName"), id.c_str()).set_int(STR("Amount"), delta).invoke();
+        }
+        ue::Call c(inv, STR("RemoveItemFromInventory"));
+        if (!c) { err = "RemoveItemFromInventory not found"; return false; }
+        return c.set_fname(STR("ItemHardcodedName"), id.c_str()).set_int(STR("Amount"), -delta).set_bool(STR("KeepEmptyStack"), false).invoke();
+    }
+    if (key.rfind("level:", 0) == 0) {
+        const std::string id = key.substr(6);
+        std::vector<std::pair<void*, void*>> pairs;
+        if (!reflect::map_pairs(ue::get_object(gi(), STR("InventorySystem")), STR("ItemInstances"), pairs, nullptr, nullptr)) { err = "no item instances"; return false; }
+        for (auto& [k, v] : pairs) {
+            if (ue::to_utf8(static_cast<FName*>(k)->ToString()) != id) continue;
+            UObject* inst = *static_cast<UObject**>(v);
+            ue::Call c(inst, STR("ChangeLevel"));
+            if (!c) { err = "ChangeLevel not found"; return false; }
+            return c.set_int(STR("NewLevel"), ue::get_int(inst, STR("CurrentLevel")) + delta).set_string(STR("DebugReason"), STR("E33Coop")).invoke();
+        }
+        err = "item instance not found: " + id;
+        return false;
+    }
+    err = "unknown key " + key;
+    return false;
+}
+
 } // namespace e33::game

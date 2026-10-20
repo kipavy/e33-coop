@@ -152,6 +152,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     std::optional<BuildIn> build_in;
     std::vector<uint8_t> last_build;
     size_t build_sends = 0;
+    size_t econ_sends = 0;
     uint32_t ready_battle = 0;
     int stalled = 0;
     bool disconnected = false;
@@ -263,6 +264,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     else { ++counts["builds_received_ok"]; last_build = build_in->data; }
                     build_in.reset();
                 }
+            } else if (auto* ed = std::get_if<proto::EconomyDelta>(&m)) {
+                ++counts[ed->rejected ? "economy_rejections" : "economy_received"];
             } else if (std::get_if<proto::WorldHash>(&m)) {
                 ++counts["world_hashes"];
             } else if (std::get_if<proto::JoinWait>(&m)) {
@@ -444,6 +447,17 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 lp->send(c);
             }
             ++counts["builds_sent"];
+        }
+        // "economy_send" : [{"after_s":10,"parts":{"gold":-100}}, …] : dépenses de ce joueur (après l'entrée dans la partie).
+        if (script["economy_send"].is_array() && joined_at >= 0 && econ_sends < script["economy_send"].size() &&
+            now_s() - joined_at > script["economy_send"][econ_sends]["after_s"].as_number(10)) {
+            const json::Value& es = script["economy_send"][econ_sends++];
+            proto::EconomyDelta d;
+            d.seq = static_cast<uint32_t>(econ_sends);
+            d.origin = my_id;
+            for (const auto& [k, v] : es["parts"].obj) d.parts.push_back({k, v.as_int()});
+            lp->send(d);
+            ++counts["economy_sent"];
         }
         if (ready_at >= 0 && now_s() >= ready_at) { lp->send(proto::BattleReady{ready_battle, my_id}); ready_at = -1; ++counts["ready_sent"]; }
         // "resync_after_s" : une fois entré, demande un nouvel instantané (désync d'exploration simulée).
@@ -674,7 +688,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     ++cursor;
                 } else if (std::holds_alternative<proto::NarrativeState>(l.msg) || std::holds_alternative<proto::PauseState>(l.msg) ||
                            std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg) ||
-                           std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg)) {
+                           std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;

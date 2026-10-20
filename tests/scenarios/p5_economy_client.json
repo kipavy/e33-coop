@@ -1,0 +1,16 @@
+{
+  "name": "p5_economy_client",
+  "description": "Phase 5 : ressources communes vues du client. Le vrai jeu client rejoint le faux hôte (rejeu de p5_economy_host), applique la dépense de l'hôte (50 d'or), puis dépense lui-même 30 d'or (comme un achat) : la variation part à l'hôte.",
+  "join": true,
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait", "until": "economy_deltas_applied", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "s": 4 },
+    { "do": "economy", "key": "gold", "delta": -30 },
+    { "do": "wait", "until": "economy_deltas_sent", "is": ">=1", "timeout": 30 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p5_economy_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p5_economy_snapshot.sav", "--paced", "1", "--timeout", "600"] },
+  "expect": { "economy_deltas_applied": ">=1", "economy_deltas_sent": "1", "economy_errors": "0", "economy_rejected": "any" }
+}

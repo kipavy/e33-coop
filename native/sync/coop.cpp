@@ -2004,6 +2004,8 @@ void init()
         bn.name_of = [](uint8_t id) { return player_name(id); };
         bn.owner_of = [](const std::string& n) { return character_owner(n); };
         bn.sharing = [] { if (s.role == Role::Client) return explore::joined() && s.accepted; for (auto& p : s.peers) if (in_game(p)) return true; return false; };
+        bn.last_event_age = [] { return explore::last_event_age(); };
+        bn.request_resync = [](const std::string& why) { publish(proto::ResyncRequest{why}); };
         builds::init(s.role == Role::Host, bn);
     }
     subscribe();
