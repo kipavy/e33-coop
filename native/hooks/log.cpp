@@ -1,5 +1,6 @@
 #include "log.hpp"
 
+#include <cwchar>
 #include <filesystem>
 
 #define WIN32_LEAN_AND_MEAN
@@ -44,7 +45,14 @@ LaunchArgs parse()
     if (argv) LocalFree(argv);
     if (a.role.empty()) a.role = L"solo";
     if (a.instance.empty()) a.instance = a.role;
-    if (a.run_dir.empty()) a.run_dir = (std::filesystem::path(mod_dir()) / L"logs").wstring();
+    if (a.run_dir.empty()) {
+        // Partie normale (pas de test) : un dossier par lancement, pour qu'une relance ne recouvre pas le journal précédent.
+        SYSTEMTIME t{};
+        GetLocalTime(&t);
+        wchar_t stamp[32];
+        swprintf_s(stamp, L"%04u%02u%02u-%02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        a.run_dir = (std::filesystem::path(mod_dir()) / L"logs" / stamp).wstring();
+    }
     return a;
 }
 
