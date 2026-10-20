@@ -226,7 +226,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 lp->on_datagram(d.data.data(), d.data.size(), now_s());
                 while (lp->pop(ignored)) ++counts["messages_while_mismatched"];
             }
-            if (counts["version_replies"] >= 1 || counts["version_probes"] >= 240) { ended = true; ended_at = now_s() - 2.0; }
+            if (ended_at < 0 && (counts["version_replies"] >= 1 || counts["version_probes"] >= 240)) { ended = true; ended_at = now_s() - 2.0; }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }

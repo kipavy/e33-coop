@@ -141,8 +141,9 @@ void Link::on_datagram(const uint8_t* data, size_t len, double now)
     const uint16_t proto_v = r.u16();
     if (r.ok() && magic == proto::kMagic && proto_v != proto::kProtocolVersion) {
         // Autre version du mod : signalé une fois (refus avec un message clair), jamais interprété.
+        // Traité par on_protocol_mismatch quand il est branché (refus clair) : pas compté comme message invalide.
         if (!mismatch_reported_) { mismatch_reported_ = true; if (on_protocol_mismatch) on_protocol_mismatch(proto_v); }
-        invalid("protocol version " + std::to_string(proto_v));
+        if (!on_protocol_mismatch) invalid("protocol version " + std::to_string(proto_v));
         return;
     }
     const uint32_t epoch = r.u32();
