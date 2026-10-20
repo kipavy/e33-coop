@@ -13,5 +13,5 @@
   "defense": ["manual"],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=2"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_manual.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "1200"] },
-  "expect": { "battle_end": "any", "free_aim_controls_locked": ">=1" }
+  "expect": { "battle_end": "any", "free_aim_controls_locked": ">=1", "input_contexts_removed": ">=1" }
 }

@@ -34,6 +34,7 @@ UObject* battle_manager();
 UObject* save_manager();
 UObject* main_menu();         // WBP_MM_MainMenu_C s'il existe
 UObject* world_pawn();        // pion d'exploration (BP_jRPG_Character_World_C) : nul au démarrage et au menu ; sans ProcessEvent
+UObject* input_subsystem();   // sous-système Enhanced Input du joueur local (contextes d entrée) ; FindFirstOf, pas à chaque image
 bool map_change_in_progress();
 bool in_battle();
 

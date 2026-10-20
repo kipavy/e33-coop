@@ -138,6 +138,7 @@ UObject* save_manager() { return ue::get_object(gi(), STR("SaveManager")); }
 
 UObject* main_menu() { return UObjectGlobals::FindFirstOf(STR("WBP_MM_MainMenu_C")); }
 UObject* world_pawn() { return UObjectGlobals::FindFirstOf(STR("BP_jRPG_Character_World_C")); }
+UObject* input_subsystem() { return UObjectGlobals::FindFirstOf(STR("EnhancedInputLocalPlayerSubsystem")); }
 
 bool map_change_in_progress()
 {

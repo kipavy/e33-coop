@@ -71,9 +71,10 @@ if ($attempt -gt 1) {
     # Tentative précédente gelée au démarrage : tout arrêter, mettre ses journaux de côté, relancer.
     $peers | Where-Object { -not $_.HasExited } | ForEach-Object { Stop-Process -Id $_.Id -Force }
     $peers = @()
-    Get-ChildItem $run -File | Where-Object { $_.Extension -in ".jsonl", ".out", ".err" } | ForEach-Object { Rename-Item $_.FullName ($_.Name + ".attempt$($attempt - 1)") }
+    # Le jeu garde son journal ouvert jusqu'à sa fin : attendre qu'il soit fermé avant de renommer.
     while (Get-Process "SandFall*" -ErrorAction SilentlyContinue) { Start-Sleep 2 }
     Start-Sleep 5
+    Get-ChildItem $run -File | Where-Object { $_.Extension -in ".jsonl", ".out", ".err" } | ForEach-Object { Rename-Item $_.FullName ($_.Name + ".attempt$($attempt - 1)") }
 }
 for ($i = 0; $i -lt $peerSpecs.Count; $i++) {
     if ($peerSpecs[$i].start -ne "after_game") { $peers += Start-FakePeer $peerSpecs[$i] $i; Start-Sleep -Seconds 1 }

@@ -170,6 +170,8 @@ struct State {
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
     bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
     bool input_enabled = true;
+    UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
+    std::map<UObject*, int> removed_contexts;              // contextes d'entrée retirés pendant le blocage -> priorité
     std::map<std::string, int> counters;
     FreeAimOwner fa_own;                                   // visée d'un héros d'ici
     FreeAimReplay fa_rep;                                  // visée rejouée d'un héros d'un autre joueur
@@ -818,14 +820,88 @@ void client_turn_start(UObject* actor)
     if (s.perturb_turn && *s.perturb_turn == b.turn) perturb_state();
 }
 
-// Entrées de combat de cette instance (roue d'actions, ciblage) : coupées pendant le tour du héros d'un autre joueur.
-void set_local_input(bool enabled, const char* why)
+// Contextes Enhanced Input coupés pendant le tour du héros d'un autre joueur. SetBattleInputEnabled(false) ne
+// suffit pas : la roue reste active (RT / gradient ouvrait le menu de Verso, vu le 2026-10-20). Le jeu les remet
+// lui-même au début de chaque tour d'un héros d'ici (tour, roue, ciblage) ou de chaque compétence / visée (QTE,
+// visée libre). Pas IMC_Battle_PauseMenu (permanent) ni IMC_BattleDefense / InputBlocker (liés une fois, puis gardés).
+constexpr const wchar_t* kBlockedContexts[] = {
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_PlayerTurn.IMC_Battle_PlayerTurn",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_MainWheel.IMC_Battle_MainWheel",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_Targeting.IMC_Battle_Targeting",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_QTE.IMC_Battle_QTE",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_FreeAim.IMC_Battle_FreeAim",
+};
+// Ceux que le jeu remet au début du tour d'un héros d'ici (rendus par le mod s'ils manquent encore).
+constexpr size_t kTurnContexts = 3;
+
+UObject* blocked_context(size_t i)
+{
+    static UObject* cache[std::size(kBlockedContexts)] = {};
+    if (!cache[i]) cache[i] = ue::find_object(kBlockedContexts[i]);
+    return cache[i];
+}
+
+std::optional<int> context_priority(UObject* imc)
+{
+    ue::Call has(s.input_sub, STR("HasMappingContext"));
+    if (!has) return std::nullopt;
+    has.set_object(STR("MappingContext"), imc).invoke();
+    if (!has.out_bool(STR("ReturnValue"))) return std::nullopt;
+    return static_cast<int>(has.out_int(STR("OutFoundPriority")));
+}
+
+// À chaque image pendant le blocage : retire ceux que le jeu a (re)mis.
+void enforce_input_block()
+{
+    if (!s.input_sub) return;
+    for (size_t i = 0; i < std::size(kBlockedContexts); ++i) {
+        UObject* imc = blocked_context(i);
+        if (!imc) continue;
+        const auto prio = context_priority(imc);
+        if (!prio) continue;
+        ue::Call rm(s.input_sub, STR("RemoveMappingContext"));
+        if (!rm) return;
+        rm.set_object(STR("MappingContext"), imc).invoke();
+        if (!s.removed_contexts.count(imc)) s.removed_contexts[imc] = *prio;
+        bump("input_contexts_removed");
+        log().write("coop_input_context", JsonObj().add("removed", ue::to_utf8(imc->GetName())).add("priority", *prio), s.battle.turn);
+    }
+}
+
+// Fin du blocage au début du tour d'un héros d'ici : le jeu a pu remettre tour/roue/ciblage juste avant (retirés
+// alors par le blocage) ; on rend ceux qui manquent, avec leur priorité.
+void restore_turn_contexts()
+{
+    if (!s.input_sub) return;
+    for (size_t i = 0; i < kTurnContexts; ++i) {
+        UObject* imc = blocked_context(i);
+        auto it = imc ? s.removed_contexts.find(imc) : s.removed_contexts.end();
+        if (it == s.removed_contexts.end() || context_priority(imc)) continue;
+        ue::Call add(s.input_sub, STR("AddMappingContext"));
+        if (!add) return;
+        add.set_object(STR("MappingContext"), imc).set_int(STR("Priority"), it->second).invoke();
+        bump("input_contexts_restored");
+        log().write("coop_input_context", JsonObj().add("restored", ue::to_utf8(imc->GetName())).add("priority", it->second), s.battle.turn);
+    }
+}
+
+// Entrées de combat de cette instance : aucune pendant le tour du héros d'un autre joueur (roue, gradient, ciblage,
+// QTE, visée). local_turn : la fin du blocage ouvre le tour d'un héros d'ici.
+void set_local_input(bool enabled, const char* why, bool local_turn = false)
 {
     if (enabled == s.input_enabled) return;
     s.input_enabled = enabled;
     ue::Call c(game::battle_manager(), STR("SetBattleInputEnabled"));
     if (c) c.set_bool(STR("Enabled"), enabled).invoke();
-    log().write("coop_input", JsonObj().add("enabled", enabled).add("why", why), s.battle.turn);
+    if (!enabled) {
+        s.input_sub = game::input_subsystem();
+        s.removed_contexts.clear();
+        enforce_input_block();
+    } else {
+        if (local_turn) restore_turn_contexts();
+        s.removed_contexts.clear();
+    }
+    log().write("coop_input", JsonObj().add("enabled", enabled).add("why", why).add("subsystem", s.input_sub != nullptr), s.battle.turn);
 }
 
 // --- Fin de combat -------------------------------------------------------------------------
@@ -968,8 +1044,11 @@ void subscribe()
         if (s.role == Role::Host) host_turn_start(ctx.Context);
         else if (s.role == Role::Client && s.battle.active) client_turn_start(ctx.Context);
         // Tour du héros d'un autre joueur : pas de choix d'action ici (son action arrive par le réseau).
-        if (s.role != Role::Solo && s.battle.active && s.lock_input)
-            set_local_input(!game::is_player(ctx.Context) || controls(game::spot(ctx.Context)), "turn start");
+        if (s.role != Role::Solo && s.battle.active && s.lock_input) {
+            const bool hero = game::is_player(ctx.Context);
+            const bool mine = hero && controls(game::spot(ctx.Context));
+            set_local_input(!hero || mine, "turn start", mine);
+        }
     });
 
     // Passer le tour / fuir (chemins de l'interface, sans RequestActionExecution) : publiés comme les autres actions.
@@ -1039,6 +1118,18 @@ void subscribe()
         }
         b.windows[ctx.Context] = w;
     });
+    // Diagnostic : tout appui QTE qui atteint le gestionnaire de combat, avec les fenêtres ouvertes à cet instant.
+    bus.pre(fn(game::path::BattleMgr, L"OnComboPressed"), [](HookCtx&, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        std::string open = "[";
+        for (const auto& [tl, w] : s.battle.windows) {
+            if (open.size() > 1) open += ",";
+            open += "{\"spot\":" + std::to_string(w.spot) + ",\"seq\":" + std::to_string(w.seq) + ",\"local\":" + (w.local ? "true" : "false")
+                  + ",\"elapsed_ms\":" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - w.start).count())
+                  + ",\"window_ms\":" + std::to_string(static_cast<int64_t>(w.duration * 1000)) + "}";
+        }
+        log().write("coop_combo_pressed", JsonObj().raw("open", open + "]").add("input_enabled", s.input_enabled), s.battle.turn);
+    });
     // Héros d'ici : le premier appui réussi est publié tout de suite, avec son instant dans la fenêtre.
     bus.post(fn(game::path::Timeline, L"TryActivate"), [](HookCtx& ctx, UFunction* f) {
         auto it = s.battle.windows.find(ctx.Context);
@@ -1054,8 +1145,11 @@ void subscribe()
             }
             return;
         }
-        if (w.published || !ok) return;
         const double elapsed = std::chrono::duration<double>(SteadyClock::now() - w.start).count();
+        // Diagnostic (QTE « raté d'emblée » à la manette, 2026-10-20) : chaque appui d'ici, même rejeté.
+        log().write("coop_combo_try", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("ok", ok).add("perfect", perfect)
+                                          .add("elapsed_ms", static_cast<int64_t>(elapsed * 1000)).add("window_ms", static_cast<int64_t>(w.duration * 1000)), s.battle.turn);
+        if (w.published || !ok) return;
         const double frac = w.duration > 0 ? std::clamp(elapsed / w.duration, 0.0, 1.0) : 0.5;
         const proto::ComboResult cr{s.battle.id, s.battle.turn, static_cast<uint8_t>(w.spot), w.seq, true, perfect, static_cast<uint16_t>(std::lround(frac * 1000))};
         w.published = true;
@@ -1627,6 +1721,7 @@ void tick(double dt)
         log().write("frame_hitch", JsonObj().add("dt_ms", static_cast<int64_t>(dt * 1000.0)).add("in_combo_window", !s.battle.windows.empty()), s.battle.turn);
     }
     pump_network();
+    if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
     run_remote_action();
     // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
