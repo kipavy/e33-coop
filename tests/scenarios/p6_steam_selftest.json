@@ -1,0 +1,13 @@
+{
+  "name": "p6_steam_selftest",
+  "description": "Phase 6 : transport Steam, auto-test sans autre compte. Le jeu (hôte, -e33transport=steam, sans lobby pour ne rien ouvrir sur le compte) résout l'API Steam du jeu, puis s'envoie des messages P2P (Steam Networking Messages) à son propre SteamID et vérifie qu'ils reviennent.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 300,
+  "explore": [
+    { "do": "wait", "until": "steam_selftest_sent", "is": ">=5", "timeout": 120 },
+    { "do": "wait", "until": "steam_selftest_received", "is": ">=3", "timeout": 60 },
+    { "do": "wait", "s": 2 }
+  ],
+  "launch_args": ["-e33role=host", "-e33transport=steam", "-e33steamlobby=0", "-e33steamselftest=1"],
+  "expect": { "steam_errors": "0", "steam_selftest_send_errors": "0", "steam_selftest_received": ">=3" }
+}

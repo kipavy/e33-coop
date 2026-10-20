@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -225,6 +226,9 @@ struct State {
     bool f7_down = false;
     double next_punch = 0;
     bool name_from_arg = false;
+    bool steam_lobby = true;                               // -e33steamlobby=0 : pas de lobby (auto-test sans toucher au compte)
+    bool steam_selftest = false;                           // -e33steamselftest=1 : messages Steam envoyés à soi-même
+    uint32_t selftest_seq = 0;
 };
 
 State s;
@@ -507,6 +511,7 @@ void pump_network()
             }
             if (!peer) {
                 const uint16_t pv = net::Link::packet_protocol(d.data.data(), d.data.size());
+                if (pv == 0 && d.data.size() == 8 && std::memcmp(d.data.data(), "E33S", 4) == 0) { bump("steam_selftest_received"); continue; }
                 if (pv == 0) { log().write("net_ignored", JsonObj().add("peer", d.peer).add("why", "not an E33Coop packet")); continue; }
                 if (pv != proto::kProtocolVersion) {
                     // Autre version du mod : on répond avec notre version (son jeu affiche l'écart), sans créer de pair.
@@ -1980,6 +1985,16 @@ void steam_tick()
         log().write("coop_steam_ready", JsonObj().add("steam_id", std::to_string(net::steam::my_id())).add("name", s.my_name)
                                            .add("command_line_lobby", std::to_string(net::steam::command_line_lobby())));
     }
+    if (s.steam_selftest && s.now >= s.next_punch) {
+        // Auto-test : un message P2P à son propre SteamID par seconde (compté à la réception dans pump_network).
+        s.next_punch = s.now + 1.0;
+        uint8_t pkt[8] = {'E', '3', '3', 'S'};
+        const uint32_t seq = ++s.selftest_seq;
+        std::memcpy(pkt + 4, &seq, 4);
+        const bool ok = s.transport->send(net::steam::peer_of(net::steam::my_id()), pkt, sizeof pkt);
+        bump(ok ? "steam_selftest_sent" : "steam_selftest_send_errors");
+    }
+    if (!s.steam_lobby) return;
     net::steam::poll_lobby(s.lobby);
     if (s.lobby.state == net::steam::LobbyState::Failed && !s.lobby_error_shown) {
         s.lobby_error_shown = true;
@@ -2139,6 +2154,8 @@ void init()
     }
     // Steam : transport et lobby créés au premier tick (rien dans les 10 premières secondes, voir dllmain), steam_tick.
     if (const std::wstring l = arg(L"e33lobby"); !l.empty()) s.lobby_wanted = std::wcstoull(l.c_str(), nullptr, 10);
+    if (arg(L"e33steamlobby") == L"0") s.steam_lobby = false;
+    if (arg(L"e33steamselftest") == L"1") s.steam_selftest = true;
     s.recorder.open(ue::to_utf8((std::filesystem::path(launch_args().run_dir) / (s.role == Role::Host ? L"recording-host.jsonl" : L"recording-client.jsonl")).wstring()));
     log().set_role(s.role == Role::Host ? "host" : "client");
 
