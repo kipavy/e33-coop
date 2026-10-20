@@ -341,6 +341,14 @@ uint8_t character_owner(const std::string& name)
     return idx < players.size() ? players[idx] : 0;
 }
 
+// Répartition lisible de l'équipe (« Maelle : Killian · Verso : TOTOFFF »), montrée à chacun après un changement.
+std::string owners_summary()
+{
+    std::string out;
+    for (auto& c : game::party_names()) out += (out.empty() ? "" : " · ") + c + " : " + player_name(character_owner(c));
+    return out;
+}
+
 // Hôte : répartition actuelle des personnages de l'équipe, envoyée aux clients (ils l'appliquent telle quelle).
 proto::Owners character_owner_map()
 {
@@ -368,6 +376,7 @@ void cycle_owner(size_t index)
     broadcast(character_owner_map());
     bump("owner_reassignments");
     ui::toast("owner_changed", {ch, player_name(next)});
+    ui::toast("owners_summary", {owners_summary()}, 8.0);
     log().write("coop_owner_reassigned", JsonObj().add("character", ch).add("player", static_cast<int>(next)));
 }
 
@@ -755,6 +764,7 @@ void handle(Peer& p, proto::Message& m)
             s.owner_overrides.clear();
             for (auto& o : ow->owners) s.owner_overrides[o.character] = o.player_id;
             bump("owner_maps_received");
+            ui::toast("owners_summary", {owners_summary()}, 8.0);
             log().write("coop_character_owners", JsonObj().raw("msg", proto::to_json(m)));
             return;
         }
@@ -2557,16 +2567,29 @@ void tick(double dt)
             else ui::clear_status("keys");
         }
     }
-    // F6 (hôte, hors combat, fenêtre du jeu au premier plan) : le personnage suivant de l'équipe change de joueur (menu de
-    // réattribution du brief, version touche). Diffusé aux clients ; vaut pour les builds et les combats suivants.
+    // Hôte, hors combat, fenêtre du jeu au premier plan : F5 choisit un personnage de l'équipe, F6 le donne au joueur
+    // suivant (menu de réattribution du brief, version touches). Diffusé aux clients ; vaut pour les builds et les
+    // combats suivants. Avant : F6 seul passait aussi au personnage suivant à chaque appui (peu pratique, Killian).
     {
-        static bool f6_down = false;
-        static size_t f6_index = 0;
-        const bool down = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+        static bool f5_down = false, f6_down = false;
+        static size_t selected = SIZE_MAX;   // aucun : le premier F5 choisit le premier personnage
+        const bool d5 = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
+        const bool d6 = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+        const bool press5 = d5 && !f5_down, press6 = d6 && !f6_down;
         DWORD pid = 0;
-        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
-        if (down && !f6_down && pid == GetCurrentProcessId() && s.role == Role::Host && !s.battle.active) cycle_owner(f6_index++);
-        f6_down = down;
+        if (press5 || press6) GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        const bool ok = (press5 || press6) && pid == GetCurrentProcessId() && s.role == Role::Host && !s.battle.active;
+        if (const auto party = ok ? game::party_names() : std::vector<std::string>{}; !party.empty()) {
+            if (press5 || selected == SIZE_MAX) {   // F6 sans choix préalable : choisit d'abord
+                selected = (selected + 1) % party.size();
+                const std::string& ch = party[selected];
+                ui::toast("owner_selected", {ch, player_name(character_owner(ch))});
+            } else {
+                cycle_owner(selected % party.size());
+            }
+        }
+        f5_down = d5;
+        f6_down = d6;
     }
     // Héros repris à un joueur parti : si c'est le tour de l'un d'eux, le joueur de l'hôte le joue (entrées rendues).
     if (s.takeover && s.battle.active) {
