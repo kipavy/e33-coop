@@ -103,6 +103,7 @@ struct Battle {
     bool active = false;
     bool ending = false;                                   // fin de combat commencée (tirages des récompenses encore remplacés)
     bool finalized = false;
+    bool left = false;                                     // fuite : le dernier tour n'est pas comparable (l'hôte a pu en commencer un de plus)
     std::map<int, uint8_t> owner_by_spot;                  // emplacement de héros -> player_id
     // Actions des héros
     std::map<std::pair<uint32_t, int>, proto::ActionCommand> commands;   // (tour, emplacement) -> commande reçue
@@ -980,7 +981,7 @@ void finalize_battle(const char* why)
             bump("end_mismatches");
             log().write("coop_end_mismatch", JsonObj().add("local", b.local_end).add("host", b.host_end));
         }
-        compare_draws(b.turn);
+        if (!b.left) compare_draws(b.turn);
     }
     b.finalized = true;
     b.active = false;
@@ -1521,6 +1522,7 @@ void subscribe()
         if (!b.active || b.ending) return;
         b.ending = true;
         b.local_end = game::EndNeutral;
+        b.left = true;
         if (s.role == Role::Host) broadcast(proto::BattleEnd{b.id, static_cast<uint8_t>(game::EndNeutral)});
         bump("battles_left");
         log().write("coop_battle_left", JsonObj().add("battle", b.id));
