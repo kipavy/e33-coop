@@ -2,7 +2,7 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-20, soir) — **phase 4 finie** (acceptée par Killian, fusionnée dans `main`) ; prochaine : phase 5
+## État courant (2026-10-20, nuit) — **phase 5 en cours** (branche `phase-5`)
 
 | Phase | État | Branche |
 |---|---|---|
@@ -10,9 +10,36 @@
 | 1 — environnement de test autonome | **finie** | `phase-1` (fusionnée dans `main`) |
 | 2 — preuve de concept réseau | **finie** (validée en jeu le 2026-10-19) | `phase-2` (fusionnée dans `main`) |
 | 3 — synchro complète du combat | **finie** (validée en jeu le 2026-10-20) | `phase-3` (fusionnée dans `main`) |
-| 4 — session et exploration | **finie** (acceptée le 2026-10-20, batterie complète non repassée à sa demande) | `phase-4` (fusionnée dans `main`) |
+| 4 — session et exploration | **finie** (acceptée le 2026-10-20) | `phase-4` (fusionnée dans `main`) |
+| 5 — robustesse | **en cours** | `phase-5` |
+| 6 — transport Steam | à faire (code du transport écrit hors dépôt, à intégrer) | `phase-6` |
 
-Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions gratuite. Pas encore de `LICENSE` (choix de Killian).
+### Phase 5 : fait (écrit, compilé ; vert en jeu là où c'est indiqué)
+- **Base** : batterie complète repassée sur le build de fin de phase 4 : 15/18. Rouges expliqués : `p3_party_client` (le jeu s'est mis en pause, perte de focus probable → le runner referme désormais tout menu pause non demandé), `p4_cinematic_host` (limite connue : le combat de boss démarre malgré la barrière), `p4_cinematic_client` (le faux hôte attendait l'écho « cinématique commencée » que le vrai client n'envoie pas → messages informatifs non bloquants).
+- **Protocole v6** : époque par lien (redémarrage d'un pair détecté), battement « occupé » envoyé par un thread à part pendant les chargements (le thread de jeu bloque 30 à 60 s), `Owners`, `BattleReady`, `Roster`, `WorldHash`, `ResyncRequest`, minuteur de tour (`BattleStart.turn_timer_s`, `ActionCommand.forced`). Paquet d'une autre version de protocole : réponse avec la nôtre, refus clair des deux côtés. Tests unitaires du lien (redémarrage, occupé, version).
+- **Départs** : silence de 15 s (ou 300 s si le pair n'envoie que « occupé »), `Bye`, ou redémarrage → l'hôte retire le joueur, reprend ses héros (combat en cours compris, tour en cours joué par l'hôte), prévient les autres (`Owners`, `Roster`). Retour par le chemin « rejoindre » (`JoinWait` pendant un combat, instantané après ; instantané refait si un combat a commencé pendant le chargement).
+- **Fin de session côté client** : hôte parti (`Bye`), injoignable (90 s sans réponse), perdu (15 s) ou refus → message traduit, entrées et pause rendues, retour au menu principal. Retour au menu par un joueur (menu pause) = départ propre.
+- **Démarrage de combat coordonné** : l'hôte tient son premier tour en pause jusqu'au `BattleReady` de chaque client de la partie (10 min max). Pause partagée par raisons (barrière, pause d'un autre joueur, démarrage) et réappliquée si le jeu l'enlève (fin de cinématique).
+- **Minuteur de tour** (`-e33turntimer=N`, désactivé par défaut) : attaque automatique imposée et diffusée par l'hôte.
+- **Textes FR/EN** (`native/ui`, `-e33lang=fr|en`, sinon langue de Windows) : « tour de X », « pause demandée par X », attente des joueurs, départs, fin de session. **Journalisés seulement : l'affichage à l'écran reste à brancher.**
+- **Hash d'état d'exploration** (or, inventaire, objets utilisés, ennemis vaincus, drapeaux, GPE, cinématiques et dialogues vus) : lecture générique par réflexion (`native/hooks/reflect`), envoyé par l'hôte au calme, comparé par le client au calme ; deux écarts de suite → nouvel instantané (`ResyncRequest`).
+- **Décisions** : D13 (builds et ressources communes : chacun gère ses personnages, tout le monde peut dépenser l'inventaire commun, l'hôte arbitre ; option 1 choisie par Killian). Idée « exploration libre » notée, reportée après la phase 6.
+
+### Phase 5 : scénarios (build 39453697725, premiers passages)
+- Verts : `p2_host_vs_fakeclient`, `p2_client_vs_fakehost`, `p5_turntimer_host` (démarrage coordonné tenu 6 s, minuteur, indicateurs).
+- `p5_dropout_host` : départ par silence et par `Bye` détectés, héros repris (y compris en plein tour), retour avec écran d'attente ; échec final car l'écran de victoire restait ouvert (runner corrigé).
+- `p5_hostbye_client` / `p5_hostlost_client` : fin de session, message et retour au menu OK ; échecs dus aux vérifications de combat par défaut (corrigé).
+- `p5_version_host` : les 3 refus Hello OK (message précis) ; le client « vieux protocole » sondait trop peu longtemps (corrigé). `p5_reject_client` / `p5_protocol_client` : scénario invalide (corrigé).
+- Relance en cours sur le build 39457856628.
+
+### Phase 5 : reste à faire
+- Menus de builds (niveau, attributs, compétences, équipement, améliorations, marchands) : cartographie en jeu (`lua/E33Explore/snippets/hook_builds.lua` prêt), puis rejeu des opérations via l'hôte (D13).
+- Suiveur : bloquer ses interactions et choix locaux (`IMC_UI_Exploration`, `IMC_UI_Dialogue` à vérifier en jeu).
+- Affichage des textes à l'écran (widget du jeu à trouver).
+- Revérifier en jeu la cinématique → combat de boss avec la pause réappliquée (`p4_cinematic_*`).
+- Scénarios `p5_resync_*` (hôte puis client avec deux instantanés).
+
+## Historique des phases précédentes
 
 ### Fait (phase 3)
 - **Modèle D11** (rejeu symétrique) : chaque instance joue tous les héros ; l'hôte relaie à chacun les actions, résultats de QTE et défenses des héros qu'il ne contrôle pas ; état complet de l'hôte à chaque début de tour (correction seulement en cas d'écart). Détails : `DECISIONS.md` D11.
@@ -59,6 +86,7 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 - Rien.
 
 ## Historique
+- 2026-10-20 (soir) : phase 5 démarrée : batterie de base 15/18 (rouges expliqués) ; protocole v6, départs et retours, fin de session, démarrage coordonné, minuteur de tour, textes FR/EN, hash d'exploration ; premiers scénarios p5.
 - 2026-10-20 (soir) : phase 4 : rejoindre (instantané), pilote et prise de main, transitions, combat d'exploration, dialogues, barrière de cinématique, pause en combat, déplacement coupé chez le suiveur ; acceptée par Killian, fusionnée dans `main`.
 - 2026-10-18 : démarrage ; phase 0 complète ; test runner écrit.
 - 2026-10-19 (nuit) : phase 1 complète (3/3) ; phase 2 : protocole, fakepeer, module coop, premier combat hôte vs faux client sans désync. Pause.
