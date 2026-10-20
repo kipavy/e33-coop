@@ -49,6 +49,13 @@
 - Paquet joueur : `tools/package/make-player-package.ps1` (UE4SS épinglé + E33Coop, liste de mods fixe, `install.ps1` / `uninstall.ps1`). Partie normale : journaux dans `ue4ss/Mods/E33Coop/logs/<date-heure>/`.
 - Checklist : `docs/VALIDATION-PHASE5-6.md`.
 
+### Phase 6 : premier essai réel à deux PC (2026-10-20, ~23h30, build 39472366662)
+- Connexion Steam OK (Killian hôte, son ami client) : lobby, jonction, instantané, exploration partagée.
+- **Combat 1 bloqué** : Killian attaque le monstre par surprise (`engage` 1, envoyé dans `BattleStart`), mais le pion suiveur du client touche le monstre de lui-même en contact normal (`engage` 0) avant que le mod lance le combat. Ordre des tours différent dès le tour 1 (hôte : Maelle, client : Verso) ; le client attend une commande pour Verso au tour 1, l'hôte attend Lune au tour 5. `coop_actor_mismatch` était seulement journalisé.
+- **Combat 2 bloqué** : le combat 1 n'était jamais clos chez le client (carte rechargée sans fin de combat). Son premier tour du combat 2 est compté comme tour 2 du combat 1, avant l'arrivée du `BattleStart` ; aucun `BattleReady` → l'hôte reste figé « en attente des autres joueurs » (Verso arrêté dans son animation d'entrée).
+- Corrections (à builder et revalider) : le client impose le personnage du `TurnStart` de l'hôte dans `StartCharacterTurn` (pré-hook, attente 15 s max, `coop_actor_forced`) ; rattrapage du premier tour quand le combat local a commencé avant le `BattleStart` (`coop_turn_start_catchup`) ; clôture du combat chez le client sur `BattleEnd` de l'hôte si le jeu local n'a pas fini (`finalize_battle("host_end")`).
+- Reste : un écart déjà commencé (tour lancé avant que le mod soit prêt) n'est toujours que journalisé ; le pion suiveur peut encore engager un combat lui-même (l'ordre est corrigé, pas l'engagement).
+
 ### Limites connues (phase 5)
 - Une dépense faite dans les 2 s d'un événement rejoué (coffre, combat) est absorbée dans la référence : le hash d'exploration la détecte et la resynchro reprend l'état de l'hôte (dépense perdue).
 - Réattribution des personnages : touche F6 de l'hôte (hors combat), pas de vrai menu.

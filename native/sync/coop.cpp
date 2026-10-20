@@ -158,7 +158,8 @@ struct Battle {
     // Fin
     int local_end = -1;
     int host_end = -1;
-    double end_flow_at = -1;                               // fin sans victoire : clôture différée (tick), jamais bloquante dans le flux de fin
+    double host_end_at = -1;                               // client : réception du BattleEnd de l'hôte
+    double end_flow_at = -1;                              // fin sans victoire : clôture différée (tick), jamais bloquante dans le flux de fin
     std::optional<proto::BattleRewards> host_rewards;
     // Démarrage coordonné (hôte) : clients qui ont commencé ce combat ; jeu en pause tant qu'il en manque.
     std::set<uint8_t> ready;
@@ -774,7 +775,7 @@ void handle(Peer& p, proto::Message& m)
         if (dw->battle_id == s.battle.id)
             for (auto& d : dw->draws) s.battle.host_draws[dw->turn][(static_cast<uint64_t>(d.key) << 16) | d.rank] = d.value;
     } else if (auto* be = std::get_if<proto::BattleEnd>(&m)) {
-        if (be->battle_id == s.battle.id) s.battle.host_end = be->result;
+        if (be->battle_id == s.battle.id) { s.battle.host_end = be->result; s.battle.host_end_at = s.now; }
         log().write("coop_battle_end_received", JsonObj().add("battle", be->battle_id).add("result", static_cast<int>(be->result)));
     } else if (auto* rw = std::get_if<proto::BattleRewards>(&m)) {
         if (rw->battle_id == s.battle.id) s.battle.host_rewards = *rw;
@@ -1447,22 +1448,60 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
                                          .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms), b.turn);
 }
 
+// Début de tour d'un personnage (OnTurnStart, ou rattrapage quand le combat local a démarré avant le BattleStart).
+void on_turn_start(UObject* actor)
+{
+    if (s.role == Role::Host) host_turn_start(actor);
+    else if (s.role == Role::Client && s.battle.active) client_turn_start(actor);
+    // Tour du héros d'un autre joueur : pas de choix d'action ici (son action arrive par le réseau).
+    if (s.role != Role::Solo && s.battle.active && s.lock_input) {
+        const bool hero = game::is_player(actor);
+        const bool mine = hero && controls(game::spot(actor));
+        set_local_input(!hero || mine, "turn start", mine);
+    }
+}
+
 void subscribe()
 {
     using game::path::fn;
     auto& bus = HookBus::get();
 
+    // Client : le personnage qui joue est celui de l'hôte, pas celui que le jeu local a calculé. L'ordre dépend de
+    // l'initiative, de l'engagement (attaque surprise) et des buffs de vitesse, qui peuvent différer : le 2026-10-20
+    // (Steam, 2 PC), l'hôte a ouvert avec Maelle et le client avec Verso, puis chacun attendait l'autre. On attend
+    // donc le TurnStart de l'hôte et on remplace le paramètre Character avant que le tour ne commence.
+    bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role != Role::Client || !s.battle.active || s.battle.ending) return;
+        if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
+        auto& b = s.battle;
+        const uint32_t next = b.turn + 1;
+        if (!wait_for([&] { return b.host_turns.count(next) > 0 || b.host_end >= 0; }, 15.0)) {
+            bump("actor_wait_timeouts");
+            log().write("coop_actor_wait_timeout", JsonObj().add("battle", b.id), next);
+            return;
+        }
+        auto it = b.host_turns.find(next);
+        if (it == b.host_turns.end()) return;   // combat fini chez l'hôte
+        auto** slot = static_cast<UObject**>(ue::param_address(ctx, f, STR("Character")));
+        if (!slot) return;
+        UObject* local = *slot;
+        const proto::Unit want{it->second.kind, it->second.index};
+        if (local && actor_unit(local).kind == want.kind && actor_unit(local).spot == want.spot) return;
+        UObject* host_actor = game::find_unit(want.kind == proto::ActorKind::Hero, want.spot);
+        if (!host_actor || game::is_dead_fast(host_actor)) {
+            bump("actor_force_failures");
+            log().write("coop_actor_force_failed", JsonObj().add("local", local ? game::char_class(local) : "").add("host", it->second.actor), next);
+            return;
+        }
+        *slot = host_actor;
+        bump("actors_forced");
+        log().write("coop_actor_forced", JsonObj().add("local", local ? game::char_class(local) : "").add("host", it->second.actor), next);
+    });
+
     // Début de tour : hôte -> TurnStart + StateHash + StateSync ; client -> contrôle et resynchro éventuelle.
     bus.post(fn(game::path::BattleChar, L"OnTurnStart"), [](HookCtx& ctx, UFunction*) {
         if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;   // contre : pas un tour
-        if (s.role == Role::Host) host_turn_start(ctx.Context);
-        else if (s.role == Role::Client && s.battle.active) client_turn_start(ctx.Context);
-        // Tour du héros d'un autre joueur : pas de choix d'action ici (son action arrive par le réseau).
-        if (s.role != Role::Solo && s.battle.active && s.lock_input) {
-            const bool hero = game::is_player(ctx.Context);
-            const bool mine = hero && controls(game::spot(ctx.Context));
-            set_local_input(!hero || mine, "turn start", mine);
-        }
+        on_turn_start(ctx.Context);
     });
 
     // Passer le tour / fuir (chemins de l'interface, sans RequestActionExecution) : publiés comme les autres actions.
@@ -2205,6 +2244,7 @@ void start_pending_battle()
     const proto::BattleStart bs = *s.pending_start;
     std::string err;
     bool started = game::in_battle();
+    const bool already = started;
     if (started) {
         // Notre pion a déjà engagé un combat (il suit le pilote) : ce doit être le même.
         std::string enc, gid;
@@ -2226,7 +2266,14 @@ void start_pending_battle()
     }
     s.pending_start.reset();
     s.battle.active = true;
-    log().write("coop_battle_start", JsonObj().add("battle", bs.battle_id).add("encounter", bs.encounter));
+    log().write("coop_battle_start", JsonObj().add("battle", bs.battle_id).add("encounter", bs.encounter).add("already_engaged", already));
+    // Combat engagé ici avant le BattleStart (notre pion suit le pilote) : son premier tour a pu commencer sans le mod.
+    // Sans rattrapage, le BattleReady ne part jamais et l'hôte reste figé en attente (vu le 2026-10-20, 2e combat).
+    if (UObject* cur = game::current_character(); already && cur && s.battle.turn == 0 && ue::get_bool(cur, STR("IsTurnActive"))) {
+        bump("turn_start_catchups");
+        log().write("coop_turn_start_catchup", JsonObj().add("actor", game::char_class(cur)));
+        on_turn_start(cur);
+    }
 }
 
 // Visée libre d'un héros d'un autre joueur : rejouée au même rythme que chez lui (décalée de replay_lag_s).
@@ -2451,6 +2498,13 @@ void tick(double dt)
     // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
     if (auto& b = s.battle; b.end_flow_at >= 0 && !b.finalized && (s.role == Role::Host || b.host_end >= 0 || s.now - b.end_flow_at > 8.0))
         finalize_battle("end_flow");
+    // Combat fini chez l'hôte sans fin locale (client bloqué, ou carte rechargée en suivant l'hôte) : clôture quand
+    // même, sinon l'état de ce combat déborde sur le suivant (vu le 2026-10-20 : 2e combat compté comme le tour 2 du 1er).
+    if (auto& b = s.battle; s.role == Role::Client && b.active && !b.finalized && b.host_end_at >= 0 && b.end_flow_at < 0 &&
+                            (!game::in_battle() || (b.host_end != game::EndVictory && s.now - b.host_end_at > 15.0))) {
+        bump("battles_closed_by_host_end");
+        finalize_battle("host_end");
+    }
     // Appuis de QTE rejoués pour les héros des autres joueurs (instant de leur propriétaire).
     auto& presses = s.battle.presses;
     for (size_t i = 0; i < presses.size();) {
