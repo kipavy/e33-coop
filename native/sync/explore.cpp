@@ -5,6 +5,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <vector>
@@ -107,6 +108,7 @@ struct S {
     std::string last_enemy;
     int last_engage = 0;
     double last_enemy_at = -1;
+    std::map<UObject*, int> removed_locomotion;   // suiveur : contextes de déplacement retirés -> priorité
 } s;
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
@@ -390,6 +392,72 @@ void on_map_change(const proto::MapChange& mc)
     log().write("coop_map_change_followed", JsonObj().add("level", mc.level).add("spawn", mc.spawn_tag).add("ok", ok));
 }
 
+// --- Entrées de déplacement d'un suiveur ------------------------------------------------------------
+// Le pion d'un suiveur est conduit par le mod (AddMovementInput) : les touches de déplacement locales sont coupées
+// en retirant les contextes de locomotion (même méthode qu'en combat, vu le 2026-10-20 : seul RemoveMappingContext
+// coupe vraiment une touche). Caméra, menus et dialogues restent libres. Rendus quand on redevient pilote.
+constexpr const wchar_t* kLocomotionContexts[] = {
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_Locomotion_Default_ALS.IMC_Locomotion_Default_ALS",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_Locomotion_Crouch.IMC_Locomotion_Crouch",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_Locomotion_CustomMovement.IMC_Locomotion_CustomMovement",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_Locomotion_WorldMapCharacter.IMC_Locomotion_WorldMapCharacter",
+};
+
+UObject* input_sub()
+{
+    static UObject* sub = nullptr;   // sous-système du joueur local : persistant d'un niveau à l'autre
+    if (!sub) sub = game::input_subsystem();
+    return sub;
+}
+
+UObject* locomotion_context(size_t i)
+{
+    static UObject* cache[std::size(kLocomotionContexts)] = {};
+    if (!cache[i]) cache[i] = ue::find_object(kLocomotionContexts[i]);
+    return cache[i];
+}
+
+std::optional<int> context_priority(UObject* sub, UObject* imc)
+{
+    ue::Call has(sub, STR("HasMappingContext"));
+    if (!has) return std::nullopt;
+    has.set_object(STR("MappingContext"), imc).invoke();
+    if (!has.out_bool(STR("ReturnValue"))) return std::nullopt;
+    return static_cast<int>(has.out_int(STR("OutFoundPriority")));
+}
+
+void movement_lock_tick()
+{
+    const bool lock = sharing() && !is_pilot() && !game::in_battle() && game::explore_pawn();
+    if (!lock && s.removed_locomotion.empty()) return;
+    UObject* sub = input_sub();
+    if (!sub) return;
+    for (size_t i = 0; i < std::size(kLocomotionContexts); ++i) {
+        UObject* imc = locomotion_context(i);
+        if (!imc) continue;
+        const auto prio = context_priority(sub, imc);
+        if (lock && prio) {
+            ue::Call rm(sub, STR("RemoveMappingContext"));
+            if (!rm) return;
+            rm.set_object(STR("MappingContext"), imc).invoke();
+            if (!s.removed_locomotion.count(imc)) s.removed_locomotion[imc] = *prio;
+            bump("movement_contexts_removed");
+            log().write("coop_movement_context", JsonObj().add("removed", ue::to_utf8(imc->GetName())).add("priority", *prio));
+        } else if (!lock) {
+            auto it = s.removed_locomotion.find(imc);
+            if (it == s.removed_locomotion.end()) continue;
+            if (!prio) {
+                ue::Call add(sub, STR("AddMappingContext"));
+                if (!add) return;
+                add.set_object(STR("MappingContext"), imc).set_int(STR("Priority"), it->second).invoke();
+                bump("movement_contexts_restored");
+                log().write("coop_movement_context", JsonObj().add("restored", ue::to_utf8(imc->GetName())).add("priority", it->second));
+            }
+            s.removed_locomotion.erase(it);
+        }
+    }
+}
+
 // --- Barrière narrative et pause ------------------------------------------------------------------
 
 bool others_in_narrative()
@@ -403,6 +471,7 @@ void poll_tick()
     if (s.now < s.next_poll) return;
     s.next_poll = s.now + kPollPeriod;
     if (!game::controller()) return;
+    movement_lock_tick();
     // Narration locale
     const bool cine = game::playing_cinematic();
     const bool dlg = !cine && game::in_dialogue();

@@ -16,5 +16,5 @@
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
   "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p4_session_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p4_session_snapshot.sav", "--paced", "1", "--timeout", "1000"] },
   "expect": { "snapshots_received": "1", "joins_completed": "1", "map_changes_followed": ">=1", "interactions_replayed": ">=1", "choices_replayed": ">=1",
-              "world_battles": ">=1", "interactions_missing": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
+              "world_battles": ">=1", "movement_contexts_removed": ">=1", "interactions_missing": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
 }

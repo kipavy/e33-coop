@@ -51,7 +51,7 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 ### Limites connues
 - Phase 4 : une cinématique qui enchaîne directement sur un combat (boss Renoir, TEST_A) : la barrière met l'hôte en pause à la fin de sa cinématique, mais le jeu lance quand même le combat environ 5 s plus tard. En exploration, la barrière tient. À traiter avec le démarrage de combat coordonné (phase 5).
 - Phase 4 : les cinématiques jamais vues ne se passent pas (`SkipCinematic` sans effet) ; le test cinématique dure donc ≈ 5 min.
-- Phase 4 : les entrées locales d'un suiveur (déplacement, interaction, choix de dialogue) ne sont pas encore bloquées ; elles sont journalisées (`local_actions_on_follower`).
+- Phase 4 : chez un suiveur, le déplacement local est coupé (contextes de locomotion retirés, signalé par Killian pendant la validation) ; interactions et choix de dialogue locaux ne sont pas encore bloqués, seulement journalisés (`local_actions_on_follower`).
 - QTE offensifs : le jeu accepte l'appui jusqu'à son traitement de la fin de fenêtre, 65 à 310 ms après `CurrentWindowEndRealTime` selon la partie (mod ou pas) : marge variable. Outil `tools/dev/qte-diag.ps1` (appuis manette mesurés en temps réel, avec et sans mod) ; 1 essai chacun le 2026-10-20 : pas d'écart net. Menu pause toujours accessible pendant le tour d'un autre joueur.
 - Une seule visée libre par tour rejouée ; attaques/contres gradient non testés en automatique ; Sciel/Monoco non vus ; pas d'indicateur « tour de X » (phase 5).
 

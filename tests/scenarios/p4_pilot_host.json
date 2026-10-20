@@ -15,5 +15,5 @@
   ],
   "launch_args": ["-e33role=host", "-e33port=7777"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_pilot.json", "--timeout", "600"] },
-  "expect": { "snapshots_sent": "1", "joined_players": "1", "pilot_changes": ">=2" }
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "pilot_changes": ">=2", "movement_contexts_removed": ">=1", "movement_contexts_restored": ">=1" }
 }
