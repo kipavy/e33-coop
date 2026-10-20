@@ -1,0 +1,11 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "0.4.0",
+  "gameplay_mods": [],
+  "join": true,
+  "session": true,
+  "defense": ["fail"],
+  "pause_in_battle": { "turn": 4, "s": 3 },
+  "expect": { "snapshots": "1", "world_battles": ">=1", "pauses": ">=2", "pauses_sent": "2" }
+}

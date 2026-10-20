@@ -83,6 +83,7 @@ struct Scenario {
     json::Value expect;
     json::Value setup;                    // {"<Héros>": {"hp": n, "shield": n, "dead": true}} : appliqué au tour 1, à l'identique sur chaque instance
     bool join = false;                    // client : rejoindre la partie de l'hôte (instantané) au lieu de charger "save"
+    int pause_at_turn = 0;                // ouvre le menu pause au début de ce tour (3 s), puis le referme (phase 4)
     std::vector<json::Value> explore;     // étapes d'exploration (phase 4) : voir run_explore_step
 };
 
@@ -123,6 +124,8 @@ struct State {
     double step_t = 0;
     bool step_started = false;
     bool battle_from_explore = false;
+    double follow_since = -1;
+    double pause_until = -1;
     int battles = 0;
     std::vector<std::string> errors;
 };
@@ -190,6 +193,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.expect = v["expect"];
     s.setup = v["setup"];
     s.join = v["join"].as_bool(false);
+    s.pause_at_turn = static_cast<int>(v["pause_at_turn"].as_int(0));
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
     if (s.save.empty() && !s.join) { err = "scenario needs save (or join)"; return false; }
     if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
@@ -580,6 +584,13 @@ void subscribe()
         if (g.turn == 1) { log().write("tr_inventory", JsonObj().raw("inventory", game::battle_inventory_json())); apply_setup(); }
         log().write("tr_turn", JsonObj().add("actor", game::char_class(ch)).add("player", game::is_player(ch)).add("counter", counter).raw("state", state_json()), g.turn);
         if (g.turn > g.sc.max_turns) { fail("max_turns exceeded"); return; }
+        if (g.sc.pause_at_turn > 0 && g.turn == g.sc.pause_at_turn && g.pause_until < 0) {
+            ue::Call c(game::controller(), STR("OpenPauseMenu"));
+            if (c) c.invoke();
+            g.pause_until = g.t + 3.0;
+            ++g.metrics["pauses_opened"];
+            log().write("tr_pause_open", JsonObj(), g.turn);
+        }
         if (game::is_player(ch) && !counter && coop::controls_spot(game::spot(ch))) {
             ++g.player_turns;
             g.pending_actor = ch;
@@ -728,6 +739,7 @@ void subscribe()
 //   {"do":"change_map","level":"Level_Camp_Main","spawn":"<tag>"}
 //   {"do":"world_battle"}                  pilote : combat avec l'ennemi du monde le plus proche (actions du scénario)
 //   {"do":"battle"}                        attend un combat lancé par un autre joueur, puis le joue
+//   {"do":"wait_follow","max":250}        suiveur : à moins de max (u) du pilote pendant 2 s
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -830,6 +842,16 @@ void run_explore_step(float dt)
             if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
         }
         // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
+    } else if (what == "wait_follow") {   // suiveur : écart au pilote sous "max" (u) pendant 2 s
+        const double e = explore::follow_error();
+        g.metrics["follow_error"] = static_cast<int>(e);
+        if (first) g.follow_since = -1;
+        if (e >= 0 && e <= st["max"].as_number(250)) {
+            if (g.follow_since < 0) g.follow_since = g.step_t;
+            if (g.step_t - g.follow_since >= 2.0) next_step("close");
+        } else {
+            g.follow_since = -1;
+        }
     } else if (what == "request_pilot") {
         explore::request_pilot();
         next_step("requested");
@@ -913,6 +935,12 @@ void tick(float dt)
         break;
     case Phase::Battle:
         tick_free_aim();
+        if (g.pause_until > 0 && g.t >= g.pause_until) {   // menu pause du scénario : refermé par « Reprendre »
+            g.pause_until = 0;
+            ue::Call c(ue::get_object(game::controller(), STR("PauseMenuWidget")), STR("OnResumeClicked"));
+            if (c) c.invoke();
+            log().write("tr_pause_close", JsonObj().add("menu_visible", game::pause_menu_visible()), g.turn);
+        }
         // Fuite : le jeu revient à l'exploration sans StartBattleEndFlow.
         if (g.battle_from_explore && g.frame % 30 == 0 && g.phase_t > 5.0 && !game::in_battle() && game::explore_pawn()) { resume_explore("left battle"); break; }
         if (g.pending_action_at >= 0 && g.t >= g.pending_action_at) {

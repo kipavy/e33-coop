@@ -1,0 +1,19 @@
+{
+  "name": "p4_pilot_host",
+  "description": "Phase 4 : prise de main. Le faux client rejoint la partie, demande la main et marche 5 s ; l'hôte devient suiveur et doit le rejoindre (écart < 250 u), puis reprend la main et marche.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "until": "pilot_changes", "is": ">=1", "timeout": 60 },
+    { "do": "wait", "s": 6 },
+    { "do": "wait_follow", "max": 250, "timeout": 40 },
+    { "do": "request_pilot" },
+    { "do": "wait", "s": 1 },
+    { "do": "move", "dir": [0, 1], "s": 2 },
+    { "do": "wait", "s": 2 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_pilot.json", "--timeout", "600"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "pilot_changes": ">=2" }
+}

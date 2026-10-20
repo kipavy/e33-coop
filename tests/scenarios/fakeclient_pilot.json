@@ -1,0 +1,10 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "0.4.0",
+  "gameplay_mods": [],
+  "join": true,
+  "session": true,
+  "take_pilot": { "after_s": 6, "dir": [1, 0], "speed": 250, "s": 5 },
+  "expect": { "snapshots": "1", "pilot_requests": "1", "pilot_changes": ">=3", "pilot_states_sent": ">=40" }
+}

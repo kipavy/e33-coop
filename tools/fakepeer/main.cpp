@@ -130,6 +130,13 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     struct Inbound { uint32_t xfer = 0, size = 0, got = 0; uint64_t hash = 0; std::string level; std::vector<uint8_t> data; };
     std::optional<Inbound> inbound;
     bool session_errors = false;
+    const json::Value& tp = script["take_pilot"];
+    std::optional<proto::PilotState> last_host_state;
+    proto::PilotState pilot_base;
+    double joined_at = -1, pilot_t0 = -1, next_pilot_send = 0;
+    bool pilot_requested = false;
+    double pause_off_at = -1;
+    uint32_t pilot_seq = 0;
 
     std::vector<std::string> defense;
     for (size_t i = 0; i < script["defense"].size(); ++i) defense.push_back(script["defense"][i].as_string("fail"));
@@ -167,6 +174,11 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 owners = bs->owners;
                 if (!bs->world_enemy.empty()) ++counts["world_battles"];
             } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
+                if (script["pause_in_battle"].is_object() && pause_off_at < 0 && ts->turn == static_cast<uint32_t>(script["pause_in_battle"]["turn"].as_int(3))) {
+                    link.send(proto::PauseState{my_id, true, true});
+                    pause_off_at = now_s() + script["pause_in_battle"]["s"].as_number(3);
+                    ++counts["pauses_sent"];
+                }
                 bool mine = false;
                 for (auto& o : owners) if (ts->kind == proto::ActorKind::Hero && o.spot == ts->index && o.player_id == my_id) mine = true;
                 if (!mine) continue;
@@ -258,10 +270,12 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     }
                     ++counts["snapshots"];
                     link.send(proto::JoinReady{inbound->xfer, inbound->level});
+                    joined_at = now_s();
                     inbound.reset();
                 }
-            } else if (std::get_if<proto::PilotState>(&m)) {
+            } else if (auto* ps = std::get_if<proto::PilotState>(&m)) {
                 ++counts["pilot_states"];
+                last_host_state = *ps;
             } else if (std::get_if<proto::MapChange>(&m)) {
                 ++counts["map_changes"];
             } else if (std::get_if<proto::WorldInteract>(&m)) {
@@ -272,13 +286,39 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++counts[ns->active ? "narratives_started" : "narratives_finished"];
             } else if (std::get_if<proto::PauseState>(&m)) {
                 ++counts["pauses"];
-            } else if (std::get_if<proto::PilotChange>(&m)) {
+            } else if (auto* pc = std::get_if<proto::PilotChange>(&m)) {
                 ++counts["pilot_changes"];
+                if (pc->pilot == my_id && my_id != 0xFF && last_host_state && pilot_t0 < 0) { pilot_t0 = now_s(); pilot_base = *last_host_state; }
+                if (pc->pilot != my_id) pilot_t0 = -1;
             } else if (auto* bye = std::get_if<proto::Bye>(&m)) {
                 log.write("bye", JsonObj().add("reason", bye->reason));
                 if (session) { ended = true; ended_at = now_s() - 2.0; }
             } else if (auto* p = std::get_if<proto::Ping>(&m)) {
                 link.send(proto::Pong{p->t_us}, false);
+            }
+        }
+        if (pause_off_at > 0 && now_s() >= pause_off_at) { link.send(proto::PauseState{my_id, false, true}); pause_off_at = 0; ++counts["pauses_sent"]; }
+        // "take_pilot" : après l'entrée, le faux client prend la main et marche en ligne droite depuis la dernière position
+        // du pilote ({"after_s":8,"dir":[1,0],"speed":250,"s":5}), puis reste immobile.
+        if (tp.is_object() && joined_at >= 0) {
+            if (!pilot_requested && now_s() - joined_at > tp["after_s"].as_number(8) && last_host_state) {
+                link.send(proto::PilotRequest{my_id});
+                pilot_requested = true;
+                ++counts["pilot_requests"];
+            }
+            if (pilot_t0 >= 0 && now_s() >= next_pilot_send) {
+                next_pilot_send = now_s() + 0.05;
+                const double el = std::min(now_s() - pilot_t0, tp["s"].as_number(5));
+                const double sp = tp["speed"].as_number(250), dx = tp["dir"][0].as_number(1), dy = tp["dir"][1].as_number(0);
+                const bool moving = now_s() - pilot_t0 < tp["s"].as_number(5);
+                proto::PilotState st = pilot_base;
+                st.pilot = my_id;
+                st.seq = ++pilot_seq;
+                st.x = pilot_base.x + dx * sp * el;
+                st.y = pilot_base.y + dy * sp * el;
+                st.vx = moving ? dx * sp : 0; st.vy = moving ? dy * sp : 0; st.vz = 0;
+                link.send(st, false);
+                ++counts["pilot_states_sent"];
             }
         }
         link.update(now_s());
