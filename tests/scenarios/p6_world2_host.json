@@ -1,0 +1,32 @@
+{
+  "name": "p6_world2_host",
+  "description": "Phase 6 (bugs du premier essai à deux PC, suite) : deux combats de la carte dans la même session, avec réattribution entre les deux. Save TEST_B ; équipe Maelle, Verso, Monoco après l'instantané. Combat 1 (attaque surprise) : Maelle passe son tour puis attaque, Verso au faux client. Puis F6 donne Monoco au faux client. Combat 2 (engagement normal) contre l'ennemi le plus proche. Produit l'enregistrement rejoué par p6_world2_client.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 900,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Maelle", "type": "skip" },
+    { "hero": "Maelle", "type": "attack" },
+    { "type": "attack" }
+  ],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 3 },
+    { "do": "set_party", "party": ["Maelle", "Verso", "Monoco"] },
+    { "do": "wait", "s": 3 },
+    { "do": "world_battle", "engage": 1 },
+    { "do": "wait_world", "s": 3 },
+    { "do": "wait", "s": 3 },
+    { "do": "reassign", "index": 2 },
+    { "do": "wait", "s": 3 },
+    { "do": "world_battle", "engage": 0 },
+    { "do": "wait_world", "s": 3 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865", "-e33owners=Verso:1"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_world.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "party_changes": "1", "battle_notices_sent": ">=2", "world_battles": ">=2",
+              "owner_reassignments": "1", "actions_skip": ">=1", "snapshot_errors": "0" }
+}

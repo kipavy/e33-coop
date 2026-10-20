@@ -1,0 +1,20 @@
+{
+  "name": "p6_world2_client",
+  "description": "Phase 6 (bugs du premier essai à deux PC, suite) : vrai client face au faux hôte qui rejoue p6_world2_host. Deux combats de la carte dans la même session : le premier doit être clos avant le second (pas de tour compté dans l'ancien combat), le « passer le tour » de Maelle rejoué, la réattribution de Monoco reçue et affichée, le client joue Verso puis Verso et Monoco.",
+  "join": true,
+  "timeout_s": 1200,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "until": "battles_finalized", "is": ">=1", "timeout": 700 },
+    { "do": "wait", "until": "battles_finalized", "is": ">=2", "timeout": 400 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p6_world2_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p6_world2_snapshot.sav", "--paced", "1", "--timeout", "1200"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "world_battles": ">=2", "parties_applied": "1", "party_apply_failures": "0",
+              "world_battle_without_host_start": "0", "world_battle_other_enemy": "0", "actor_mismatches": "0", "actor_wait_timeouts": "0",
+              "turn_wait_timeouts": "0", "owner_maps_received": ">=1", "ui:owners_summary": ">=1", "remote_actions": ">=2", "desyncs": "0", "raw_hash_diffs": "<=2" }
+}
