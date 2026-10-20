@@ -1,0 +1,20 @@
+{
+  "name": "p3_actions_host",
+  "description": "Phase 3 : vrai jeu hôte face au faux client, équipe Verso (faux client) + Lune (hôte). Compétences avec QTE offensifs (parfait / réussi / raté) résolus chez le propriétaire, objets (énergie, soin), vraies cibles. Produit l'enregistrement rejoué par p3_actions_client.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Lune"],
+  "timeout_s": 600,
+  "wait_players": 1,
+  "max_turns": 40,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Lune", "type": "skill", "skill": "ElementalTrick", "combo": ["success", "perfect"], "else": { "type": "attack" } },
+    { "hero": "Lune", "type": "item", "item": "Consumable_Health_Level2", "target": "hero:Verso", "else": { "type": "attack" } },
+    { "hero": "Lune", "type": "attack" }
+  ],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=16250036901998647475"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_actions.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "remote_actions": ">=2", "combos_replayed": ">=2", "actions_skill": ">=1", "actions_item": ">=1" }
+}

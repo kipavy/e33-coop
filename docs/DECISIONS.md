@@ -132,3 +132,23 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 - La liste des appelants de gameplay sera complétée au fil des compétences (phase 3).
 
 **Remise en cause si** : un tirage de gameplay dépend d'un appelant que l'on ne sait pas classer de façon stable, ou si les ordres d'appel dans un même flux diffèrent entre machines (détecté immédiatement par `coop_draw_mismatch`).
+
+---
+
+## D11 — Combat à plusieurs joueurs : rejeu symétrique, résultats relayés par l'hôte, état complet à chaque tour (2026-10-19, phase 3, précise D8)
+
+**Constat** : avec plusieurs héros, chaque instance doit jouer aussi les héros des **autres** joueurs (animations, caméra, ordre des tours), pas seulement l'IA ennemie. Recalculer leurs dégâts ne pose pas de problème (D10 rend les tirages identiques), mais leurs **décisions** (action, cibles) et leurs **timings** (QTE offensifs, défenses) n'existent que chez leur propriétaire.
+
+**Décision** :
+- **Identité** : un combattant = (camp, `BattleSpotIndex`), sur toutes les instances (plus d'index dans `Enemies`, qui bouge quand un ennemi meurt). Les flux de tirage d'un ennemi sont suffixés par son emplacement.
+- **Actions** : le propriétaire publie `ActionCommand` (type, compétence/objet, cibles) au `RequestActionExecution` de son héros ; l'hôte la relaie aux autres. Chaque autre instance l'exécute au tour de ce héros (mêmes `SelectAction` / `SelectSecondaryAction` / `RequestActionExecution`), sans réussite automatique des QTE.
+- **QTE offensifs** : chez le propriétaire, le résultat de chaque fenêtre (`IsSkillComboSuccessful` / `IsSkillComboPerfect`) est lu à la fin de la fenêtre et publié (`ComboResult`, n° de fenêtre du héros dans le tour). Ailleurs, il est **imposé** dans le pré-hook de `BP_BattleSequenceTimeline_C:OnSkillComboWindowEndReached` (attente bornée à 3 s, en pratique nulle : l'autre instance est en avance).
+- **Défenses** : même schéma, par (tour, héros, n° de coup reçu par ce héros) : le propriétaire publie le verdict de son jeu (`DefenseResult` : parade, parade gradient, esquive, esquive parfaite, saut, échec) ; l'hôte le relaie ; les autres instances l'**imposent** avant le test du jeu (`TryStartParry` / `TryStartDodge` avec un début recalé pour une esquive non parfaite / `TryStartJump`, ou annulation de la fenêtre pour un échec). Une entrée de défense locale sur le héros d'un autre joueur est annulée. Une seule décision de défense par « vague » (même attaquant, même image) : une parade d'un joueur couvre tous ses héros touchés par ce coup.
+- **État** : à chaque début de tour, l'hôte envoie un **état complet** (`StateSync` : PV, PA, bouclier, brise, mort, buffs hors agrégateurs, jauge gradient) et son hash. Le client compare son état **avant toute correction** (`raw_hash_diffs`, log champ par champ) et ne corrige que ce qui diffère (setters du jeu ; buffs ajoutés/retirés/ajustés). Un écart qui subsiste après correction est une désync (`desyncs`).
+- **Ciblage aléatoire des ennemis** : post-hook de `FL_TargetingHelpers_C:GetRandomAliveHero` (et `GetSpecificHero` quand le héros voulu est mort) : la cible est remplacée par un tirage dérivé de la graine (D10) parmi les héros vivants triés par emplacement. `Array_Random` n'est toujours pas hooké.
+- **Fin de combat** : l'hôte publie le résultat (`BattleEnd`) et ses récompenses (`BattleRewards`, lues dans l'out-param de `RollBattleRewards`). Les tirages de butin sont des tirages de gameplay (D10), donc identiques ; le client compare et prend les valeurs de l'hôte en cas d'écart (`rewards_mismatches`).
+- **Lien** : les messages fiables de plus de 1 000 octets sont fragmentés (réassemblés dans l'ordre), pour rester sous la MTU d'Internet.
+
+**Pourquoi pas « l'hôte calcule tout et les clients recopient l'état »** : les clients doivent voir les vraies animations (parades, sauts, QTE réussis ou ratés) aux bons moments ; recopier l'état seul donnerait des combats visuellement faux. Le rejeu des décisions + les tirages communs donnent la même simulation, et l'état complet de l'hôte reste le garde-fou (détection et correction).
+
+**Remise en cause si** : une mécanique dépend d'une entrée continue (visée libre : rotation, tirs) — elle sera rejouée par ses tirs et leurs impacts, pas par la rotation (à faire) ; ou si une attente bornée devient perceptible en jeu réel (mesurée par `waited_ms` dans les logs).

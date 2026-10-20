@@ -23,6 +23,9 @@ function Log($m) { Write-Output "[reset-env] $m" }
 if (-not $KeepGameRunning) {
     $p = Get-Process "SandFall-Win64-Shipping" -ErrorAction SilentlyContinue
     if ($p) { Log "arrêt du jeu (pid $($p.Id))"; $p | Stop-Process -Force; $p | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue }
+    # Le système libère les fichiers du mod (DLL UE4SS) un peu après la fin du processus.
+    for ($i = 0; $i -lt 15 -and (Get-Process "SandFall*" -ErrorAction SilentlyContinue); $i++) { Start-Sleep 2 }
+    if ($p) { Start-Sleep 3 }
 }
 
 # 2. Saves perso : snapshot si elles ont changé depuis le dernier

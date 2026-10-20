@@ -18,13 +18,22 @@ static std::vector<proto::Message> samples()
 {
     proto::Hello h; h.game_build = 23765773; h.mod_version = "0.2.0"; h.gameplay_mods = {"A", "B"}; h.player_name = "Killian"; h.instance_id = 42;
     proto::BattleStart bs; bs.battle_id = 7; bs.encounter = "L_LumiereCitizenFleuret_Male*1"; bs.owners = {{0, "Verso", 0}, {1, "Maelle", 1}}; bs.rng_seed = 0x0123456789ABCDEFull;
-    proto::ActionCommand ac; ac.battle_id = 7; ac.turn = 3; ac.actor_spot = 1; ac.targets = {0, 2}; ac.combo_hits = 3; ac.combo_perfect = 1;
-    proto::ActionResult ar; ar.battle_id = 7; ar.turn = 3; ar.targets = {0}; ar.hits = {{proto::ActorKind::Enemy, 0, 123.5, true, 10.0}};
-    proto::DefenseRequest dq; dq.battle_id = 7; dq.turn = 4; dq.hit = 2; dq.defender_spots = {1};
-    proto::DefenseResult dr; dr.battle_id = 7; dr.turn = 4; dr.hit = 2; dr.result = proto::Defense::Parry;
+    bs.party = {"Verso", "Maelle", "Lune"};
+    proto::ActionCommand ac; ac.battle_id = 7; ac.turn = 3; ac.actor_spot = 1; ac.action_type = 5; ac.secondary = "Combo1";
+    ac.targets = {{proto::ActorKind::Enemy, 0}, {proto::ActorKind::Hero, 2}}; ac.combo = {3, 1, 0};
+    proto::DefenseRequest dq; dq.battle_id = 7; dq.turn = 4; dq.spot = 1; dq.hit = 2; dq.jumpable = 1;
+    proto::DefenseResult dr; dr.battle_id = 7; dr.turn = 4; dr.spot = 1; dr.hit = 2; dr.result = proto::Defense::Parry;
+    proto::StateSync ss; ss.battle_id = 7; ss.turn = 4; ss.gradient_charges = 2; ss.gradient_progress = 0.5;
+    proto::UnitState us; us.unit = {proto::ActorKind::Hero, 2}; us.cls = "BP_Verso_Battle2_C"; us.hp = 13965; us.ap = 9; us.shield = 1; us.break_bar = 1234567890123ll;
+    us.buffs = {{"BP_BattleBuff_Burn_C", 1, 3, false}, {"BP_BattleBuff_Shell_C", 2, 0, true}};
+    us.mech = {{"BP_PerfectionMechanicComponent_C.Perfection", 42}, {"BP_StainHolderComponent_C.Stains[0]", 3}};
+    ss.units = {us, proto::UnitState{{proto::ActorKind::Enemy, 0}, "BP_Enemy", 5.5, 0, 0, 0, true, {}}};
+    proto::BattleRewards rw; rw.battle_id = 7; rw.xp = 521235; rw.gold = 10448; rw.loot = {{"Lumicolor", 5}, {"ChromaCatalyst", 2}};
     return {h, proto::Welcome{1, 99}, proto::Reject{proto::RejectReason::GameBuildMismatch, "host 1 vs client 2"}, proto::Bye{"bye"},
-            proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, ar, dq, dr,
-            proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}}};
+            proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, dq, dr,
+            proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}},
+            proto::ComboResult{7, 3, 1, 2, true, true, 880}, proto::ComboResult{7, 3, 1, 3, false, false, proto::kNoPress}, ss, rw,
+            proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}}};
 }
 
 static void test_roundtrip()
@@ -116,11 +125,51 @@ static void test_link()
     CHECK(invalid == 1);
 }
 
+// Gros messages (état complet de plusieurs Ko) : fragmentés, réassemblés dans l'ordre malgré pertes et doublons.
+static void test_link_fragments()
+{
+    std::deque<net::Datagram> a_to_b, b_to_a;
+    LossyPipe ta(a_to_b, "A", 3), tb(b_to_a, "B", 4);
+    net::Link la(ta, "B"), lb(tb, "A");
+    int invalid = 0;
+    la.on_invalid = lb.on_invalid = [&](const std::string&) { ++invalid; };
+    std::vector<std::string> sent;
+    for (uint32_t i = 0; i < 40; ++i) {
+        if (i % 3 == 0) {
+            proto::StateSync ss; ss.battle_id = 1; ss.turn = i;
+            for (uint8_t u = 0; u < 6; ++u) {
+                proto::UnitState us; us.unit = {proto::ActorKind::Enemy, u}; us.cls = "BP_EnemyBattle_Lancelier_Unique_V2_C"; us.hp = 1000.5 * u;
+                for (int b = 0; b < 12; ++b) us.buffs.push_back({"BP_BattleBuff_Burn_C_" + std::to_string(b), b, 3, false});
+                ss.units.push_back(us);
+            }
+            sent.push_back(proto::to_json(ss));
+            la.send(ss, true);
+        } else {
+            proto::StateHash h{1, i, i * 11ull};
+            sent.push_back(proto::to_json(h));
+            la.send(h, true);
+        }
+    }
+    std::vector<std::string> got;
+    double now = 0;
+    for (int step = 0; step < 8000 && got.size() < sent.size(); ++step) {
+        now += 0.02;
+        la.update(now); lb.update(now);
+        while (!a_to_b.empty()) { auto d = a_to_b.front(); a_to_b.pop_front(); CHECK(d.data.size() <= 1300); lb.on_datagram(d.data.data(), d.data.size(), now); }
+        while (!b_to_a.empty()) { auto d = b_to_a.front(); b_to_a.pop_front(); la.on_datagram(d.data.data(), d.data.size(), now); }
+        proto::Message m;
+        while (lb.pop(m)) got.push_back(proto::to_json(m));
+    }
+    CHECK(got == sent);
+    CHECK(invalid == 0);
+}
+
 int main()
 {
     test_roundtrip();
     test_invalid();
     test_link();
+    test_link_fragments();
     std::printf(g_fail ? "%d FAILURE(S)\n" : "all protocol tests passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

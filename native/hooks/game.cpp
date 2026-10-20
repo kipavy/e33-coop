@@ -10,6 +10,7 @@
 #include <Unreal/UClass.hpp>
 #include <Unreal/UFunction.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/Property/FEnumProperty.hpp>
 #include <Unreal/UAssetRegistry.hpp>
 #include <Unreal/UAssetRegistryHelpers.hpp>
 
@@ -25,6 +26,7 @@ namespace {
 
 UObject* g_gi = nullptr;
 std::wstring g_last_encounter;
+std::vector<std::wstring> g_last_party;
 
 UObject* load_asset(const wchar_t* object_path)
 {
@@ -68,6 +70,28 @@ bool set_member_fname(UStruct* st, void* base, const wchar_t* name, const wchar_
     return true;
 }
 
+// Remplit un TArray<FS_jRPG_PartySlot> (membre OverrideParty des paramètres de combat).
+bool set_party(UStruct* st, void* base, const std::vector<std::wstring>& party)
+{
+    auto* ap = CastField<FArrayProperty>(ue::struct_member(st, STR("OverrideParty")));
+    if (!ap) return false;
+    auto* inner = CastField<FStructProperty>(ap->GetInner());
+    if (!inner) return false;
+    UStruct* slot_struct = inner->GetStruct();
+    const int32 elem = inner->GetSize();
+    auto* arr = static_cast<FScriptArray*>(ap->ContainerPtrToValuePtr<void>(base));
+    if (party.empty()) return true;
+    if (arr->Num() != 0) return false;   // objet neuf : le tableau doit être vide
+    arr->AddZeroed(static_cast<int32>(party.size()), elem, static_cast<uint32>(alignof(uint64_t)));
+    auto* data = static_cast<uint8_t*>(arr->GetData());
+    for (size_t i = 0; i < party.size(); ++i) {
+        void* slot = data + i * static_cast<size_t>(elem);
+        if (!set_member_fname(slot_struct, slot, STR("CharacterHardcodedName"), party[i].c_str())) return false;
+        set_member_byte(slot_struct, slot, STR("Formation"), 0);
+    }
+    return true;
+}
+
 // Position monde d'un acteur (K2_GetActorLocation ; FVector = 3 doubles en UE 5.4).
 std::optional<std::array<double, 3>> actor_location(UObject* actor)
 {
@@ -76,6 +100,22 @@ std::optional<std::array<double, 3>> actor_location(UObject* actor)
     const auto* v = static_cast<const double*>(c.param_ptr(STR("ReturnValue")));
     if (!v) return std::nullopt;
     return std::array<double, 3>{v[0], v[1], v[2]};
+}
+
+double hp_ratio(UObject* ch)
+{
+    UObject* st = stats(ch);
+    const double hp = ue::get_double(st, STR("CurrentHP"));
+    ue::Call c(st, STR("GetMaxHP"));
+    double max = 0;
+    if (c && c.invoke()) max = c.out_double(STR("MaxHP"), c.out_double(STR("ReturnValue"), 0));
+    return max > 0 ? hp / max : hp;
+}
+
+std::vector<UObject*> by_spot(std::vector<UObject*> v)
+{
+    std::sort(v.begin(), v.end(), [](UObject* a, UObject* b) { return spot(a) < spot(b); });
+    return v;
 }
 
 } // namespace
@@ -97,6 +137,8 @@ UObject* battle_manager() { return ue::get_object(controller(), STR("AC_jRPG_Bat
 UObject* save_manager() { return ue::get_object(gi(), STR("SaveManager")); }
 
 UObject* main_menu() { return UObjectGlobals::FindFirstOf(STR("WBP_MM_MainMenu_C")); }
+UObject* world_pawn() { return UObjectGlobals::FindFirstOf(STR("BP_jRPG_Character_World_C")); }
+UObject* input_subsystem() { return UObjectGlobals::FindFirstOf(STR("EnhancedInputLocalPlayerSubsystem")); }
 
 bool map_change_in_progress()
 {
@@ -112,7 +154,15 @@ bool in_battle()
     return c.out_bool(STR("ReturnValue"));
 }
 
-std::vector<UObject*> players() { return ue::get_object_array(battle_manager(), STR("PlayerCharacters")); }
+// Un héros mort quitte PlayerCharacters pour DeadPlayerCharacters (vu le 2026-10-19) : les deux listes.
+std::vector<UObject*> players()
+{
+    UObject* bm = battle_manager();
+    auto out = ue::get_object_array(bm, STR("PlayerCharacters"));
+    for (UObject* d : ue::get_object_array(bm, STR("DeadPlayerCharacters")))
+        if (d && std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);
+    return out;
+}
 std::vector<UObject*> enemies() { return ue::get_object_array(battle_manager(), STR("Enemies")); }
 UObject* current_character() { return ue::get_object(battle_manager(), STR("CurrentCharacter")); }
 UObject* stats(UObject* ch) { return ue::get_object(ch, STR("AC_jRPG_CharacterStats")); }
@@ -125,8 +175,20 @@ bool is_dead(UObject* ch)
     return c.out_bool(STR("Dead"));
 }
 
+// Dead? n'est pas posé par toutes les morts (SetDead des stats : vu le 2026-10-19) ; 0 PV = mort pour le jeu.
+bool is_dead_fast(UObject* ch) { return ue::get_bool(ch, STR("Dead?")) || ue::get_double(stats(ch), STR("CurrentHP"), 1.0) <= 0.0; }
+int spot(UObject* ch) { return ch ? static_cast<int>(ue::get_int(ch, STR("BattleSpotIndex"), -1)) : -1; }
+
+UObject* find_unit(bool hero, int s)
+{
+    for (UObject* c : hero ? players() : enemies())
+        if (spot(c) == s) return c;
+    return nullptr;
+}
+
 std::string char_name(UObject* ch) { return ue::short_name(ch); }
 std::string char_class(UObject* ch) { return ch ? ue::short_name(ch->GetClassPrivate()) : std::string("null"); }
+std::string hardcoded_name(UObject* ch) { return ue::get_name_string(stats(ch), STR("CharacterHardcodedName")); }
 
 bool load_save_slot(const std::wstring& slot, std::string& err)
 {
@@ -148,7 +210,7 @@ bool load_save_slot(const std::wstring& slot, std::string& err)
     return true;
 }
 
-bool trigger_battle(const std::wstring& encounter, std::string& err)
+bool trigger_battle(const std::wstring& encounter, const std::vector<std::wstring>& party, std::string& err)
 {
     UObject* ctrl = controller();
     if (!ctrl) { err = "no controller"; return false; }
@@ -209,30 +271,122 @@ bool trigger_battle(const std::wstring& encounter, std::string& err)
               set_member_bool(st, base, STR("PlayCameraIntro"), false) &&
               set_member_bool(st, base, STR("BackToExplorationOnLost"), true);
     if (!ok) { err = "could not fill Battle Start Params"; return false; }
+    if (!party.empty() && !set_party(st, base, party)) { err = "could not fill OverrideParty"; return false; }
 
     ue::Call exec(executor, STR("ExecuteGameAction"));
     if (!exec) { err = "ExecuteGameAction not found"; return false; }
     exec.set_object(STR("GameAction"), action).invoke();
     g_last_encounter = encounter;
-    log().write("battle_trigger", JsonObj().add("encounter", ue::to_utf8(encounter)).add("map", ue::short_name(maps.front()))
+    g_last_party = party;
+    std::string party_s;
+    for (auto& p : party) party_s += (party_s.empty() ? "" : ",") + ue::to_utf8(p);
+    log().write("battle_trigger", JsonObj().add("encounter", ue::to_utf8(encounter)).add("party", party_s).add("map", ue::short_name(maps.front()))
                                      .add("maps", static_cast<int64_t>(maps.size())).add("distance", best_d2 >= 0 ? std::sqrt(best_d2) : -1.0));
     return true;
 }
 
 const std::wstring& last_encounter() { return g_last_encounter; }
+const std::vector<std::wstring>& last_party() { return g_last_party; }
 
-bool perform_action(int action_type, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err)
+bool perform_action(int action_type, const std::wstring& secondary, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err)
 {
     UObject* bm = battle_manager();
     if (!bm) { err = "no battle manager"; return false; }
+    // Passer le tour / fuir : chemins de l'interface (pas de RequestActionExecution).
+    if (action_type == ActSkip || action_type == ActFlee) {
+        ue::Call c(bm, action_type == ActSkip ? STR("OnSelectSkip") : STR("OnSelectFlee"));
+        if (!c) { err = "OnSelectSkip/OnSelectFlee not found"; return false; }
+        c.invoke();
+        return true;
+    }
     if (combo_auto_success >= 0) ue::set_int(bm, STR("DEBUG_ComboAutoSuccessCount"), combo_auto_success);
     ue::Call sel(bm, STR("SelectAction"));
     if (!sel) { err = "SelectAction not found"; return false; }
     sel.set_int(STR("ActionType"), action_type).invoke();
+    if (!secondary.empty()) {
+        ue::Call sec(bm, STR("SelectSecondaryAction"));
+        if (!sec) { err = "SelectSecondaryAction not found"; return false; }
+        sec.set_fname(STR("SelectedSecondaryAction"), secondary.c_str()).invoke();
+    }
     ue::Call req(bm, STR("RequestActionExecution"));
     if (!req) { err = "RequestActionExecution not found"; return false; }
     req.set_object_array(STR("TargetedCharacters"), targets).invoke();
     return true;
+}
+
+bool skill_info(UObject* hero, const std::wstring& skill, int& targeting, int& ap_cost)
+{
+    ue::Call c(stats(hero), STR("FindEquippedSkillByID"));
+    if (!c) return false;
+    c.set_fname(STR("SkillID"), skill.c_str()).invoke();
+    UObject* asset = c.out_object(STR("Skill"));
+    if (!asset) return false;
+    targeting = static_cast<int>(ue::get_int(asset, STR("TargetingType"), -1));
+    ap_cost = static_cast<int>(ue::get_int(asset, STR("APCost"), 0));
+    return true;
+}
+
+int battle_item_count(const std::wstring& item)
+{
+    ue::Call c(battle_manager(), STR("FindBattleItemCount"));
+    if (!c) return -1;
+    c.set_fname(STR("ItemHardcodedName"), item.c_str()).invoke();
+    return static_cast<int>(c.out_int(STR("Quantity"), -1));
+}
+
+std::vector<UObject*> auto_targets(UObject* actor, int action_type, const std::wstring& secondary)
+{
+    std::vector<UObject*> alive_e, alive_h, dead_h;
+    for (UObject* e : by_spot(enemies())) if (!is_dead_fast(e)) alive_e.push_back(e);
+    for (UObject* h : by_spot(players())) (is_dead_fast(h) ? dead_h : alive_h).push_back(h);
+    auto first_enemy = [&]() { return alive_e.empty() ? std::vector<UObject*>{} : std::vector<UObject*>{alive_e.front()}; };
+    auto weakest_hero = [&]() {
+        UObject* best = nullptr;
+        double br = 1e300;
+        for (UObject* h : alive_h) { const double r = hp_ratio(h); if (r < br) { br = r; best = h; } }
+        return best ? std::vector<UObject*>{best} : std::vector<UObject*>{};
+    };
+    if (action_type == ActItem) {
+        if (secondary.find(L"Revive") != std::wstring::npos) return dead_h.empty() ? std::vector<UObject*>{} : std::vector<UObject*>{dead_h.front()};
+        if (secondary.find(L"Energy") != std::wstring::npos) return actor ? std::vector<UObject*>{actor} : std::vector<UObject*>{};
+        return weakest_hero();
+    }
+    if (action_type == ActSkill) {
+        int targeting = -1, cost = 0;
+        skill_info(actor, secondary, targeting, cost);
+        switch (targeting) {
+        case 0: return actor ? std::vector<UObject*>{actor} : std::vector<UObject*>{};
+        case 10: return alive_e;
+        case 4: return weakest_hero();
+        default: return first_enemy();
+        }
+    }
+    return first_enemy();
+}
+
+std::string battle_inventory_json()
+{
+    std::string heroes = "[";
+    for (UObject* h : by_spot(players())) {
+        ue::Call c(battle_manager(), STR("GetEquippedCharacterSkills"));
+        std::string skills = "[";
+        if (c) {
+            c.set_object(STR("Character"), h).invoke();
+            for (UObject* sk : c.out_object_array(STR("EquippedSkills"))) {
+                if (skills.size() > 1) skills += ",";
+                skills += JsonObj().add("id", ue::get_name_string(sk, STR("NameID"))).add("ap", ue::get_int(sk, STR("APCost")))
+                              .add("targeting", ue::get_int(sk, STR("TargetingType"), -1)).str();
+            }
+        }
+        if (heroes.size() > 1) heroes += ",";
+        heroes += JsonObj().add("name", hardcoded_name(h)).add("spot", spot(h)).add("class", char_class(h)).raw("skills", skills + "]").str();
+    }
+    std::string items = "{";
+    for (const wchar_t* it : {L"Consumable_Health_Level2", L"Consumable_Energy_Level2", L"Consumable_Revive_Level2"}) {
+        if (items.size() > 1) items += ",";
+        items += "\"" + ue::to_utf8(it) + "\":" + std::to_string(battle_item_count(it));
+    }
+    return JsonObj().raw("heroes", heroes + "]").raw("items", items + "}").str();
 }
 
 bool start_parry(UObject* character)
@@ -250,16 +404,191 @@ bool start_jump(UObject* character)
     return c.out_bool(STR("Success"));
 }
 
-bool incoming_attack_jumpable(UObject* damage_builder)
+bool start_dodge(UObject* character)
 {
-    if (!damage_builder) return false;
+    ue::Call c(character, STR("TryStartDodge"));
+    if (!c || !c.invoke()) return false;
+    return c.out_bool(STR("Success"));
+}
+
+bool start_gradient_parry(UObject* character)
+{
+    ue::Call c(character, STR("TryStartGradientParry"));
+    if (!c || !c.invoke()) return false;
+    return c.out_bool(STR("Success"));
+}
+
+void clear_defense_lock(UObject* character)
+{
+    ue::Call c(character, STR("ClearDefensiveMoveLock"));
+    if (c) c.set_string(STR("Reason"), STR("E33Coop")).invoke();
+}
+
+bool in_immunity(UObject* character)
+{
+    ue::Call c(character, STR("IsInImmunityPhase"));
+    if (!c || !c.invoke()) return false;
+    return c.out_bool(STR("ReturnValue"));
+}
+
+double parry_immune_duration(UObject* character)
+{
+    ue::Call c(character, STR("GetParryImmuneDuration"));
+    if (!c || !c.invoke()) return 0.15;
+    return c.out_double(STR("ReturnValue"), 0.15);
+}
+
+void cancel_defense(UObject* character)
+{
+    const double start = ue::get_double(character, STR("DefensiveMoveImmunityStartTime"));
+    ue::set_double(character, STR("DefensiveMoveImmunityEndTime"), start - 1.0);
+}
+
+UObject* damage_source_character(UObject* damage_builder)
+{
+    if (!damage_builder) return nullptr;
     ue::Call src(damage_builder, STR("GetDamageSource"));
-    if (!src || !src.invoke()) return false;
+    if (!src || !src.invoke()) return nullptr;
     UObject* source = src.out_object(STR("DamageSource"));   // TScriptInterface : l'objet est le premier membre
     ue::Call chr(source, STR("GetDamageSourceCharacter"));
-    if (!chr || !chr.invoke()) return false;
-    UObject* attacker_stats = chr.out_object(STR("CharacterStats"));
-    return ue::get_bool(attacker_stats, STR("IsCurrentAttackJumpable"));
+    if (!chr || !chr.invoke()) return nullptr;
+    return chr.out_object(STR("CharacterStats"));
+}
+
+bool incoming_attack_jumpable(UObject* damage_builder)
+{
+    return ue::get_bool(damage_source_character(damage_builder), STR("IsCurrentAttackJumpable"));
+}
+
+std::vector<Buff> buffs(UObject* st)
+{
+    std::vector<Buff> out;
+    UObject* comp = ue::get_object(st, STR("BattleBuffComponent"));
+    for (UObject* w : ue::get_object_array(comp, STR("ActiveBattleBuffs"))) {
+        UObject* inst = ue::get_object(w, STR("BattleBuffInstance"));
+        if (!inst) continue;
+        Buff b;
+        b.wrapper = w;
+        b.instance = inst;
+        b.cls = char_class(inst);
+        b.stacks = static_cast<int>(ue::get_int(inst, STR("StackCount")));
+        b.turns = static_cast<int>(ue::get_int(inst, STR("TurnDuration")));
+        b.permanent = ue::get_bool(inst, STR("IsPermanent"));
+        b.type = static_cast<int>(ue::get_int(inst, STR("Type")));
+        out.push_back(std::move(b));
+    }
+    return out;
+}
+
+bool is_helper_buff(const Buff& b) { return b.type == 3 || b.cls.find("Aggregator") != std::string::npos; }
+
+bool remove_buff(UObject* st, UObject* instance)
+{
+    ue::Call c(ue::get_object(st, STR("BattleBuffComponent")), STR("RemoveBuffInstance"));
+    if (!c) return false;
+    c.set_object(STR("BuffInstance"), instance).invoke();
+    return true;
+}
+
+bool add_buff(UObject* st, const std::string& cls_name, int stacks, int turns, bool permanent, std::string& err)
+{
+    UClass* cls = ue::find_class_by_short_name(cls_name);
+    if (!cls) { err = "buff class not loaded: " + cls_name; return false; }
+    FStaticConstructObjectParameters params{cls, st};
+    UObject* inst = UObjectGlobals::StaticConstructObject(params);
+    if (!inst) { err = "StaticConstructObject failed"; return false; }
+    ue::Call act(st, STR("ActivateBuff"));
+    if (!act) { err = "ActivateBuff not found"; return false; }
+    act.set_object(STR("BuffInstance"), inst).set_int(STR("StatusEffectProbability"), 4).set_object(STR("SourceCharacter"), st).invoke();
+    if (!act.out_bool(STR("Success"))) { err = "ActivateBuff refused"; return false; }
+    ue::set_int(inst, STR("TurnDuration"), turns);
+    ue::set_int(inst, STR("StackCount"), stacks);
+    if (permanent) { ue::Call p(inst, STR("SetPermanent")); if (p) p.invoke(); }
+    return true;
+}
+
+UObject* gradient_gauge() { return ue::get_object(battle_manager(), STR("GradientGaugeSystem")); }
+
+namespace {
+
+// Parcourt les champs entiers (bool, octet, énumération, int) et les tableaux de ces types des composants de
+// mécanique propre d'un héros (BP_*Mechanic*Component, BP_StainHolderComponent). Champs propres à la classe BP
+// seulement (pas ceux d'UActorComponent). visit(nom, adresse, taille, est_bool, bool_prop, conteneur).
+template <class Visit>
+void for_each_mech_field(UObject* hero, Visit visit)
+{
+    for (UObject* c : ue::get_object_array(hero, STR("BlueprintCreatedComponents"))) {
+        if (!c) continue;
+        const std::string cls = char_class(c);
+        if (cls.find("Mechanic") == std::string::npos && cls.find("StainHolder") == std::string::npos) continue;
+        for (FProperty* p : TFieldRange<FProperty>(c->GetClassPrivate(), EFieldIterationFlags::IncludeDeprecated)) {
+            const std::string name = cls + "." + ue::to_utf8(p->GetName());
+            if (auto* bp = CastField<FBoolProperty>(p)) { visit(name, nullptr, 0, bp, c); continue; }
+            if (CastField<FIntProperty>(p) || CastField<FByteProperty>(p) || CastField<FEnumProperty>(p)) {
+                visit(name, p->ContainerPtrToValuePtr<void>(c), p->GetSize(), nullptr, c);
+                continue;
+            }
+            if (auto* ap = CastField<FArrayProperty>(p)) {
+                FProperty* inner = ap->GetInner();
+                if (!(CastField<FIntProperty>(inner) || CastField<FByteProperty>(inner) || CastField<FEnumProperty>(inner))) continue;
+                auto* arr = static_cast<FScriptArray*>(ap->ContainerPtrToValuePtr<void>(c));
+                int32 n = arr->Num();
+                visit(name + "#", &n, -4, nullptr, c);   // taille du tableau (lecture seule)
+                auto* data = static_cast<uint8_t*>(arr->GetData());
+                for (int32 i = 0; i < n; ++i) visit(name + "[" + std::to_string(i) + "]", data + static_cast<size_t>(i) * inner->GetSize(), inner->GetSize(), nullptr, c);
+            }
+        }
+    }
+}
+
+int64_t read_int(const void* p, int size)
+{
+    switch (size) {
+    case 1: return *static_cast<const uint8_t*>(p);
+    case 2: return *static_cast<const int16_t*>(p);
+    case 4: case -4: return *static_cast<const int32_t*>(p);
+    case 8: return *static_cast<const int64_t*>(p);
+    default: return 0;
+    }
+}
+
+} // namespace
+
+std::vector<std::pair<std::string, int64_t>> mechanic_fields(UObject* hero)
+{
+    std::vector<std::pair<std::string, int64_t>> out;
+    for_each_mech_field(hero, [&](const std::string& name, void* addr, int size, FBoolProperty* bp, UObject* comp) {
+        out.emplace_back(name, bp ? (bp->GetPropertyValueInContainer(comp) ? 1 : 0) : read_int(addr, size));
+    });
+    return out;
+}
+
+int set_mechanic_fields(UObject* hero, const std::vector<std::pair<std::string, int64_t>>& wanted, int& failed)
+{
+    int fixed = 0;
+    for_each_mech_field(hero, [&](const std::string& name, void* addr, int size, FBoolProperty* bp, UObject* comp) {
+        auto it = std::find_if(wanted.begin(), wanted.end(), [&](const auto& w) { return w.first == name; });
+        if (it == wanted.end()) return;
+        const int64_t cur = bp ? (bp->GetPropertyValueInContainer(comp) ? 1 : 0) : read_int(addr, size);
+        if (cur == it->second) return;
+        if (bp) { bp->SetPropertyValueInContainer(comp, it->second != 0); ++fixed; return; }
+        switch (size) {
+        case 1: *static_cast<uint8_t*>(addr) = static_cast<uint8_t>(it->second); ++fixed; break;
+        case 2: *static_cast<int16_t*>(addr) = static_cast<int16_t>(it->second); ++fixed; break;
+        case 4: *static_cast<int32_t*>(addr) = static_cast<int32_t>(it->second); ++fixed; break;
+        case 8: *static_cast<int64_t*>(addr) = it->second; ++fixed; break;
+        default: ++failed; break;   // taille de tableau différente : non réparable champ par champ
+        }
+    });
+    return fixed;
+}
+
+bool location(UObject* actor, double out[3])
+{
+    auto l = actor_location(actor);
+    if (!l) return false;
+    out[0] = (*l)[0]; out[1] = (*l)[1]; out[2] = (*l)[2];
+    return true;
 }
 
 } // namespace e33::game

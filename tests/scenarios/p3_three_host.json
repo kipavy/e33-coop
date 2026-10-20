@@ -1,0 +1,22 @@
+{
+  "name": "p3_three_host",
+  "description": "Phase 3 : 3 joueurs. Hôte réel (Maelle) + 2 faux clients (Verso : compétences avec QTE, objet ; Lune : attaques). L'hôte exécute les actions de chaque client, demande chaque défense au bon joueur et relaie tout aux autres.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 700,
+  "wait_players": 2,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Maelle", "type": "item", "item": "Consumable_Energy_Level2", "target": "auto", "else": { "type": "skip" } },
+    { "hero": "Maelle", "type": "skip" }
+  ],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1,Lune:2,Maelle:0", "-e33seed=2"],
+  "fakepeers": [
+    { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_actions.json", "--record", "{run}/recording-fakeclient1.jsonl", "--timeout", "700"] },
+    { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_basic.json", "--record", "{run}/recording-fakeclient2.jsonl", "--timeout", "700"] }
+  ],
+  "expect": { "battle_end": "any", "remote_actions": ">=4", "combos_replayed": ">=1" }
+}

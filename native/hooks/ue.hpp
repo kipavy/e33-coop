@@ -54,6 +54,12 @@ std::vector<UObject*> get_object_array(UObject* o, const wchar_t* name);
 std::string get_name_string(UObject* o, const wchar_t* name);       // FName -> UTF-8
 bool set_bool(UObject* o, const wchar_t* name, bool v);
 bool set_int(UObject* o, const wchar_t* name, int64_t v);
+bool set_double(UObject* o, const wchar_t* name, double v);
+// UClass par nom court (ex. "BP_BattleBuff_Burn_C") : parcours de tous les objets, à réserver aux cas rares.
+RC::Unreal::UClass* find_class_by_short_name(const std::string& short_name);
+// L'objet est-il une instance d'une classe dont le nom court est donné, ou d'une classe dérivée ?
+// Lecture mémoire seulement (chaîne SuperStruct) : utilisable dans les hooks fréquents.
+bool is_a(UObject* o, const wchar_t* class_short_name);
 
 // Appel d'une UFunction avec un tampon de paramètres construit par nom.
 class Call {
@@ -75,6 +81,9 @@ public:
 
     bool out_bool(const wchar_t* param, bool def = false);
     UObject* out_object(const wchar_t* param);
+    int64_t out_int(const wchar_t* param, int64_t def = 0);
+    double out_double(const wchar_t* param, double def = 0);
+    std::vector<UObject*> out_object_array(const wchar_t* param);
 
 private:
     UObject* target_ = nullptr;
@@ -86,6 +95,10 @@ private:
 // Lit/écrit un out-param bool du cadre d'un hook (via FindOutParamValueAddress).
 std::optional<bool> read_out_bool(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);
 bool write_out_bool(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, bool v);
+UObject* read_out_object(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);
+bool write_out_object(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, UObject* v);
+// Adresse d'un out-param quelconque (struct, tableau…) et sa propriété ; nullptr si introuvable.
+void* out_param_address(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, FProperty** prop_out = nullptr);
 // Lit un paramètre d'entrée (objet) depuis les locales du cadre d'un hook.
 UObject* read_param_object(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);
 std::optional<int64_t> read_param_int(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);

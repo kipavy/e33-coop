@@ -13,13 +13,17 @@
 
 namespace e33::proto {
 
-inline constexpr uint16_t kProtocolVersion = 3;   // v2 : AiDraws ; v3 : graine de combat + Draws (D10)
+// v2 : AiDraws ; v3 : graine de combat + Draws (D10) ;
+// v4 : modèle de rejeu symétrique (D11) : cibles (camp, emplacement), compétences/objets, ComboResult,
+//      défenses par héros relayées, StateSync (état complet), BattleRewards, équipe imposée, visée libre (FreeAimEvent).
+inline constexpr uint16_t kProtocolVersion = 4;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
 enum class MsgType : uint16_t {
     Hello = 1, Welcome = 2, Reject = 3, Bye = 4, Ping = 5, Pong = 6,
-    BattleStart = 20, TurnStart = 21, ActionCommand = 22, ActionResult = 23,
+    BattleStart = 20, TurnStart = 21, ActionCommand = 22,
     DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, Draws = 28,
+    ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33,
 };
 
 const char* type_name(MsgType t);
@@ -47,54 +51,63 @@ struct Ping { uint64_t t_us = 0; };
 struct Pong { uint64_t t_us = 0; };
 
 // --- Combat --------------------------------------------------------------------------------
+enum class ActorKind : uint8_t { Hero = 0, Enemy = 1 };
+// Combattant identifié par son camp et son emplacement de combat (BattleSpotIndex), stable sur toutes les instances.
+inline constexpr uint8_t kAutoSpot = 0xFF;   // cible « automatique » (faux client) : résolue par l'hôte
+struct Unit { ActorKind kind = ActorKind::Enemy; uint8_t spot = 0; };
+
 struct SpotOwner { uint8_t spot = 0; std::string character; uint8_t player_id = 0; };
 struct BattleStart {
     uint32_t battle_id = 0;
     std::string encounter;
     std::vector<SpotOwner> owners;        // qui contrôle quel héros
     uint64_t rng_seed = 0;                // graine des tirages de gameplay (D10)
+    std::vector<std::string> party;       // équipe imposée (noms internes) ; vide = équipe de la save
 };
-enum class ActorKind : uint8_t { Hero = 0, Enemy = 1 };
 struct TurnStart {
     uint32_t battle_id = 0;
     uint32_t turn = 0;
     ActorKind kind = ActorKind::Hero;
-    uint8_t index = 0;                    // emplacement (héros) ou index d'ennemi
+    uint8_t index = 0;                    // emplacement du combattant
     std::string actor;                    // nom de classe, pour les logs et la vérification
 };
-struct ActionCommand {                    // client -> hôte : choix d'action + résultats des QTE offensifs
+// Choix d'action d'un héros. Propriétaire -> hôte, puis hôte -> autres instances (relais).
+struct ActionCommand {
     uint32_t battle_id = 0;
     uint32_t turn = 0;
     uint8_t actor_spot = 0;
-    uint8_t action_type = 1;              // E_jRPG_ActionType (1 = attaque de base)
-    std::string skill;                    // FName de compétence (vide si attaque)
-    std::vector<uint8_t> targets;         // index d'ennemis
-    uint8_t combo_hits = 0;               // QTE offensifs réussis (résolus chez le client)
-    uint8_t combo_perfect = 0;
+    uint8_t action_type = 1;              // E_jRPG_ActionType : 1 attaque, 3 objet, 5 compétence
+    std::string secondary;                // FName de la compétence ou de l'objet (vide pour l'attaque)
+    std::vector<Unit> targets;
+    std::vector<uint8_t> combo;           // résultats de QTE déjà connus (faux client) : bit0 réussi, bit1 parfait
 };
-struct HitResult { ActorKind kind = ActorKind::Enemy; uint8_t index = 0; double damage = 0; bool critical = false; double hp_after = 0; };
-struct ActionResult {                     // hôte -> clients : résultats calculés par l'hôte
+// Résultat d'une fenêtre de QTE offensif, résolu chez le propriétaire du héros (seq : n° de fenêtre du héros dans le tour).
+// Les autres instances rejouent un vrai appui au même instant de la fenêtre (press, en millièmes de sa durée).
+inline constexpr uint16_t kNoPress = 0xFFFF;     // pas d'appui (raté)
+inline constexpr uint16_t kAutoPress = 0xFFFE;   // réussite automatique (option d'accessibilité, mode test) : résultat imposé en fin de fenêtre
+struct ComboResult {
     uint32_t battle_id = 0;
     uint32_t turn = 0;
-    ActorKind kind = ActorKind::Hero;
-    uint8_t actor_index = 0;
-    uint8_t action_type = 1;
-    std::string skill;
-    std::vector<uint8_t> targets;
-    std::vector<HitResult> hits;
+    uint8_t spot = 0;
+    uint16_t seq = 0;
+    bool success = false;
+    bool perfect = false;
+    uint16_t press = kNoPress;
 };
-struct DefenseRequest {                   // hôte -> client : un coup arrive sur des héros de ce client
+struct DefenseRequest {                   // hôte -> propriétaire : un coup arrive sur ce héros (utile au faux client)
     uint32_t battle_id = 0;
     uint32_t turn = 0;
-    uint16_t hit = 0;
-    uint8_t attacker_index = 0;
-    std::vector<uint8_t> defender_spots;
+    uint8_t spot = 0;
+    uint16_t hit = 0;                     // n° du coup reçu par ce héros dans le tour
+    uint8_t jumpable = 0;
     uint16_t timeout_ms = 3000;
 };
 enum class Defense : uint8_t { Fail = 0, Parry = 1, Dodge = 2, PerfectDodge = 3, Jump = 4, GradientParry = 5 };
-struct DefenseResult {                    // client -> hôte : résolu localement, appliqué par l'hôte
+// Défense résolue chez le propriétaire du héros. Propriétaire -> hôte, puis hôte -> autres instances.
+struct DefenseResult {
     uint32_t battle_id = 0;
     uint32_t turn = 0;
+    uint8_t spot = 0;
     uint16_t hit = 0;
     Defense result = Defense::Fail;
 };
@@ -106,9 +119,53 @@ struct Draws {                            // hôte -> clients : tirages de gamep
     uint32_t turn = 0;
     std::vector<Draw> draws;
 };
+struct BuffState { std::string cls; int32_t stacks = 0; int32_t turns = 0; bool permanent = false; };
+struct MechField { std::string name; int64_t value = 0; };   // "Composant.Champ" (ou Champ[i] pour un tableau)
+struct UnitState {
+    Unit unit;
+    std::string cls;                      // nom de classe (logs)
+    double hp = 0;
+    double ap = 0;
+    int32_t shield = 0;
+    int64_t break_bar = 0;
+    bool dead = false;
+    std::vector<BuffState> buffs;
+    std::vector<MechField> mech;          // mécanique propre (perfection, posture, taches…) : champs entiers du composant
+};
+// État complet du combat au début d'un tour (hôte -> clients). Le client ne corrige que ce qui diffère.
+struct StateSync {
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    uint8_t reason = 0;                   // 0 = début de tour (1 réservé : resynchro en cours de tour)
+    std::vector<UnitState> units;
+    int32_t gradient_charges = 0;
+    double gradient_progress = 0;
+};
+struct LootEntry { std::string item; int32_t quantity = 0; };
+struct BattleRewards {
+    uint32_t battle_id = 0;
+    int32_t xp = 0;
+    int32_t gold = 0;
+    std::vector<LootEntry> loot;
+};
+// Visée libre d'un héros, chez son propriétaire (D11) : rejouée par les autres instances avec le même décalage
+// que ses actions. t_ms : temps écoulé depuis le début de la visée. Point visé : absolu, ou relatif à un
+// combattant (target.spot != kAutoSpot : position de l'acteur + point, utilisé par le faux client).
+enum class FreeAimKind : uint8_t { Start = 0, Aim = 1, Fire = 2, Shot = 3, Cancel = 4, End = 5 };
+struct FreeAimEvent {
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    uint8_t spot = 0;
+    FreeAimKind kind = FreeAimKind::Start;
+    uint16_t seq = 0;                     // Fire / Shot : n° du tir dans la visée
+    uint32_t t_ms = 0;
+    double x = 0, y = 0, z = 0;           // Aim / Shot : point visé
+    Unit target{ActorKind::Enemy, kAutoSpot};
+};
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
-                             ActionResult, DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws>;
+                             DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,
+                             BattleRewards, FreeAimEvent>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

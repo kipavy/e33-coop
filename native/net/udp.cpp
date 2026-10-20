@@ -75,14 +75,23 @@ public:
 
     bool poll(Datagram& out) override
     {
-        char buf[2048];
-        sockaddr_in from{};
-        int fl = sizeof from;
-        const int n = recvfrom(s_, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl);
-        if (n <= 0) return false;
-        out.peer = addr_to_string(from);
-        out.data.assign(reinterpret_cast<uint8_t*>(buf), reinterpret_cast<uint8_t*>(buf) + n);
-        return true;
+        // Les messages fiables sont fragmentés (net::Link) : un datagramme dépasse rarement 1,3 Ko, mais le tampon
+        // couvre tout datagramme UDP possible pour ne jamais tronquer.
+        static thread_local std::vector<char> buf(65536);
+        for (int attempts = 0; attempts < 64; ++attempts) {
+            sockaddr_in from{};
+            int fl = sizeof from;
+            const int n = recvfrom(s_, buf.data(), static_cast<int>(buf.size()), 0, reinterpret_cast<sockaddr*>(&from), &fl);
+            if (n > 0) {
+                out.peer = addr_to_string(from);
+                out.data.assign(reinterpret_cast<uint8_t*>(buf.data()), reinterpret_cast<uint8_t*>(buf.data()) + n);
+                return true;
+            }
+            // WSAECONNRESET (ICMP « port injoignable » d'un envoi précédent) ou WSAEMSGSIZE : datagramme ignoré, on continue.
+            const int e = WSAGetLastError();
+            if (n == 0 || (e != WSAECONNRESET && e != WSAEMSGSIZE)) return false;
+        }
+        return false;
     }
 
     std::string local_address() const override { return local_; }

@@ -1,14 +1,18 @@
 #include "coop.hpp"
 
 #include <algorithm>
-#include <cstdlib>
+#include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
+#include <tuple>
 #include <vector>
 
 #include "../common/jsonlog.hpp"
@@ -20,6 +24,7 @@
 #include "../net/recorder.hpp"
 #include "../net/transport.hpp"
 #include "../protocol/messages.hpp"
+#include "state.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -34,7 +39,9 @@ namespace e33::coop {
 
 namespace {
 
-constexpr const char* kModVersion = "0.2.0";
+constexpr const char* kModVersion = "0.3.0";
+constexpr double kDefenseTimeout = 3.0;
+constexpr double kComboTimeout = 3.0;
 
 struct Peer {
     std::unique_ptr<net::Link> link;
@@ -43,64 +50,137 @@ struct Peer {
     std::string name;
 };
 
+using TurnSpotSeq = std::tuple<uint32_t, int, uint16_t>;   // (tour, emplacement, n°)
+
+using SteadyClock = std::chrono::steady_clock;
+
+struct Window {                                            // fenêtre de QTE offensif en cours (par timeline)
+    UObject* hero = nullptr;
+    int spot = 0;
+    uint16_t seq = 0;
+    SteadyClock::time_point start;
+    double duration = 0;                                   // secondes (temps réel)
+    bool local = false;                                    // héros contrôlé ici : résultat à publier
+    bool published = false;
+    proto::ComboResult plan;                               // héros d'un autre joueur : résultat de son propriétaire
+    bool pressed = false;
+};
+
+struct Press { UObject* timeline = nullptr; SteadyClock::time_point at; };
+
+struct FreeAimOwner {                                      // visée libre d'un héros contrôlé ici
+    bool active = false;
+    int spot = -1;
+    SteadyClock::time_point t0;
+    uint16_t fires = 0, shots = 0;
+    double next_aim_s = 0;
+    bool in_raycast = false;
+    bool have_point = false, raycast_point = false;
+    std::array<double, 3> point{}, shot_point{};
+};
+
+struct FreeAimReplay {                                     // visée libre rejouée (héros d'un autre joueur)
+    std::pair<uint32_t, int> key{0, -1};
+    bool started = false, done = false;
+    SteadyClock::time_point t0;
+    size_t next = 0;
+    uint16_t raycasts = 0;
+    bool have_override = false;
+    std::array<double, 3> point{};
+};
+
+struct LocalHit {                                          // coup reçu par un héros contrôlé ici (résultat à publier)
+    int spot = 0;
+    uint16_t hit = 0;
+    bool jumpable = false;
+    bool perfect_dodge = false;
+};
+
 struct Battle {
     uint32_t id = 0;
     uint32_t turn = 0;
     bool active = false;
-    std::map<int, uint8_t> owner_by_spot;               // emplacement de héros -> player_id
-    std::map<uint8_t, uint16_t> hit_counter;            // coups reçus par joueur (hôte : demandes ; client : résultats)
-    std::map<uint64_t, proto::DefenseResult> defense_results;   // hôte : (player<<16|hit) -> résultat reçu
-    std::map<uint32_t, uint64_t> local_hash;            // tour -> hash local
-    std::map<uint32_t, uint64_t> remote_hash;           // tour -> hash de l'hôte (client) / du client (hôte)
-    std::optional<proto::ActionCommand> pending_command;   // hôte : commande reçue pour le tour courant
-    std::vector<proto::ActionResult> pending_results;   // client : résultats à appliquer
-    uint32_t host_turn_seen = 0;                        // client : dernier TurnStart reçu de l'hôte
-    std::map<UObject*, uint16_t> local_defense_hit;     // client : coup en cours par composant de stats
-    std::map<UObject*, uint16_t> local_jump_hit;        // client : coup sautable en cours
-    uint64_t rng_seed = 0;                              // graine des tirages de gameplay, choisie par l'hôte (D10)
-    std::map<uint32_t, uint16_t> draw_rank;             // flux -> rang du prochain tirage dans le tour courant
-    std::map<uint32_t, std::string> stream_names;       // flux -> "Classe:Fonction:Tirage" (logs)
-    std::map<uint32_t, std::map<uint64_t, double>> local_draws;   // tour -> (flux<<16|rang) -> valeur
-    std::map<uint32_t, std::map<uint64_t, double>> host_draws;    // client : idem, publiés par l'hôte
-    int traced_draws = 0;                               // diagnostic : tirages loggés dans ce combat
-    std::vector<UObject*> enemies_cache;                // ennemis au dernier début de tour (comparaison de pointeurs seulement)
+    bool ending = false;                                   // fin de combat commencée (tirages des récompenses encore remplacés)
+    bool finalized = false;
+    std::map<int, uint8_t> owner_by_spot;                  // emplacement de héros -> player_id
+    // Actions des héros
+    std::map<std::pair<uint32_t, int>, proto::ActionCommand> commands;   // (tour, emplacement) -> commande reçue
+    std::map<std::pair<uint32_t, int>, double> command_time;             // réception (s.now)
+    std::set<std::pair<uint32_t, int>> executed;
+    bool action_wait_logged = false;
+    // QTE offensifs
+    std::map<TurnSpotSeq, proto::ComboResult> combos;
+    std::map<int, uint16_t> combo_seq;                     // emplacement -> n° de fenêtre dans le tour
+    std::map<UObject*, Window> windows;                    // timeline -> fenêtre en cours
+    std::vector<Press> presses;                            // appuis à rejouer (héros d'un autre joueur)
+    // Visée libre
+    std::map<std::pair<uint32_t, int>, std::vector<proto::FreeAimEvent>> fa_events;   // (tour, emplacement) -> événements reçus
+    std::map<std::pair<uint32_t, int>, double> fa_arrival;                           // réception du Start (s.now)
+    // Défenses
+    std::map<TurnSpotSeq, proto::Defense> defenses;
+    std::map<int, uint16_t> hit_seq;                       // emplacement -> n° de coup reçu dans le tour
+    std::map<UObject*, LocalHit> local_hits;               // composant de stats -> coup en cours (héros d'ici)
+    std::map<UObject*, int> imposed_check;                 // composant de stats -> défense imposée (vérification du verdict)
+    // État
+    std::map<uint32_t, uint64_t> local_hash;
+    std::map<uint32_t, uint64_t> remote_hash;
+    std::map<uint32_t, proto::StateSync> host_sync;        // client : état de l'hôte au début de chaque tour
+    std::map<uint32_t, proto::TurnStart> host_turns;       // client
+    double turn_started_at = 0;
+    // Tirages (D10)
+    uint64_t rng_seed = 0;
+    std::map<uint32_t, uint16_t> draw_rank;                // flux -> rang du prochain tirage dans le tour
+    std::map<uint32_t, std::string> stream_names;
+    std::map<uint32_t, std::map<uint64_t, double>> local_draws;
+    std::map<uint32_t, std::map<uint64_t, double>> host_draws;
+    int traced_draws = 0;
+    std::map<UObject*, int> enemy_spots;                   // ennemi -> emplacement (sans appel au jeu dans les hooks de tirage)
+    // Fin
+    int local_end = -1;
+    int host_end = -1;
+    double end_flow_at = -1;                               // fin sans victoire : clôture différée (tick), jamais bloquante dans le flux de fin
+    std::optional<proto::BattleRewards> host_rewards;
 };
 
 struct State {
     Role role = Role::Solo;
     std::unique_ptr<net::Transport> transport;
-    std::vector<Peer> peers;                             // hôte : clients ; client : [hôte]
+    std::vector<Peer> peers;                               // hôte : clients ; client : [hôte]
     net::Recorder recorder;
-    uint8_t my_player_id = 0;                            // hôte = 0
+    uint8_t my_player_id = 0;                              // hôte = 0
     uint32_t session_id = 0;
     uint32_t game_build = 0;
     std::vector<std::string> gameplay_mods;
     std::string connect_to;
     bool accepted = false;
     bool rejected = false;
-    int invalid = 0;
-    int desyncs = 0;
     double now = 0;
     Battle battle;
     uint32_t next_battle_id = 1;
-    std::map<int, uint8_t> owner_overrides;              // -e33owners=0:1,1:0  (emplacement:joueur)
-    DWORD game_thread = 0;                               // fixé par tick()
-    std::optional<proto::BattleStart> pending_start;     // client : combat de l'hôte, lancé une fois le monde prêt
-    double world_ready_s = 0;                            // client : durée depuis laquelle le monde est stable
+    std::map<std::string, uint8_t> owner_overrides;        // -e33owners=0:1,Lune:1  (emplacement ou nom : joueur)
+    DWORD game_thread = 0;
+    std::optional<proto::BattleStart> pending_start;       // client : combat de l'hôte, lancé une fois le monde prêt
+    double world_ready_s = 0;
     double next_trigger_try = 0;
-    int off_thread_draws = 0;                            // tirages hors thread de jeu (ignorés)
-    int hp_overrides = 0;                                // client : PV locaux corrigés par ceux de l hôte (écart réel)
-    int hashes_compared = 0;
-    int gameplay_draws = 0;                              // tirages de gameplay remplacés (D10)
-    int draw_mismatches = 0;                             // client : écarts avec les tirages de l'hôte
-    int draw_errors = 0;                                 // paramètres de tirage illisibles
-    double action_delay_s = 1.5;                         // hôte : délai minimal avant d'exécuter une action distante (-e33actiondelay)
-    double turn_started_at = 0;                          // hôte : s.now au dernier début de tour
-    std::optional<uint64_t> fixed_seed;                  // hôte : -e33seed=N (runs reproductibles)
-    std::vector<std::string> draw_filter;                // diagnostic : -e33draws=none | sous-chaînes (vide = tout remplacer)
+    double action_delay_s = 1.5;                           // délai minimal (depuis le début du tour) avant d'exécuter l'action d'un héros d'un autre joueur
+    double replay_lag_s = 1.0;                             // décalage minimal derrière son propriétaire (-e33replaylag) : ses QTE sont connus à temps
+    std::optional<uint64_t> fixed_seed;                    // hôte : -e33seed=N
+    std::vector<std::string> draw_filter;                  // diagnostic : -e33draws=none | sous-chaînes
+    std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
+    bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
+    bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
+    bool input_enabled = true;
+    UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
+    std::map<UObject*, int> removed_contexts;              // contextes d'entrée retirés pendant le blocage -> priorité
+    std::map<std::string, int> counters;
+    FreeAimOwner fa_own;                                   // visée d'un héros d'ici
+    FreeAimReplay fa_rep;                                  // visée rejouée d'un héros d'un autre joueur
+    std::optional<std::array<double, 3>> local_aim;        // test runner : point visé par le « joueur » (set_local_aim)
 };
 
 State s;
+
+void bump(const char* name, int n = 1) { s.counters[name] += n; }
 
 // --- Utilitaires ------------------------------------------------------------------------
 
@@ -170,22 +250,10 @@ std::vector<std::string> read_gameplay_mods()
 
 void send_to(Peer& p, const proto::Message& m, bool reliable = true) { if (p.link) p.link->send(m, reliable); }
 void broadcast(const proto::Message& m) { for (auto& p : s.peers) if (p.accepted) send_to(p, m); }
-
-int hero_spot(UObject* ch) { return static_cast<int>(ue::get_int(ch, STR("BattleSpotIndex"), -1)); }
-
-int enemy_index(UObject* ch)
+// Hôte : à tous les clients sauf l'émetteur ; client : à l'hôte.
+void publish(const proto::Message& m, const Peer* origin = nullptr, bool reliable = true)
 {
-    auto es = game::enemies();
-    auto it = std::find(es.begin(), es.end(), ch);
-    return it == es.end() ? -1 : static_cast<int>(it - es.begin());
-}
-
-// Version sans appel au jeu (pour les hooks très fréquents) : liste figée au début du tour.
-int cached_enemy_index(UObject* ch)
-{
-    const auto& es = s.battle.enemies_cache;
-    auto it = std::find(es.begin(), es.end(), ch);
-    return it == es.end() ? -1 : static_cast<int>(it - es.begin());
+    for (auto& p : s.peers) if (p.accepted && &p != origin) send_to(p, m, reliable);
 }
 
 uint8_t owner_of_spot(int spot)
@@ -193,37 +261,27 @@ uint8_t owner_of_spot(int spot)
     auto it = s.battle.owner_by_spot.find(spot);
     return it == s.battle.owner_by_spot.end() ? 0 : it->second;
 }
+bool controls(int spot) { return owner_of_spot(spot) == s.my_player_id; }
 
-uint64_t state_hash(UObject* actor)
+proto::Unit actor_unit(UObject* actor) { return sync::unit_of(actor); }
+
+void refresh_enemy_spots()
 {
-    wire::Fnv64 h;
-    auto add_char = [&](UObject* c) {
-        UObject* st = game::stats(c);
-        h.i64(std::llround(ue::get_double(st, STR("CurrentHP"))));
-        h.i64(std::llround(ue::get_double(st, STR("CurrentAP"))));
-        h.i64(ue::get_int(st, STR("CurrentShieldPoints")));
-        h.i64(game::is_dead(c) ? 1 : 0);
-    };
-    auto ps = game::players();
-    std::sort(ps.begin(), ps.end(), [](UObject* a, UObject* b) { return hero_spot(a) < hero_spot(b); });
-    for (UObject* c : ps) add_char(c);
-    for (UObject* c : game::enemies()) add_char(c);
-    h.str(game::char_class(actor));
-    return h.value();
+    s.battle.enemy_spots.clear();
+    for (UObject* e : game::enemies()) s.battle.enemy_spots[e] = game::spot(e);
+}
+// Sans appel au jeu (hooks très fréquents) : emplacement d'un ennemi connu, -1 sinon.
+int cached_enemy_spot(UObject* o)
+{
+    auto it = s.battle.enemy_spots.find(o);
+    return it == s.battle.enemy_spots.end() ? -1 : it->second;
 }
 
-std::string state_detail()
+std::string hex64(uint64_t v)
 {
-    std::string out = "[";
-    auto add = [&](UObject* c) {
-        if (out.size() > 1) out += ",";
-        UObject* st = game::stats(c);
-        out += JsonObj().add("c", game::char_class(c)).add("hp", ue::get_double(st, STR("CurrentHP"))).add("ap", ue::get_double(st, STR("CurrentAP")))
-                   .add("shield", ue::get_int(st, STR("CurrentShieldPoints"))).add("dead", game::is_dead(c)).str();
-    };
-    for (UObject* c : game::players()) add(c);
-    for (UObject* c : game::enemies()) add(c);
-    return out + "]";
+    char b[24];
+    std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(v));
+    return b;
 }
 
 void check_hash(uint32_t turn)
@@ -231,15 +289,13 @@ void check_hash(uint32_t turn)
     auto l = s.battle.local_hash.find(turn);
     auto r = s.battle.remote_hash.find(turn);
     if (l == s.battle.local_hash.end() || r == s.battle.remote_hash.end()) return;
-    ++s.hashes_compared;
-    char a[24], b[24];
-    std::snprintf(a, sizeof a, "%016llx", static_cast<unsigned long long>(l->second));
-    std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(r->second));
+    bump("hashes_compared");
     if (l->second != r->second) {
-        ++s.desyncs;
-        log().write("desync", JsonObj().add("battle", s.battle.id).add("turn", turn).add("local", std::string_view(a)).add("remote", std::string_view(b)).raw("state", state_detail()), turn);
+        bump("desyncs");
+        log().write("desync", JsonObj().add("battle", s.battle.id).add("turn", turn).add("local", hex64(l->second)).add("remote", hex64(r->second))
+                                  .raw("state", proto::to_json(sync::snapshot(s.battle.id, turn))), turn);
     } else {
-        log().write("hash_ok", JsonObj().add("battle", s.battle.id).add("hash", std::string_view(a)), turn);
+        log().write("hash_ok", JsonObj().add("battle", s.battle.id).add("hash", hex64(l->second)), turn);
     }
     s.battle.local_hash.erase(l);
     s.battle.remote_hash.erase(r);
@@ -264,7 +320,7 @@ void pump_network()
             s.peers.push_back(std::move(np));
             peer = &s.peers.back();
             Peer* pp = peer;
-            pp->link->on_invalid = [](const std::string& why) { ++s.invalid; log().write("net_invalid", JsonObj().add("why", why)); };
+            pp->link->on_invalid = [](const std::string& why) { bump("invalid_messages"); log().write("net_invalid", JsonObj().add("why", why)); };
             pp->link->on_sent = [](const proto::Message& m, bool) { s.recorder.write("h2c", m); log().write("net_send", JsonObj().raw("msg", proto::to_json(m))); };
             pp->link->on_delivered = [](const proto::Message& m) { s.recorder.write("c2h", m); log().write("net_recv", JsonObj().raw("msg", proto::to_json(m))); };
             log().write("net_peer", JsonObj().add("peer", d.peer).add("player_id", static_cast<int>(pp->player_id)));
@@ -295,6 +351,59 @@ bool wait_for(Cond cond, double timeout_s)
     return true;
 }
 
+// Messages de jeu communs (hôte et client) : stockés pour les points de synchro ; l'hôte relaie aux autres.
+bool handle_battle_common(Peer& p, proto::Message& m)
+{
+    auto& b = s.battle;
+    if (auto* ac = std::get_if<proto::ActionCommand>(&m)) {
+        if (ac->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(ac->actor_spot) != p.player_id) {
+            log().write("net_rejected_msg", JsonObj().add("why", "action for a hero this player does not own").raw("msg", proto::to_json(m)));
+            return true;
+        }
+        b.commands[{ac->turn, ac->actor_spot}] = *ac;
+        b.command_time[{ac->turn, ac->actor_spot}] = s.now;
+        // Résultats de QTE déjà connus (faux client) : rangés comme des ComboResult, avec les instants d'appui
+        // canoniques du test runner (parfait à 88 % de la fenêtre, réussi à 30 %).
+        for (size_t i = 0; i < ac->combo.size(); ++i) {
+            const bool ok = (ac->combo[i] & 1) != 0, perfect = (ac->combo[i] & 2) != 0;
+            b.combos[{ac->turn, ac->actor_spot, static_cast<uint16_t>(i + 1)}] = {ac->battle_id, ac->turn, ac->actor_spot, static_cast<uint16_t>(i + 1),
+                                                                               ok || perfect, perfect, static_cast<uint16_t>(perfect ? 880 : ok ? 300 : proto::kNoPress)};
+        }
+        if (s.role == Role::Host) publish(*ac, &p);
+        return true;
+    }
+    if (auto* cr = std::get_if<proto::ComboResult>(&m)) {
+        if (cr->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(cr->spot) != p.player_id) return true;
+        b.combos[{cr->turn, cr->spot, cr->seq}] = *cr;
+        if (s.role == Role::Host) publish(*cr, &p);
+        return true;
+    }
+    if (auto* fa = std::get_if<proto::FreeAimEvent>(&m)) {
+        if (fa->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(fa->spot) != p.player_id) return true;
+        const std::pair<uint32_t, int> key{fa->turn, fa->spot};
+        if (fa->kind == proto::FreeAimKind::Start) { b.fa_events[key].clear(); b.fa_arrival[key] = s.now; }
+        b.fa_events[key].push_back(*fa);
+        if (s.role == Role::Host) publish(*fa, &p, fa->kind != proto::FreeAimKind::Aim);
+        return true;
+    }
+    if (auto* dr = std::get_if<proto::DefenseResult>(&m)) {
+        if (dr->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(dr->spot) != p.player_id) return true;
+        b.defenses[{dr->turn, dr->spot, dr->hit}] = dr->result;
+        if (s.role == Role::Host) publish(*dr, &p);
+        return true;
+    }
+    if (auto* sh = std::get_if<proto::StateHash>(&m)) {
+        if (sh->battle_id == b.id) { b.remote_hash[sh->turn] = sh->hash; check_hash(sh->turn); }
+        return true;
+    }
+    if (auto* ping = std::get_if<proto::Ping>(&m)) { send_to(p, proto::Pong{ping->t_us}, false); return true; }
+    return false;
+}
+
 void handle(Peer& p, proto::Message& m)
 {
     if (s.role == Role::Host) {
@@ -323,19 +432,8 @@ void handle(Peer& p, proto::Message& m)
             return;
         }
         if (!p.accepted) return;
-        if (auto* ac = std::get_if<proto::ActionCommand>(&m)) {
-            if (ac->battle_id != s.battle.id || owner_of_spot(ac->actor_spot) != p.player_id) {
-                log().write("net_rejected_msg", JsonObj().add("why", "action for a hero this player does not own").raw("msg", proto::to_json(m)));
-                return;
-            }
-            s.battle.pending_command = *ac;
-        } else if (auto* dr = std::get_if<proto::DefenseResult>(&m)) {
-            if (dr->battle_id == s.battle.id) s.battle.defense_results[(static_cast<uint64_t>(p.player_id) << 16) | dr->hit] = *dr;
-        } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
-            if (sh->battle_id == s.battle.id) { s.battle.remote_hash[sh->turn] = sh->hash; check_hash(sh->turn); }
-        } else if (auto* ping = std::get_if<proto::Ping>(&m)) {
-            send_to(p, proto::Pong{ping->t_us}, false);
-        } else if (std::get_if<proto::Bye>(&m)) {
+        if (handle_battle_common(p, m)) return;
+        if (std::get_if<proto::Bye>(&m)) {
             log().write("session_leave", JsonObj().add("player_id", static_cast<int>(p.player_id)));
             p.accepted = false;
         }
@@ -345,79 +443,46 @@ void handle(Peer& p, proto::Message& m)
     if (auto* w = std::get_if<proto::Welcome>(&m)) {
         s.accepted = true; s.my_player_id = w->player_id; s.session_id = w->session_id;
         log().write("session_welcome", JsonObj().add("player_id", static_cast<int>(w->player_id)));
-    } else if (auto* r = std::get_if<proto::Reject>(&m)) {
+        return;
+    }
+    if (auto* r = std::get_if<proto::Reject>(&m)) {
         s.rejected = true;
         log().write("session_rejected", JsonObj().add("reason", static_cast<int>(r->reason)).add("detail", r->detail));
-    } else if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
-        // Le combat ne démarre qu'une fois le monde local prêt (voir tick) : l'hôte peut être en avance
-        // (client encore au menu ou en chargement).
+        return;
+    }
+    if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
+        // Le combat ne démarre qu'une fois le monde local prêt (voir tick) : l'hôte peut être en avance.
         s.pending_start = *bs;
         s.battle = Battle{};   // remis à zéro dès maintenant : les messages suivants de l'hôte s'y accumulent
         s.battle.id = bs->battle_id;
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
         s.battle.rng_seed = bs->rng_seed;
         log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
-    } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
-        s.battle.host_turn_seen = std::max(s.battle.host_turn_seen, ts->turn);
-    } else if (auto* ar = std::get_if<proto::ActionResult>(&m)) {
-        s.battle.pending_results.push_back(*ar);
-    } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
-        s.battle.remote_hash[sh->turn] = sh->hash;
-        check_hash(sh->turn);
+        return;
+    }
+    if (handle_battle_common(p, m)) return;
+    if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
+        if (ts->battle_id == s.battle.id) s.battle.host_turns[ts->turn] = *ts;
+    } else if (auto* ss = std::get_if<proto::StateSync>(&m)) {
+        if (ss->battle_id == s.battle.id) s.battle.host_sync[ss->turn] = *ss;
     } else if (auto* dw = std::get_if<proto::Draws>(&m)) {
         if (dw->battle_id == s.battle.id)
             for (auto& d : dw->draws) s.battle.host_draws[dw->turn][(static_cast<uint64_t>(d.key) << 16) | d.rank] = d.value;
-    } else if (std::get_if<proto::BattleEnd>(&m)) {
-        log().write("coop_battle_end_received", JsonObj().add("battle", s.battle.id));
-    } else if (auto* ping = std::get_if<proto::Ping>(&m)) {
-        send_to(p, proto::Pong{ping->t_us}, false);
+    } else if (auto* be = std::get_if<proto::BattleEnd>(&m)) {
+        if (be->battle_id == s.battle.id) s.battle.host_end = be->result;
+        log().write("coop_battle_end_received", JsonObj().add("battle", be->battle_id).add("result", static_cast<int>(be->result)));
+    } else if (auto* rw = std::get_if<proto::BattleRewards>(&m)) {
+        if (rw->battle_id == s.battle.id) s.battle.host_rewards = *rw;
     }
 }
 
-// Client : applique les PV calculés par l'hôte.
-void apply_results()
-{
-    if (s.battle.pending_results.empty()) return;
-    auto ps = game::players();
-    auto es = game::enemies();
-    for (auto& ar : s.battle.pending_results) {
-        for (auto& h : ar.hits) {
-            UObject* c = nullptr;
-            if (h.kind == proto::ActorKind::Enemy && h.index < es.size()) c = es[h.index];
-            if (h.kind == proto::ActorKind::Hero) for (UObject* x : ps) if (hero_spot(x) == h.index) c = x;
-            UObject* st = game::stats(c);
-            if (auto* hp = ue::value_ptr<double>(st, STR("CurrentHP"))) {
-                if (std::fabs(*hp - h.hp_after) > 0.5) ++s.hp_overrides;
-                if (std::fabs(*hp - h.hp_after) > 0.5) log().write("coop_hp_override", JsonObj().add("c", game::char_class(c)).add("local", *hp).add("host", h.hp_after), ar.turn);
-                *hp = h.hp_after;
-            }
-        }
-    }
-    s.battle.pending_results.clear();
-}
-
-// Hôte : résultat de l'action qui vient de se terminer = PV de tous les combattants.
-proto::ActionResult snapshot_result(UObject* actor)
-{
-    proto::ActionResult ar;
-    ar.battle_id = s.battle.id;
-    ar.turn = s.battle.turn;
-    const bool hero = game::is_player(actor);
-    ar.kind = hero ? proto::ActorKind::Hero : proto::ActorKind::Enemy;
-    ar.actor_index = static_cast<uint8_t>(hero ? hero_spot(actor) : enemy_index(actor));
-    for (UObject* c : game::players()) ar.hits.push_back({proto::ActorKind::Hero, static_cast<uint8_t>(hero_spot(c)), 0, false, ue::get_double(game::stats(c), STR("CurrentHP"))});
-    auto es = game::enemies();
-    for (size_t i = 0; i < es.size(); ++i) ar.hits.push_back({proto::ActorKind::Enemy, static_cast<uint8_t>(i), 0, false, ue::get_double(game::stats(es[i]), STR("CurrentHP"))});
-    return ar;
-}
-
-// --- Hooks -------------------------------------------------------------------------------
+// --- Tirages de gameplay (D10) ------------------------------------------------------------
 
 bool on_game_thread() { return s.game_thread != 0 && GetCurrentThreadId() == s.game_thread; }
 
 // Appelant Blueprint d'une fonction native hookée. Le cadre fourni par UE4SS est celui de la fonction
-// elle-même (objet = CDO de KismetMathLibrary, nœud = RandomFloatInRange, vérifié en jeu le 2026-10-19) :
-// on remonte PreviousFrame jusqu'au premier objet qui n'est pas ce CDO.
+// elle-même (objet = CDO de KismetMathLibrary, vérifié en jeu le 2026-10-19) : on remonte PreviousFrame
+// jusqu'au premier objet qui n'est pas ce CDO.
 UObject* script_caller(HookCtx& ctx, UFunction** node_out = nullptr)
 {
     RC::Unreal::FFrame* f = &ctx.TheStack;
@@ -434,8 +499,7 @@ UObject* script_caller(HookCtx& ctx, UFunction** node_out = nullptr)
     return nullptr;
 }
 
-// Diagnostic des tirages aléatoires : chaîne des cadres de script (objet / fonction BP).
-// 5 premiers appels par fonction (combat ou non), puis 600 par combat au plus.
+// Diagnostic : chaîne des cadres de script d'un tirage (5 premiers appels par fonction, puis 600 par combat).
 void trace_random(HookCtx& ctx, const std::string& fname)
 {
     static std::map<std::string, int> seen;
@@ -447,7 +511,7 @@ void trace_random(HookCtx& ctx, const std::string& fname)
     RC::Unreal::FFrame* f = &ctx.TheStack;
     for (int depth = 0; f && depth < 4; ++depth) {
         if (frames.size() > 1) frames += ",";
-        frames += JsonObj().add("o", ue::full_name(f->Object())).add("n", ue::short_name(f->Node())).add("enemy", cached_enemy_index(f->Object())).str();
+        frames += JsonObj().add("o", ue::full_name(f->Object())).add("n", ue::short_name(f->Node())).add("enemy", cached_enemy_spot(f->Object())).str();
         RC::Unreal::FFrame* prev = f->PreviousFrame();
         if (prev == f) break;
         f = prev;
@@ -455,8 +519,6 @@ void trace_random(HookCtx& ctx, const std::string& fname)
     log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).raw("frames", frames + "]")
                                  .add("has_result", ctx.RESULT_DECL != nullptr), s.battle.turn);
 }
-
-// --- Tirages de gameplay (D10) ------------------------------------------------------------
 
 enum class RandomKind { IntInRange, Int, Float, FloatInRange, Bool, BoolWeight };
 struct RandomFn { const wchar_t* name; RandomKind kind; };
@@ -483,30 +545,49 @@ uint32_t fnv32(const std::string& str)
     return h;
 }
 
+// Prochain tirage d'un flux : rang dans le tour, valeur uniforme.
+double next_uniform(const std::string& stream, uint32_t& key, uint16_t& rank)
+{
+    key = fnv32(stream);
+    rank = s.battle.draw_rank[key]++;
+    s.battle.stream_names.emplace(key, stream);
+    return derived_uniform(s.battle.turn, key, rank);
+}
+
+void record_draw(const std::string& stream, uint32_t key, uint16_t rank, double v, double a, double b)
+{
+    bump("gameplay_draws");
+    s.battle.local_draws[s.battle.turn][(static_cast<uint64_t>(key) << 16) | rank] = v;
+    log().write("coop_draw", JsonObj().add("stream", stream).add("rank", static_cast<int>(rank)).add("value", v).add("a", a).add("b", b), s.battle.turn);
+    if (s.role == Role::Host) broadcast(proto::Draws{s.battle.id, s.battle.turn, {{key, rank, v}}});
+}
+
 // Nom du flux si le tirage vient du gameplay (premier appelant BP), vide sinon.
-// Gameplay, d'après les traces du 2026-10-19 (GAME-INTERNALS §15) : IA d'un ennemi, critiques
-// (BP_BattleDamages_C:RollCriticalHit), effets de Luminas (BP_LU_*), activation de buffs (stats de combat).
+// Gameplay (traces du 2026-10-19, GAME-INTERNALS §15) : IA d'un ennemi, critiques, Luminas (BP_LU_*), activation de
+// buffs, effets de buffs, scripts de compétence, récompenses (RollBattleRewards + système de butin).
 std::string gameplay_stream(HookCtx& ctx, const std::string& fname)
 {
     UFunction* node = nullptr;
     UObject* caller = script_caller(ctx, &node);
     if (!caller) return {};
-    const int ei = cached_enemy_index(caller);
+    const int es = cached_enemy_spot(caller);
     const std::string cls = game::char_class(caller);
-    const bool gameplay = ei >= 0 || cls == "BP_BattleDamages_C" || cls.rfind("BP_LU_", 0) == 0 || cls == "AC_jRPG_CharacterBattleStats_C";
+    const std::string fn = ue::short_name(node);
+    const bool gameplay = es >= 0 || cls == "BP_BattleDamages_C" || cls.rfind("BP_LU_", 0) == 0 || cls == "AC_jRPG_CharacterBattleStats_C" ||
+                          cls.rfind("BP_BattleBuff", 0) == 0 || cls.rfind("BP_LootSystemComponent", 0) == 0 ||
+                          (cls == "AC_jRPG_BattleManager_C" && fn == "RollBattleRewards") || ue::is_a(caller, STR("BP_Battle_SkillScript_C"));
     if (!gameplay) return {};
-    std::string name = cls + ":" + ue::short_name(node) + ":" + fname;
-    if (ei >= 0) name += "#" + std::to_string(ei);   // un flux par ennemi (même classe possible)
+    std::string name = cls + ":" + fn + ":" + fname;
+    if (es >= 0) name += "#" + std::to_string(es);   // un flux par ennemi (même classe possible)
     return name;
 }
 
 // Remplace la valeur de retour par la valeur dérivée ; l'hôte la publie pour vérification.
 void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string& stream)
 {
-    const uint32_t key = fnv32(stream);
-    const uint16_t rank = s.battle.draw_rank[key]++;
-    s.battle.stream_names.emplace(key, stream);
-    const double u = derived_uniform(s.battle.turn, key, rank);
+    uint32_t key = 0;
+    uint16_t rank = 0;
+    const double u = next_uniform(stream, key, rank);
     auto num = [&](const wchar_t* name, double& out) {
         int size = 0;
         void* p = ue::param_address(ctx, f, name, &size);
@@ -550,17 +631,13 @@ void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string
         break;
     }
     if (!ok) {
-        ++s.draw_errors;
+        bump("draw_errors");
         log().write("coop_draw_param_missing", JsonObj().add("stream", stream), s.battle.turn);
         return;
     }
-    ++s.gameplay_draws;
-    s.battle.local_draws[s.battle.turn][(static_cast<uint64_t>(key) << 16) | rank] = v;
-    log().write("coop_draw", JsonObj().add("stream", stream).add("rank", static_cast<int>(rank)).add("value", v).add("a", a).add("b", b), s.battle.turn);
-    if (s.role == Role::Host) broadcast(proto::Draws{s.battle.id, s.battle.turn, {{key, rank, v}}});
+    record_draw(stream, key, rank, v, a, b);
 }
 
-// Diagnostic -e33draws : "none" = aucun remplacement ; sinon seuls les flux contenant l'une des sous-chaînes.
 bool draw_allowed(const std::string& stream)
 {
     if (s.draw_filter.empty()) return true;
@@ -571,7 +648,6 @@ bool draw_allowed(const std::string& stream)
     return false;
 }
 
-// Valeur produite par le moteur (non remplacée), pour les logs de diagnostic.
 double natural_value(HookCtx& ctx, RandomKind kind)
 {
     switch (kind) {
@@ -593,18 +669,368 @@ void compare_draws(uint32_t turn)
     for (auto& [k, v] : mine) {
         auto it = host.find(k);
         if (it == host.end() || std::fabs(it->second - v) > 1e-9) {
-            ++s.draw_mismatches;
+            bump("draw_mismatches");
             log().write("coop_draw_mismatch", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("local", v)
                                                   .add("host_has", it != host.end()).add("host", it != host.end() ? it->second : 0.0), turn);
         }
     }
     for (auto& [k, v] : host) {
         if (mine.count(k)) continue;
-        ++s.draw_mismatches;
+        bump("draw_mismatches");
         log().write("coop_draw_mismatch", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("local_has", false).add("host", v), turn);
     }
     s.battle.local_draws.erase(turn);
     s.battle.host_draws.erase(turn);
+}
+
+// --- Synchro des tours ---------------------------------------------------------------------
+
+std::vector<std::wstring> party_wide(const std::vector<std::string>& v)
+{
+    std::vector<std::wstring> out;
+    for (auto& x : v) out.push_back(ue::from_utf8(x));
+    return out;
+}
+
+// Propriétaire d'un héros : -e33owners (emplacement ou nom interne), sinon règle du brief :
+// le k-ième héros (ordre des emplacements) va au k-ième joueur connecté, l'hôte prend le reste.
+uint8_t default_owner(int index, int spot, const std::string& name)
+{
+    if (auto it = s.owner_overrides.find(std::to_string(spot)); it != s.owner_overrides.end()) return it->second;
+    if (auto it = s.owner_overrides.find(name); it != s.owner_overrides.end()) return it->second;
+    if (!s.owner_overrides.empty()) return 0;
+    std::vector<uint8_t> players{0};
+    for (auto& p : s.peers) if (p.accepted) players.push_back(p.player_id);
+    return index < static_cast<int>(players.size()) ? players[static_cast<size_t>(index)] : 0;
+}
+
+void begin_turn_common()
+{
+    ++s.battle.turn;
+    s.battle.draw_rank.clear();
+    s.battle.hit_seq.clear();
+    s.battle.combo_seq.clear();
+    s.battle.action_wait_logged = false;
+    refresh_enemy_spots();
+    s.battle.turn_started_at = s.now;
+    s.fa_own = FreeAimOwner{};
+    s.fa_rep = FreeAimReplay{};
+}
+
+void host_turn_start(UObject* actor)
+{
+    auto& b = s.battle;
+    if (!b.active) {
+        b = Battle{};
+        b.id = s.next_battle_id++;
+        b.active = true;
+        proto::BattleStart bs;
+        bs.battle_id = b.id;
+        bs.encounter = ue::to_utf8(game::last_encounter());
+        for (auto& p : game::last_party()) bs.party.push_back(ue::to_utf8(p));
+        b.rng_seed = s.fixed_seed ? *s.fixed_seed : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ b.id);
+        bs.rng_seed = b.rng_seed;
+        auto ps = game::players();
+        std::sort(ps.begin(), ps.end(), [](UObject* x, UObject* y) { return game::spot(x) < game::spot(y); });
+        for (size_t i = 0; i < ps.size(); ++i) {
+            const int spot = game::spot(ps[i]);
+            const uint8_t owner = default_owner(static_cast<int>(i), spot, game::hardcoded_name(ps[i]));
+            b.owner_by_spot[spot] = owner;
+            bs.owners.push_back({static_cast<uint8_t>(spot), game::char_class(ps[i]), owner});
+        }
+        broadcast(bs);
+        log().write("coop_battle_inventory", JsonObj().raw("inventory", game::battle_inventory_json()));
+        // Diagnostic : composants de chaque héros (mécaniques propres : perfection, taches, masques… à couvrir par le hash).
+        for (UObject* h : game::players()) {
+            std::string comps = "[";
+            for (UObject* c : ue::get_object_array(h, STR("BlueprintCreatedComponents"))) {
+                if (comps.size() > 1) comps += ",";
+                comps += "\"" + game::char_class(c) + "\"";
+            }
+            log().write("coop_hero_components", JsonObj().add("hero", game::hardcoded_name(h)).raw("components", comps + "]"));
+        }
+    }
+    begin_turn_common();
+    const proto::Unit au = actor_unit(actor);
+    broadcast(proto::TurnStart{b.id, b.turn, au.kind, au.spot, game::char_class(actor)});
+    const proto::StateSync st = sync::snapshot(b.id, b.turn);
+    const uint64_t h = sync::hash(st, au);
+    b.local_hash[b.turn] = h;
+    broadcast(proto::StateHash{b.id, b.turn, h});
+    broadcast(st);
+    check_hash(b.turn);
+}
+
+// Client : test de resynchro (-e33perturb=N) : fausse volontairement l'état local au début du tour N,
+// après le contrôle de ce tour ; l'écart doit être détecté et corrigé au tour suivant.
+void perturb_state()
+{
+    for (UObject* e : game::enemies()) {
+        if (game::is_dead_fast(e)) continue;
+        UObject* st = game::stats(e);
+        ue::set_double(st, STR("CurrentHP"), ue::get_double(st, STR("CurrentHP")) - 1.0);
+        break;
+    }
+    for (UObject* h : game::players()) {
+        if (game::is_dead_fast(h)) continue;
+        UObject* st = game::stats(h);
+        ue::set_double(st, STR("CurrentAP"), ue::get_double(st, STR("CurrentAP")) + 1.0);
+        break;
+    }
+    bump("perturbations");
+    log().write("coop_perturb", JsonObj().add("what", "enemy hp -1, hero ap +1"), s.battle.turn);
+}
+
+void client_turn_start(UObject* actor)
+{
+    auto& b = s.battle;
+    begin_turn_common();
+    // L'hôte rythme les tours : attendre son début de tour (TurnStart, StateHash, StateSync, dans cet ordre).
+    if (!wait_for([&] { return b.host_sync.count(b.turn) > 0; }, 15.0)) {
+        bump("turn_wait_timeouts");
+        log().write("coop_turn_wait_timeout", JsonObj().add("battle", b.id), b.turn);
+        return;
+    }
+    const proto::Unit au = actor_unit(actor);
+    if (auto it = b.host_turns.find(b.turn); it != b.host_turns.end() && (it->second.kind != au.kind || it->second.index != au.spot)) {
+        bump("actor_mismatches");
+        log().write("coop_actor_mismatch", JsonObj().add("local", game::char_class(actor)).add("host", it->second.actor), b.turn);
+    }
+    // Les tirages de l'hôte pour le tour précédent sont arrivés avant son TurnStart (lien ordonné).
+    if (b.turn > 1) compare_draws(b.turn - 1);
+    const proto::StateSync& host = b.host_sync[b.turn];
+    const proto::StateSync mine = sync::snapshot(b.id, b.turn);
+    uint64_t h = sync::hash(mine, au);
+    const uint64_t host_hash = sync::hash(host, au);
+    if (h != host_hash) {
+        // La simulation locale a divergé : log détaillé, puis resynchronisation depuis l'état de l'hôte.
+        bump("raw_hash_diffs");
+        const sync::RepairStats r = sync::repair(mine, host);
+        bump("repairs");
+        bump("repair_failures", r.failed);
+        const proto::StateSync after = sync::snapshot(b.id, b.turn);
+        h = sync::hash(after, au);
+        log().write("coop_resync", JsonObj().raw("diff", sync::diff(mine, host)).raw("repaired", sync::repair_json(r))
+                                       .add("fixed", h == host_hash).raw("remaining", h == host_hash ? "[]" : sync::diff(after, host)), b.turn);
+    }
+    b.local_hash[b.turn] = h;
+    for (auto& p : s.peers) send_to(p, proto::StateHash{b.id, b.turn, h});
+    check_hash(b.turn);
+    b.host_sync.erase(b.turn);
+    if (s.perturb_turn && *s.perturb_turn == b.turn) perturb_state();
+}
+
+// Contextes Enhanced Input coupés pendant le tour du héros d'un autre joueur. SetBattleInputEnabled(false) ne
+// suffit pas : la roue reste active (RT / gradient ouvrait le menu de Verso, vu le 2026-10-20). Le jeu les remet
+// lui-même au début de chaque tour d'un héros d'ici (tour, roue, ciblage) ou de chaque compétence / visée (QTE,
+// visée libre). Pas IMC_Battle_PauseMenu (permanent) ni IMC_BattleDefense / InputBlocker (liés une fois, puis gardés).
+constexpr const wchar_t* kBlockedContexts[] = {
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_PlayerTurn.IMC_Battle_PlayerTurn",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_MainWheel.IMC_Battle_MainWheel",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_Targeting.IMC_Battle_Targeting",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_QTE.IMC_Battle_QTE",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_FreeAim.IMC_Battle_FreeAim",
+};
+// Ceux que le jeu remet au début du tour d'un héros d'ici (rendus par le mod s'ils manquent encore).
+constexpr size_t kTurnContexts = 3;
+
+UObject* blocked_context(size_t i)
+{
+    static UObject* cache[std::size(kBlockedContexts)] = {};
+    if (!cache[i]) cache[i] = ue::find_object(kBlockedContexts[i]);
+    return cache[i];
+}
+
+std::optional<int> context_priority(UObject* imc)
+{
+    ue::Call has(s.input_sub, STR("HasMappingContext"));
+    if (!has) return std::nullopt;
+    has.set_object(STR("MappingContext"), imc).invoke();
+    if (!has.out_bool(STR("ReturnValue"))) return std::nullopt;
+    return static_cast<int>(has.out_int(STR("OutFoundPriority")));
+}
+
+// À chaque image pendant le blocage : retire ceux que le jeu a (re)mis.
+void enforce_input_block()
+{
+    if (!s.input_sub) return;
+    for (size_t i = 0; i < std::size(kBlockedContexts); ++i) {
+        UObject* imc = blocked_context(i);
+        if (!imc) continue;
+        const auto prio = context_priority(imc);
+        if (!prio) continue;
+        ue::Call rm(s.input_sub, STR("RemoveMappingContext"));
+        if (!rm) return;
+        rm.set_object(STR("MappingContext"), imc).invoke();
+        if (!s.removed_contexts.count(imc)) s.removed_contexts[imc] = *prio;
+        bump("input_contexts_removed");
+        log().write("coop_input_context", JsonObj().add("removed", ue::to_utf8(imc->GetName())).add("priority", *prio), s.battle.turn);
+    }
+}
+
+// Fin du blocage au début du tour d'un héros d'ici : le jeu a pu remettre tour/roue/ciblage juste avant (retirés
+// alors par le blocage) ; on rend ceux qui manquent, avec leur priorité.
+void restore_turn_contexts()
+{
+    if (!s.input_sub) return;
+    for (size_t i = 0; i < kTurnContexts; ++i) {
+        UObject* imc = blocked_context(i);
+        auto it = imc ? s.removed_contexts.find(imc) : s.removed_contexts.end();
+        if (it == s.removed_contexts.end() || context_priority(imc)) continue;
+        ue::Call add(s.input_sub, STR("AddMappingContext"));
+        if (!add) return;
+        add.set_object(STR("MappingContext"), imc).set_int(STR("Priority"), it->second).invoke();
+        bump("input_contexts_restored");
+        log().write("coop_input_context", JsonObj().add("restored", ue::to_utf8(imc->GetName())).add("priority", it->second), s.battle.turn);
+    }
+}
+
+// Entrées de combat de cette instance : aucune pendant le tour du héros d'un autre joueur (roue, gradient, ciblage,
+// QTE, visée). local_turn : la fin du blocage ouvre le tour d'un héros d'ici.
+void set_local_input(bool enabled, const char* why, bool local_turn = false)
+{
+    if (enabled == s.input_enabled) return;
+    s.input_enabled = enabled;
+    ue::Call c(game::battle_manager(), STR("SetBattleInputEnabled"));
+    if (c) c.set_bool(STR("Enabled"), enabled).invoke();
+    if (!enabled) {
+        s.input_sub = game::input_subsystem();
+        s.removed_contexts.clear();
+        enforce_input_block();
+    } else {
+        if (local_turn) restore_turn_contexts();
+        s.removed_contexts.clear();
+    }
+    log().write("coop_input", JsonObj().add("enabled", enabled).add("why", why).add("subsystem", s.input_sub != nullptr), s.battle.turn);
+}
+
+// --- Fin de combat -------------------------------------------------------------------------
+
+// Récompenses : lecture / écriture de FS_BattleRewards (out-param de RollBattleRewards).
+proto::BattleRewards read_rewards(void* st_ptr, RC::Unreal::UStruct* st)
+{
+    using namespace RC::Unreal;
+    proto::BattleRewards r;
+    r.battle_id = s.battle.id;
+    if (FProperty* p = ue::struct_member(st, STR("ExperienceGained"))) r.xp = *static_cast<int32_t*>(p->ContainerPtrToValuePtr<void>(st_ptr));
+    if (FProperty* p = ue::struct_member(st, STR("GoldAcquired"))) r.gold = *static_cast<int32_t*>(p->ContainerPtrToValuePtr<void>(st_ptr));
+    if (auto* ap = CastField<FArrayProperty>(ue::struct_member(st, STR("RolledLootEntries")))) {
+        auto* inner = CastField<FStructProperty>(ap->GetInner());
+        auto* arr = static_cast<FScriptArray*>(ap->ContainerPtrToValuePtr<void>(st_ptr));
+        if (inner && arr) {
+            UStruct* es = inner->GetStruct();
+            FProperty* id = ue::struct_member(es, STR("ItemID"));
+            FProperty* qty = ue::struct_member(es, STR("Quantity"));
+            auto* data = static_cast<uint8_t*>(arr->GetData());
+            for (int32 i = 0; i < arr->Num() && id && qty; ++i) {
+                void* e = data + static_cast<size_t>(i) * inner->GetSize();
+                r.loot.push_back({ue::to_utf8(static_cast<FName*>(id->ContainerPtrToValuePtr<void>(e))->ToString()), *static_cast<int32_t*>(qty->ContainerPtrToValuePtr<void>(e))});
+            }
+        }
+    }
+    return r;
+}
+
+void finalize_battle(const char* why)
+{
+    auto& b = s.battle;
+    if (b.finalized) return;
+    if (s.role == Role::Client) {
+        // Jamais d'attente ici : on peut être au milieu d'un coup (mort -> fin de combat) dont l'hôte attend le résultat.
+        // La clôture d'une fin sans victoire est donc faite dans le tick, une fois le BattleEnd de l'hôte reçu.
+        if (b.host_end != b.local_end) {
+            bump("end_mismatches");
+            log().write("coop_end_mismatch", JsonObj().add("local", b.local_end).add("host", b.host_end));
+        }
+        compare_draws(b.turn);
+    }
+    b.finalized = true;
+    b.active = false;
+    set_local_input(true, "battle end");
+    log().write("coop_battle_finalized", JsonObj().add("battle", b.id).add("why", why).add("desyncs", counter("desyncs")));
+}
+
+// --- Hooks ---------------------------------------------------------------------------------
+
+UObject* timeline_hero(UObject* timeline)
+{
+    UObject* ch = ue::get_object(timeline, STR("BattleCharacter"));
+    return ch && game::is_player(ch) ? ch : nullptr;
+}
+
+// Impose sur ce héros la défense décidée par son propriétaire, juste avant le test du jeu.
+void impose_defense(UObject* hero, proto::Defense d, bool jumpable)
+{
+    s.imposing = true;
+    bool started = true;
+    switch (d) {
+    case proto::Defense::Fail:
+        if (game::in_immunity(hero)) game::cancel_defense(hero);
+        break;
+    case proto::Defense::Parry:
+        game::clear_defense_lock(hero);
+        started = game::start_parry(hero);
+        break;
+    case proto::Defense::GradientParry:
+        game::clear_defense_lock(hero);
+        started = game::start_gradient_parry(hero);
+        break;
+    case proto::Defense::Dodge:
+    case proto::Defense::PerfectDodge: {
+        game::clear_defense_lock(hero);
+        started = game::start_dodge(hero);
+        if (d == proto::Defense::Dodge) {
+            // Esquive simple : début reculé au-delà de la fenêtre de parade (sinon le jeu la juge parfaite).
+            const double start = ue::get_double(hero, STR("DefensiveMoveImmunityStartTime"));
+            ue::set_double(hero, STR("DefensiveMoveImmunityStartTime"), start - game::parry_immune_duration(hero) - 0.05);
+        }
+        break;
+    }
+    case proto::Defense::Jump:
+        if (!jumpable) break;
+        game::clear_defense_lock(hero);
+        started = game::start_jump(hero);
+        break;
+    }
+    s.imposing = false;
+    if (!started) bump("defense_start_failed");
+}
+
+proto::Defense local_result(const LocalHit& lh, bool parried, bool dodged, bool gradient)
+{
+    if (lh.jumpable) return dodged ? proto::Defense::Jump : proto::Defense::Fail;
+    if (parried) return gradient ? proto::Defense::GradientParry : proto::Defense::Parry;
+    if (dodged) return lh.perfect_dodge ? proto::Defense::PerfectDodge : proto::Defense::Dodge;
+    return proto::Defense::Fail;
+}
+
+// Point de défense d'un héros (avant le test du jeu) : héros d'ici -> le résultat sera publié après le test ;
+// héros d'un autre joueur -> attendre son résultat (relayé par l'hôte) et l'imposer.
+void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
+{
+    auto& b = s.battle;
+    const int spot = game::spot(hero);
+    const uint16_t hit = ++b.hit_seq[spot];
+    if (controls(spot)) {
+        b.local_hits[stats_comp] = {spot, hit, jumpable, false};
+        return;
+    }
+    const uint8_t owner = owner_of_spot(spot);
+    if (s.role == Role::Host)
+        for (auto& p : s.peers)
+            if (p.accepted && p.player_id == owner) send_to(p, proto::DefenseRequest{b.id, b.turn, static_cast<uint8_t>(spot), hit, static_cast<uint8_t>(jumpable), 3000});
+    const TurnSpotSeq key{b.turn, spot, hit};
+    const ULONGLONG t0 = GetTickCount64();
+    const bool got = wait_for([&] { return b.defenses.count(key) > 0; }, kDefenseTimeout);
+    const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
+    proto::Defense res = proto::Defense::Fail;
+    if (got) res = b.defenses[key];
+    else bump("defense_timeouts");
+    impose_defense(hero, res, jumpable);
+    b.imposed_check[stats_comp] = static_cast<int>(res);
+    bump("defenses_imposed");
+    log().write("coop_defense_imposed", JsonObj().add("spot", spot).add("hit", static_cast<int>(hit)).add("owner", static_cast<int>(owner)).add("jumpable", jumpable)
+                                         .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms), b.turn);
 }
 
 void subscribe()
@@ -612,166 +1038,337 @@ void subscribe()
     using game::path::fn;
     auto& bus = HookBus::get();
 
-    // Début de tour : hôte -> TurnStart + StateHash ; client -> hash local + attente de l'hôte.
+    // Début de tour : hôte -> TurnStart + StateHash + StateSync ; client -> contrôle et resynchro éventuelle.
     bus.post(fn(game::path::BattleChar, L"OnTurnStart"), [](HookCtx& ctx, UFunction*) {
-        UObject* actor = ctx.Context;
         if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;   // contre : pas un tour
-        if (s.role == Role::Host) {
-            if (!s.battle.active) {
-                s.battle = Battle{};
-                s.battle.id = s.next_battle_id++;
-                s.battle.active = true;
-                proto::BattleStart bs;
-                bs.battle_id = s.battle.id;
-                bs.encounter = ue::to_utf8(game::last_encounter());
-                s.battle.rng_seed = s.fixed_seed ? *s.fixed_seed : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ s.battle.id);
-                bs.rng_seed = s.battle.rng_seed;
-                auto ps = game::players();
-                for (UObject* c : ps) {
-                    const int spot = hero_spot(c);
-                    uint8_t owner = 0;
-                    auto ov = s.owner_overrides.find(spot);
-                    if (ov != s.owner_overrides.end()) owner = ov->second;
-                    else if (!s.peers.empty() && s.peers.front().accepted && spot == 0) owner = s.peers.front().player_id;   // défaut PoC
-                    s.battle.owner_by_spot[spot] = owner;
-                    bs.owners.push_back({static_cast<uint8_t>(spot), game::char_class(c), owner});
-                }
-                broadcast(bs);
-            }
-            ++s.battle.turn;
-            s.battle.draw_rank.clear();
-            s.battle.enemies_cache = game::enemies();
-            const bool hero = game::is_player(actor);
-            broadcast(proto::TurnStart{s.battle.id, s.battle.turn, hero ? proto::ActorKind::Hero : proto::ActorKind::Enemy,
-                                       static_cast<uint8_t>(hero ? hero_spot(actor) : enemy_index(actor)), game::char_class(actor)});
-            const uint64_t h = state_hash(actor);
-            s.battle.local_hash[s.battle.turn] = h;
-            broadcast(proto::StateHash{s.battle.id, s.battle.turn, h});
-            check_hash(s.battle.turn);
-            s.battle.pending_command.reset();
-            s.turn_started_at = s.now;
-        } else if (s.role == Role::Client && s.battle.active) {
-            ++s.battle.turn;
-            s.battle.draw_rank.clear();
-            s.battle.enemies_cache = game::enemies();
-            // l'hôte rythme les tours : attendre son TurnStart et ses résultats pour ce tour
-            wait_for([&] { return s.battle.host_turn_seen >= s.battle.turn; }, 10.0);
-            // Les tirages de l'hôte pour le tour précédent sont arrivés avant son TurnStart (lien ordonné).
-            if (s.battle.turn > 1) compare_draws(s.battle.turn - 1);
-            // Hash avant correction : c'est lui qui dit si la simulation locale a suivi celle de l'hôte.
-            const uint64_t raw = state_hash(actor);
-            apply_results();
-            const uint64_t h = state_hash(actor);
-            if (raw != h) log().write("coop_raw_hash_differs", JsonObj().add("battle", s.battle.id).raw("state_after_override", state_detail()), s.battle.turn);
-            s.battle.local_hash[s.battle.turn] = h;
-            for (auto& p : s.peers) send_to(p, proto::StateHash{s.battle.id, s.battle.turn, h});
-            check_hash(s.battle.turn);
+        if (s.role == Role::Host) host_turn_start(ctx.Context);
+        else if (s.role == Role::Client && s.battle.active) client_turn_start(ctx.Context);
+        // Tour du héros d'un autre joueur : pas de choix d'action ici (son action arrive par le réseau).
+        if (s.role != Role::Solo && s.battle.active && s.lock_input) {
+            const bool hero = game::is_player(ctx.Context);
+            const bool mine = hero && controls(game::spot(ctx.Context));
+            set_local_input(!hero || mine, "turn start", mine);
         }
     });
 
-    // Fin de tour (hôte) : diffuser les PV résultants.
-    bus.post(fn(game::path::BattleChar, L"OnTurnEnded"), [](HookCtx& ctx, UFunction*) {
-        if (s.role != Role::Host || !s.battle.active) return;
-        broadcast(snapshot_result(ctx.Context));
-    });
+    // Passer le tour / fuir (chemins de l'interface, sans RequestActionExecution) : publiés comme les autres actions.
+    for (const auto& [fn_name, type] : {std::pair{L"OnSelectSkip", game::ActSkip}, std::pair{L"OnSelectFlee", game::ActFlee}}) {
+        const int t = type;
+        bus.pre(fn(game::path::BattleMgr, fn_name), [t](HookCtx&, UFunction*) {
+            if (s.role == Role::Solo || !s.battle.active) return;
+            UObject* cur = game::current_character();
+            if (!cur || !game::is_player(cur) || !controls(game::spot(cur))) return;
+            proto::ActionCommand ac;
+            ac.battle_id = s.battle.id;
+            ac.turn = s.battle.turn;
+            ac.actor_spot = static_cast<uint8_t>(game::spot(cur));
+            ac.action_type = static_cast<uint8_t>(t);
+            bump("actions_published");
+            publish(ac);
+        });
+    }
 
-    // Client : capter l'action choisie localement pour un héros qu'on contrôle.
-    bus.pre(fn(game::path::BattleMgr, L"RequestActionExecution"), [](HookCtx&, UFunction*) {
-        if (s.role != Role::Client || !s.battle.active) return;
+    // Action choisie ici pour un héros contrôlé ici (test runner ou joueur) : publiée telle quelle.
+    bus.pre(fn(game::path::BattleMgr, L"RequestActionExecution"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active) return;
         UObject* cur = game::current_character();
-        if (!cur || !game::is_player(cur) || owner_of_spot(hero_spot(cur)) != s.my_player_id) return;
+        if (!cur || !game::is_player(cur) || !controls(game::spot(cur))) return;
+        UObject* bm = game::battle_manager();
         proto::ActionCommand ac;
         ac.battle_id = s.battle.id;
         ac.turn = s.battle.turn;
-        ac.actor_spot = static_cast<uint8_t>(hero_spot(cur));
-        UObject* bm = game::battle_manager();
+        ac.actor_spot = static_cast<uint8_t>(game::spot(cur));
         ac.action_type = static_cast<uint8_t>(ue::get_int(bm, STR("SelectedAction"), 1));
-        ac.combo_hits = static_cast<uint8_t>(std::clamp<int64_t>(ue::get_int(bm, STR("DEBUG_ComboAutoSuccessCount"), 0), 0, 255));
-        ac.targets = {0};
-        for (auto& p : s.peers) send_to(p, ac);
+        if (ac.action_type == game::ActItem || ac.action_type == game::ActSkill) ac.secondary = ue::get_name_string(bm, STR("SelectedSecondaryAction"));
+        if (auto* arr = static_cast<RC::Unreal::FScriptArray*>(ue::param_address(ctx, f, STR("TargetedCharacters")))) {
+            auto** data = static_cast<UObject**>(arr->GetData());
+            for (int32_t i = 0; i < arr->Num(); ++i) ac.targets.push_back(sync::unit_of(data[i]));
+        }
+        bump("actions_published");
+        publish(ac);
     });
 
-    // Défense distante (hôte) : demande au propriétaire du héros, attend son résultat, l'applique.
-    auto remote_defense = [](UObject* defender, bool jumpable) {
-        const int spot = hero_spot(defender);
-        const uint8_t owner = owner_of_spot(spot);
-        const uint16_t hit = ++s.battle.hit_counter[owner];
-        for (auto& p : s.peers)
-            if (p.player_id == owner) send_to(p, proto::DefenseRequest{s.battle.id, s.battle.turn, hit, 0, {static_cast<uint8_t>(spot)}, 3000});
-        const uint64_t key = (static_cast<uint64_t>(owner) << 16) | hit;
-        const ULONGLONG t0 = GetTickCount64();
-        const bool got = wait_for([&] { return s.battle.defense_results.count(key) > 0; }, 3.0);
-        const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
-        proto::Defense res = proto::Defense::Fail;
-        if (got) { res = s.battle.defense_results[key].result; s.battle.defense_results.erase(key); }
-        bool started = false;
-        if (jumpable && res != proto::Defense::Fail) started = game::start_jump(defender);
-        else if (!jumpable && (res == proto::Defense::Parry || res == proto::Defense::GradientParry)) started = game::start_parry(defender);
-        log().write("coop_remote_defense", JsonObj().add("player", static_cast<int>(owner)).add("hit", static_cast<int>(hit)).add("jumpable", jumpable).add("result", static_cast<int>(res))
-                                               .add("received", got).add("waited_ms", waited_ms).add("started", started), s.battle.turn);
-    };
-    bus.pre(fn(game::path::Stats, L"ReceiveDamageFromObject"), [remote_defense](HookCtx& ctx, UFunction* f) {
-        if (!s.battle.active || s.role == Role::Solo) return;
-        UObject* defender = ue::component_owner(ctx.Context);
-        if (!defender || !game::is_player(defender)) return;
-        if (!game::incoming_attack_jumpable(ue::read_param_object(ctx, f, STR("DamageBuilder")))) return;
-        if (s.role == Role::Host) {
-            if (owner_of_spot(hero_spot(defender)) != 0) remote_defense(defender, true);
-        } else if (owner_of_spot(hero_spot(defender)) == s.my_player_id) {
-            s.battle.local_jump_hit[ctx.Context] = ++s.battle.hit_counter[s.my_player_id];
+    // QTE offensifs (D11). Imposer « réussi/parfait » en fin de fenêtre ne reproduit pas un vrai appui (TryActivate a
+    // d'autres effets : un coup de plus vu le 2026-10-19). Donc : le propriétaire publie son résultat ET l'instant de son
+    // appui dans la fenêtre ; les autres instances, qui jouent l'action ~1 s plus tard, rejouent un vrai appui au même
+    // instant (« Try Activate Skill Combo »), avec le verdict « parfait » forcé dans IsInPerfectWindow.
+    bus.post(fn(game::path::Timeline, L"OnSkillComboWindowStartReached"), [](HookCtx& ctx, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* hero = timeline_hero(ctx.Context);
+        if (!hero) return;
+        auto& b = s.battle;
+        Window w;
+        w.hero = hero;
+        w.spot = game::spot(hero);
+        w.seq = ++b.combo_seq[w.spot];
+        w.start = SteadyClock::now();
+        w.duration = ue::get_double(ctx.Context, STR("CurrentWindowEndRealTime")) - ue::get_double(ctx.Context, STR("CurrentWindowStartRealTime"));
+        w.local = controls(w.spot);
+        if (!w.local) {
+            const TurnSpotSeq key{b.turn, w.spot, w.seq};
+            const ULONGLONG t0 = GetTickCount64();
+            const bool got = wait_for([&] { return b.combos.count(key) > 0; }, kComboTimeout);
+            const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
+            if (got) w.plan = b.combos[key];
+            else { bump("combo_timeouts"); w.plan = proto::ComboResult{b.id, b.turn, static_cast<uint8_t>(w.spot), w.seq, false, false, proto::kNoPress}; }
+            if (w.plan.success && w.plan.press <= 1000)
+                b.presses.push_back({ctx.Context, w.start + std::chrono::microseconds(static_cast<int64_t>(w.duration * w.plan.press * 1000.0))});
+            log().write("coop_combo_plan", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", w.plan.success).add("perfect", w.plan.perfect)
+                                               .add("press", static_cast<int>(w.plan.press)).add("received", got).add("waited_ms", waited_ms), b.turn);
+        }
+        b.windows[ctx.Context] = w;
+    });
+    // Diagnostic : tout appui QTE qui atteint le gestionnaire de combat, avec les fenêtres ouvertes à cet instant.
+    bus.pre(fn(game::path::BattleMgr, L"OnComboPressed"), [](HookCtx&, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        std::string open = "[";
+        for (const auto& [tl, w] : s.battle.windows) {
+            if (open.size() > 1) open += ",";
+            open += "{\"spot\":" + std::to_string(w.spot) + ",\"seq\":" + std::to_string(w.seq) + ",\"local\":" + (w.local ? "true" : "false")
+                  + ",\"elapsed_ms\":" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - w.start).count())
+                  + ",\"window_ms\":" + std::to_string(static_cast<int64_t>(w.duration * 1000)) + "}";
+        }
+        log().write("coop_combo_pressed", JsonObj().raw("open", open + "]").add("input_enabled", s.input_enabled), s.battle.turn);
+    });
+    // Héros d'ici : le premier appui réussi est publié tout de suite, avec son instant dans la fenêtre.
+    bus.post(fn(game::path::Timeline, L"TryActivate"), [](HookCtx& ctx, UFunction* f) {
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end()) return;
+        Window& w = it->second;
+        const bool ok = ue::read_out_bool(ctx, f, STR("Success")).value_or(false);
+        const bool perfect = ue::read_out_bool(ctx, f, STR("Perfect")).value_or(false);
+        if (!w.local) {
+            w.pressed = true;
+            if (ok != w.plan.success || perfect != w.plan.perfect) {
+                bump("combo_verdict_mismatches");
+                log().write("coop_combo_verdict_mismatch", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", ok).add("perfect", perfect), s.battle.turn);
+            }
+            return;
+        }
+        const double elapsed = std::chrono::duration<double>(SteadyClock::now() - w.start).count();
+        // Diagnostic (QTE « raté d'emblée » à la manette, 2026-10-20) : chaque appui d'ici, même rejeté.
+        log().write("coop_combo_try", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("ok", ok).add("perfect", perfect)
+                                          .add("elapsed_ms", static_cast<int64_t>(elapsed * 1000)).add("window_ms", static_cast<int64_t>(w.duration * 1000)), s.battle.turn);
+        if (w.published || !ok) return;
+        const double frac = w.duration > 0 ? std::clamp(elapsed / w.duration, 0.0, 1.0) : 0.5;
+        const proto::ComboResult cr{s.battle.id, s.battle.turn, static_cast<uint8_t>(w.spot), w.seq, true, perfect, static_cast<uint16_t>(std::lround(frac * 1000))};
+        w.published = true;
+        bump("combos_published");
+        log().write("coop_combo_local", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", true).add("perfect", perfect).add("press", static_cast<int>(cr.press)), s.battle.turn);
+        publish(cr);
+    });
+    // Verdict « parfait » d'un appui rejoué : celui du propriétaire (la gigue d'image ne doit pas le changer).
+    bus.post(fn(game::path::Timeline, L"IsInPerfectWindow"), [](HookCtx& ctx, UFunction* f) {
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end() || it->second.local) return;
+        ue::write_out_bool(ctx, f, STR("ReturnValue"), it->second.plan.perfect);
+    });
+    bus.pre(fn(game::path::Timeline, L"OnSkillComboWindowEndReached"), [](HookCtx& ctx, UFunction*) {
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end() || it->second.local) return;
+        Window& w = it->second;
+        if (w.plan.success && w.plan.press <= 1000 && !w.pressed) {
+            // Appui pas encore rejoué (image trop tardive) : maintenant, avant que la fenêtre ne se ferme.
+            std::erase_if(s.battle.presses, [&](const Press& p) { return p.timeline == ctx.Context; });
+            ue::Call c(w.hero, STR("Try Activate Skill Combo"));
+            if (c) c.invoke();
+            bump("combo_late_presses");
+        }
+        if (w.plan.press == proto::kAutoPress) {   // réussite automatique chez le propriétaire : pas d'appui à rejouer
+            ue::set_bool(ctx.Context, STR("IsSkillComboSuccessful"), w.plan.success);
+            ue::set_bool(ctx.Context, STR("IsSkillComboPerfect"), w.plan.perfect);
+        }
+        bump("combos_replayed");
+    });
+    bus.post(fn(game::path::Timeline, L"OnSkillComboWindowEndReached"), [](HookCtx& ctx, UFunction*) {
+        auto it = s.battle.windows.find(ctx.Context);
+        if (it == s.battle.windows.end()) return;
+        Window w = it->second;
+        s.battle.windows.erase(it);
+        const bool ok = ue::get_bool(ctx.Context, STR("IsSkillComboSuccessful"));
+        const bool perfect = ue::get_bool(ctx.Context, STR("IsSkillComboPerfect"));
+        if (w.local) {
+            if (w.published) return;
+            // Pas d'appui réussi : échec, ou réussite automatique (option d'accessibilité, mode test).
+            const proto::ComboResult cr{s.battle.id, s.battle.turn, static_cast<uint8_t>(w.spot), w.seq, ok || perfect, perfect, ok ? proto::kAutoPress : proto::kNoPress};
+            bump("combos_published");
+            log().write("coop_combo_local", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", cr.success).add("perfect", perfect).add("press", static_cast<int>(cr.press)), s.battle.turn);
+            publish(cr);
+            return;
+        }
+        if (ok != w.plan.success || perfect != w.plan.perfect) {
+            bump("combo_verdict_mismatches");
+            log().write("coop_combo_verdict_mismatch", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", ok).add("perfect", perfect)
+                                                        .add("want_success", w.plan.success).add("want_perfect", w.plan.perfect), s.battle.turn);
         }
     });
-    bus.post(fn(game::path::Stats, L"ReceiveDamageFromObject"), [](HookCtx& ctx, UFunction* f) {
-        if (s.role != Role::Client || !s.battle.active) return;
-        auto it = s.battle.local_jump_hit.find(ctx.Context);
-        if (it == s.battle.local_jump_hit.end()) return;
-        const uint16_t hit = it->second;
-        s.battle.local_jump_hit.erase(it);
-        const bool dodged = ue::read_out_bool(ctx, f, STR("DodgeSuccess")).value_or(false);
-        for (auto& p : s.peers) send_to(p, proto::DefenseResult{s.battle.id, s.battle.turn, hit, dodged ? proto::Defense::Jump : proto::Defense::Fail});
+
+    // Visée libre (D11). Le tir part vers le point que renvoie BM.ComputeFreeAim3rdPersonTargetLocation au moment du
+    // rayon du projectile (vu en jeu le 2026-10-19). Propriétaire : on publie le début, le point visé (~20 fois/s, pour
+    // l'affichage), chaque tir (instant) et son point exact, puis l'annulation. Ailleurs : rejoué avec le même décalage
+    // que ses actions, en imposant ce point visé.
+    bus.post(fn(game::path::BattleMgr, L"ComputeFreeAim3rdPersonTargetLocation"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        auto* loc = static_cast<double*>(ue::out_param_address(ctx, f, STR("HitLocation")));
+        if (!loc) return;
+        if (s.fa_rep.started && !s.fa_rep.done && s.fa_rep.have_override) {
+            loc[0] = s.fa_rep.point[0]; loc[1] = s.fa_rep.point[1]; loc[2] = s.fa_rep.point[2];
+            return;
+        }
+        if (!s.fa_own.active) return;
+        if (s.local_aim) { loc[0] = (*s.local_aim)[0]; loc[1] = (*s.local_aim)[1]; loc[2] = (*s.local_aim)[2]; }   // « joueur » simulé (tests)
+        s.fa_own.point = {loc[0], loc[1], loc[2]};
+        s.fa_own.have_point = true;
+        if (s.fa_own.in_raycast) { s.fa_own.shot_point = s.fa_own.point; s.fa_own.raycast_point = true; }
+    });
+    auto fa_event = [](proto::FreeAimKind kind, uint16_t seq, const std::array<double, 3>& p) {
+        proto::FreeAimEvent e;
+        e.battle_id = s.battle.id;
+        e.turn = s.battle.turn;
+        e.spot = static_cast<uint8_t>(s.fa_own.spot);
+        e.kind = kind;
+        e.seq = seq;
+        e.t_ms = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count());
+        e.x = p[0]; e.y = p[1]; e.z = p[2];
+        return e;
+    };
+    bus.pre(fn(game::path::BattleMgr, L"StartFreeAimFromUI"), [fa_event](HookCtx&, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* cur = game::current_character();
+        if (!cur || !game::is_player(cur) || !controls(game::spot(cur))) return;
+        s.fa_own = FreeAimOwner{};
+        s.fa_own.active = true;
+        s.fa_own.spot = game::spot(cur);
+        s.fa_own.t0 = SteadyClock::now();
+        bump("free_aims_published");
+        publish(fa_event(proto::FreeAimKind::Start, 0, {}));
+    });
+    bus.pre(fn(game::FreeAimComp, L"OnFreeAimShootAction"), [fa_event](HookCtx& ctx, UFunction*) {
+        if (!s.fa_own.active || ue::component_owner(ctx.Context) != game::find_unit(true, s.fa_own.spot)) return;
+        publish(fa_event(proto::FreeAimKind::Fire, ++s.fa_own.fires, s.fa_own.point));
+    });
+    bus.pre(fn(game::FreeAimProjectile, L"TriggerRaycast"), [](HookCtx& ctx, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* caster = ue::get_object(ctx.Context, STR("Caster"));
+        if (!caster || !game::is_player(caster)) return;
+        if (s.fa_own.active && game::spot(caster) == s.fa_own.spot) {
+            s.fa_own.in_raycast = true;
+            s.fa_own.raycast_point = false;
+            return;
+        }
+        // Rejeu : point exact du tir du propriétaire (attente bornée ; avec le décalage, il est déjà là).
+        auto& r = s.fa_rep;
+        if (!r.started || r.done || game::spot(caster) != r.key.second) return;
+        const uint16_t seq = ++r.raycasts;
+        std::optional<proto::FreeAimEvent> shot;   // copie : le vecteur grandit pendant l'attente
+        wait_for([&] {
+            for (auto& e : s.battle.fa_events[r.key]) if (e.kind == proto::FreeAimKind::Shot && e.seq == seq) { shot = e; return true; }
+            return false;
+        }, 2.0);
+        if (!shot) { bump("free_aim_timeouts"); return; }
+        std::array<double, 3> p{shot->x, shot->y, shot->z};
+        if (shot->target.spot != proto::kAutoSpot) {   // point relatif à un combattant (faux client)
+            double a[3];
+            if (game::location(game::find_unit(shot->target.kind == proto::ActorKind::Hero, shot->target.spot), a)) p = {a[0] + p[0], a[1] + p[1], a[2] + p[2]};
+        }
+        r.point = p;
+        r.have_override = true;
+        bump("free_aim_shots_replayed");
+        log().write("coop_free_aim_shot", JsonObj().add("spot", r.key.second).add("seq", static_cast<int>(seq)).add("x", p[0]).add("y", p[1]).add("z", p[2]), s.battle.turn);
+    });
+    bus.post(fn(game::FreeAimProjectile, L"TriggerRaycast"), [fa_event](HookCtx& ctx, UFunction*) {
+        if (!s.fa_own.in_raycast) return;
+        UObject* caster = ue::get_object(ctx.Context, STR("Caster"));
+        if (!caster || game::spot(caster) != s.fa_own.spot) return;
+        s.fa_own.in_raycast = false;
+        const auto p = s.fa_own.raycast_point ? s.fa_own.shot_point : s.fa_own.point;
+        publish(fa_event(proto::FreeAimKind::Shot, ++s.fa_own.shots, p));
+        log().write("coop_free_aim_local_shot", JsonObj().add("seq", static_cast<int>(s.fa_own.shots)).add("x", p[0]).add("y", p[1]).add("z", p[2])
+                                                 .add("from_raycast", s.fa_own.raycast_point), s.battle.turn);
+    });
+    bus.post(fn(game::FreeAimComp, L"OnFreeAimProjectileHit"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* target = ue::read_param_object(ctx, f, STR("Character"));
+        bump("free_aim_hits");
+        log().write("coop_free_aim_hit", JsonObj().add("target", game::char_class(target)).add("spot", game::spot(target))
+                                          .add("body_part", ue::read_param_int(ctx, f, STR("BodyPart")).value_or(-1)), s.battle.turn);
+    });
+    for (const wchar_t* name : {L"CancelFreeAimFromUI"}) {
+        bus.pre(fn(game::path::BattleMgr, name), [fa_event](HookCtx&, UFunction*) {
+            if (!s.fa_own.active) return;
+            publish(fa_event(proto::FreeAimKind::Cancel, 0, s.fa_own.point));
+            s.fa_own.active = false;
+        });
+    }
+    bus.post(fn(game::FreeAimComp, L"EndFreeAim"), [fa_event](HookCtx& ctx, UFunction*) {
+        if (!s.fa_own.active || ue::component_owner(ctx.Context) != game::find_unit(true, s.fa_own.spot)) return;
+        publish(fa_event(proto::FreeAimKind::End, 0, s.fa_own.point));
+        s.fa_own.active = false;
     });
 
-    // Défense : TryParryHitFromCharacter sur le composant de stats du défenseur.
-    bus.pre(fn(game::path::Stats, L"TryParryHitFromCharacter"), [remote_defense](HookCtx& ctx, UFunction*) {
-        if (s.role != Role::Host || !s.battle.active) return;
-        UObject* defender = ue::component_owner(ctx.Context);
-        if (!defender || !game::is_player(defender)) return;
-        if (owner_of_spot(hero_spot(defender)) == 0) return;   // héros de l'hôte : défendu localement
-        remote_defense(defender, false);
-    });
-
-    bus.post(fn(game::path::Stats, L"TryParryHitFromCharacter"), [](HookCtx& ctx, UFunction* f) {
-        if (s.role != Role::Host || !s.battle.active) return;
-        UObject* defender = ue::component_owner(ctx.Context);
-        if (!defender || !game::is_player(defender) || owner_of_spot(hero_spot(defender)) == 0) return;
-        const auto v = ue::read_out_bool(ctx, f, STR("Successful"));
-        log().write("coop_remote_parry_verdict", JsonObj().add("successful", v.value_or(false)).add("known", v.has_value()), s.battle.turn);
-    });
-
-    // Client : défense résolue localement -> résultat envoyé à l'hôte.
+    // Défenses : TryParryHitFromCharacter (coups parables) ou ReceiveDamageFromObject (coups sautables).
     bus.pre(fn(game::path::Stats, L"TryParryHitFromCharacter"), [](HookCtx& ctx, UFunction*) {
-        if (s.role != Role::Client || !s.battle.active) return;
-        UObject* defender = ue::component_owner(ctx.Context);
-        if (!defender || !game::is_player(defender) || owner_of_spot(hero_spot(defender)) != s.my_player_id) return;
-        s.battle.local_defense_hit[ctx.Context] = ++s.battle.hit_counter[s.my_player_id];
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* hero = ue::component_owner(ctx.Context);
+        if (!hero || !game::is_player(hero)) return;
+        defense_point(ctx.Context, hero, false);
     });
-    bus.post(fn(game::path::Stats, L"TryParryHitFromCharacter"), [](HookCtx& ctx, UFunction* f) {
-        if (s.role != Role::Client || !s.battle.active) return;
-        auto it = s.battle.local_defense_hit.find(ctx.Context);
-        if (it == s.battle.local_defense_hit.end()) return;
-        const uint16_t hit = it->second;
-        s.battle.local_defense_hit.erase(it);
-        const bool ok = ue::read_out_bool(ctx, f, STR("Successful")).value_or(false);
-        for (auto& p : s.peers) send_to(p, proto::DefenseResult{s.battle.id, s.battle.turn, hit, ok ? proto::Defense::Parry : proto::Defense::Fail});
+    bus.pre(fn(game::path::Stats, L"ReceiveDamageFromObject"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        UObject* hero = ue::component_owner(ctx.Context);
+        if (!hero || !game::is_player(hero)) return;
+        if (!game::incoming_attack_jumpable(ue::read_param_object(ctx, f, STR("DamageBuilder")))) return;
+        defense_point(ctx.Context, hero, true);
+    });
+    bus.post(fn(game::path::Stats, L"TryDodgeHitFromCharacter"), [](HookCtx& ctx, UFunction* f) {
+        auto it = s.battle.local_hits.find(ctx.Context);
+        if (it == s.battle.local_hits.end()) return;
+        it->second.perfect_dodge = ue::read_out_bool(ctx, f, STR("IsPerfectDodge")).value_or(false);
+    });
+    bus.post(fn(game::path::Stats, L"ReceiveDamageFromObject"), [](HookCtx& ctx, UFunction* f) {
+        auto& b = s.battle;
+        const bool parried = ue::read_out_bool(ctx, f, STR("ParrySuccess")).value_or(false);
+        const bool dodged = ue::read_out_bool(ctx, f, STR("DodgeSuccess")).value_or(false);
+        if (auto it = b.local_hits.find(ctx.Context); it != b.local_hits.end()) {
+            const LocalHit lh = it->second;
+            b.local_hits.erase(it);
+            UObject* hero = ue::component_owner(ctx.Context);
+            const proto::Defense res = local_result(lh, parried, dodged, ue::get_bool(hero, STR("IsGradientParrying")));
+            bump("defenses_published");
+            log().write("coop_defense_local", JsonObj().add("spot", lh.spot).add("hit", static_cast<int>(lh.hit)).add("result", static_cast<int>(res)), b.turn);
+            publish(proto::DefenseResult{b.id, b.turn, static_cast<uint8_t>(lh.spot), lh.hit, res});
+            return;
+        }
+        // Héros d'un autre joueur : le verdict du jeu doit être celui imposé.
+        if (auto it = b.imposed_check.find(ctx.Context); it != b.imposed_check.end()) {
+            const auto want = static_cast<proto::Defense>(it->second);
+            b.imposed_check.erase(it);
+            const bool want_parry = want == proto::Defense::Parry || want == proto::Defense::GradientParry;
+            const bool want_dodge = want == proto::Defense::Dodge || want == proto::Defense::PerfectDodge || want == proto::Defense::Jump;
+            if (parried != want_parry || dodged != want_dodge) {
+                bump("defense_verdict_mismatches");
+                log().write("coop_defense_verdict_mismatch", JsonObj().add("want", static_cast<int>(want)).add("parried", parried).add("dodged", dodged), b.turn);
+            }
+        }
     });
 
-    // NE PAS hooker KismetArrayLibrary:Array_Random (custom thunk à paramètres génériques) : avec le hook UE4SS,
-    // GetRandomAliveHero ne renvoyait plus de cible ; l'ennemi attaquait dans le vide, caméra sous la carte
-    // (2026-10-19, GAME-INTERNALS §15). Le ciblage sera synchronisé en phase 3 au niveau de GetRandomAliveHero.
+    // Entrées de défense parasites sur un héros d'un autre joueur (ex. parade d'un joueur sur une attaque de groupe) :
+    // la fenêtre est annulée, seul le résultat du propriétaire compte.
+    for (const wchar_t* name : {L"TryStartParry", L"TryStartDodge", L"TryStartJump", L"TryStartGradientParry"}) {
+        bus.post(fn(game::path::BattleChar, name), [name](HookCtx& ctx, UFunction*) {
+            if (s.role == Role::Solo || !s.battle.active || s.imposing) return;
+            UObject* hero = ctx.Context;
+            if (!game::is_player(hero) || controls(game::spot(hero))) return;
+            game::cancel_defense(hero);
+            bump("stray_defenses_undone");
+            log().write("coop_stray_defense", JsonObj().add("fn", ue::to_utf8(name)).add("spot", game::spot(hero)), s.battle.turn);
+        });
+    }
 
-    // Tirages de gameplay (D10) : chaque instance remplace le résultat des fonctions natives de KismetMathLibrary
-    // par une valeur dérivée de la graine de l'hôte, du flux (appelant BP + fonction) et du rang dans le tour.
-    // Aucune attente réseau ; les tirages cosmétiques (anims, sons, caméra, répliques) ne sont pas touchés.
+    // NE PAS hooker KismetArrayLibrary:Array_Random (custom thunk à paramètres génériques) : le hook UE4SS casse
+    // GetRandomAliveHero (GAME-INTERNALS §15). Le ciblage aléatoire est synchronisé plus bas, sur les helpers BP.
+
+    // Tirages de gameplay (D10) : valeur dérivée de la graine de l'hôte, du flux et du rang dans le tour.
     static const RandomFn random_fns[] = {
         {L"RandomIntegerInRange", RandomKind::IntInRange}, {L"RandomInteger", RandomKind::Int}, {L"RandomFloat", RandomKind::Float},
         {L"RandomFloatInRange", RandomKind::FloatInRange}, {L"RandomBool", RandomKind::Bool}, {L"RandomBoolWithWeight", RandomKind::BoolWeight},
@@ -782,7 +1379,7 @@ void subscribe()
         bus.post(std::wstring(L"/Script/Engine.KismetMathLibrary:") + rf.name, [kind, fname](HookCtx& ctx, UFunction* f) {
             if (s.role == Role::Solo) return;
             // Threads d'animation, chargement… : jamais un tirage de gameplay, et aucun accès au jeu permis ici.
-            if (!on_game_thread()) { ++s.off_thread_draws; return; }
+            if (!on_game_thread()) { bump("off_thread_draws"); return; }
             trace_random(ctx, fname);
             if (!s.battle.active || s.battle.turn == 0 || !ctx.RESULT_DECL) return;
             const std::string stream = gameplay_stream(ctx, fname);
@@ -791,12 +1388,93 @@ void subscribe()
         });
     }
 
+    // Ciblage aléatoire des ennemis (Array_Random sur les héros vivants) : remplacé par un tirage dérivé de la graine.
+    // GetSpecificHero / GetMiddleHero ne tirent au hasard que si le héros voulu est mort.
+    struct TargetFn { const wchar_t* name; const wchar_t* out; const wchar_t* spot_param; };
+    static const TargetFn target_fns[] = {
+        {L"GetRandomAliveHero", L"Output", nullptr},
+        {L"GetSpecificHero", L"Character", L"SpotIndex"},
+    };
+    for (const auto& tf : target_fns) {
+        const TargetFn t = tf;
+        bus.post(fn(game::path::Targeting, t.name), [t](HookCtx& ctx, UFunction* f) {
+            if (s.role == Role::Solo || !s.battle.active || s.battle.turn == 0) return;
+            UObject* natural = ue::read_out_object(ctx, f, t.out);
+            if (!natural) return;
+            if (t.spot_param) {
+                const auto want = ue::read_param_int(ctx, f, t.spot_param);
+                if (want && *want == game::spot(natural)) return;   // héros voulu vivant : pas de hasard
+            }
+            std::vector<UObject*> alive;
+            for (UObject* h : game::players()) if (!game::is_dead_fast(h)) alive.push_back(h);
+            std::sort(alive.begin(), alive.end(), [](UObject* x, UObject* y) { return game::spot(x) < game::spot(y); });
+            if (alive.empty()) return;
+            int caller_spot = -1;   // ennemi appelant (AcquireTargetRandomHero…), pour un flux par ennemi
+            RC::Unreal::FFrame* fr = ctx.TheStack.PreviousFrame();
+            for (int depth = 0; fr && caller_spot < 0 && depth < 6; ++depth) {
+                caller_spot = cached_enemy_spot(fr->Object());
+                RC::Unreal::FFrame* prev = fr->PreviousFrame();
+                fr = prev == fr ? nullptr : prev;
+            }
+            const std::string stream = "Targeting:" + ue::to_utf8(t.name) + "#" + std::to_string(caller_spot);
+            uint32_t key = 0;
+            uint16_t rank = 0;
+            const double u = next_uniform(stream, key, rank);
+            UObject* pick = alive[std::min(alive.size() - 1, static_cast<size_t>(u * static_cast<double>(alive.size())))];
+            ue::write_out_object(ctx, f, t.out, pick);
+            record_draw(stream, key, rank, game::spot(pick), game::spot(natural), static_cast<double>(alive.size()));
+            bump("targets_synced");
+        });
+    }
+    bus.post(fn(game::path::Targeting, L"GetRandomCharacterByBuffCritera"), [](HookCtx&, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        bump("unsynced_random_targeting");
+        log().write("coop_unsynced_targeting", JsonObj().add("fn", "GetRandomCharacterByBuffCritera"), s.battle.turn);
+    });
+
+    // Invocations : les nouveaux ennemis entrent dans le cache (leurs tirages d'IA sont de gameplay).
+    for (const wchar_t* name : {L"SummonMinions", L"SummonSingleMinion"})
+        bus.post(fn(game::path::BattleChar, name), [](HookCtx&, UFunction*) { if (s.battle.active) refresh_enemy_spots(); });
+
+    // Récompenses : l'hôte publie les siennes ; le client compare (mêmes tirages, D10) et prend celles de l'hôte.
+    bus.post(fn(game::path::BattleMgr, L"RollBattleRewards"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active) return;
+        RC::Unreal::FProperty* prop = nullptr;
+        void* addr = ue::out_param_address(ctx, f, STR("BattleRewards"), &prop);
+        auto* sp = RC::Unreal::CastField<RC::Unreal::FStructProperty>(prop);
+        if (!addr || !sp) { bump("rewards_unreadable"); return; }
+        proto::BattleRewards mine = read_rewards(addr, sp->GetStruct());
+        log().write("coop_rewards", JsonObj().raw("rewards", proto::to_json(mine)), s.battle.turn);
+        if (s.role == Role::Host) {
+            broadcast(mine);
+        } else {
+            auto& b = s.battle;
+            wait_for([&] { return b.host_rewards.has_value(); }, 5.0);
+            bump("rewards_checked");
+            bool same = b.host_rewards && b.host_rewards->xp == mine.xp && b.host_rewards->gold == mine.gold && b.host_rewards->loot.size() == mine.loot.size();
+            for (size_t i = 0; same && i < mine.loot.size(); ++i)
+                same = mine.loot[i].item == b.host_rewards->loot[i].item && mine.loot[i].quantity == b.host_rewards->loot[i].quantity;
+            if (!same) {
+                bump("rewards_mismatches");
+                log().write("coop_rewards_mismatch", JsonObj().raw("local", proto::to_json(mine)).raw("host", b.host_rewards ? proto::to_json(*b.host_rewards) : "null"));
+                if (b.host_rewards) {
+                    if (auto* p = ue::struct_member(sp->GetStruct(), STR("ExperienceGained"))) *static_cast<int32_t*>(p->ContainerPtrToValuePtr<void>(addr)) = b.host_rewards->xp;
+                    if (auto* p = ue::struct_member(sp->GetStruct(), STR("GoldAcquired"))) *static_cast<int32_t*>(p->ContainerPtrToValuePtr<void>(addr)) = b.host_rewards->gold;
+                }
+            }
+        }
+        finalize_battle("rewards");
+    });
+
     bus.pre(fn(game::path::BattleMgr, L"StartBattleEndFlow"), [](HookCtx& ctx, UFunction* f) {
-        if (!s.battle.active) return;
+        if (!s.battle.active || s.battle.ending) return;
         const int result = static_cast<int>(ue::read_param_int(ctx, f, STR("BattleEndResult")).value_or(-1));
-        if (s.role == Role::Host) broadcast(proto::BattleEnd{s.battle.id, static_cast<uint8_t>(std::max(result, 0))});
-        log().write("coop_battle_end", JsonObj().add("battle", s.battle.id).add("result", result).add("desyncs", s.desyncs).add("off_thread_draws", s.off_thread_draws));
-        s.battle.active = false;
+        s.battle.ending = true;
+        s.battle.local_end = result;
+        if (s.role == Role::Host) broadcast(proto::BattleEnd{s.battle.id, static_cast<uint8_t>(std::clamp(result, 0, 3))});
+        log().write("coop_battle_end", JsonObj().add("battle", s.battle.id).add("result", result).add("desyncs", counter("desyncs")));
+        // Sans victoire, pas de récompenses : la fin est traitée tout de suite.
+        if (result != game::EndVictory) s.battle.end_flow_at = s.now;
     });
 }
 
@@ -804,7 +1482,6 @@ void subscribe()
 
 Role role() { return s.role; }
 bool active() { return s.role != Role::Solo; }
-int desync_count() { return s.desyncs; }
 int connected_players()
 {
     if (s.role == Role::Client) return s.accepted && !s.rejected ? 1 : 0;
@@ -812,18 +1489,25 @@ int connected_players()
     for (auto& p : s.peers) if (p.accepted) ++n;
     return n;
 }
-int invalid_count() { return s.invalid; }
-int hp_override_count() { return s.hp_overrides; }
-int hashes_compared() { return s.hashes_compared; }
-int gameplay_draw_count() { return s.gameplay_draws; }
-int draw_mismatch_count() { return s.draw_mismatches + s.draw_errors; }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
+bool battle_finalized() { return s.battle.finalized; }
+void set_local_aim(const double* point)
+{
+    if (point) s.local_aim = std::array<double, 3>{point[0], point[1], point[2]};
+    else s.local_aim.reset();
+}
+const std::map<std::string, int>& counters() { return s.counters; }
+int counter(const std::string& name)
+{
+    auto it = s.counters.find(name);
+    return it == s.counters.end() ? 0 : it->second;
+}
 
 bool controls_spot(int spot)
 {
     if (s.role == Role::Solo) return true;
     if (!s.battle.active) return s.role == Role::Host;
-    return owner_of_spot(spot) == s.my_player_id;
+    return controls(spot);
 }
 
 void init()
@@ -833,22 +1517,30 @@ void init()
     else if (r == L"client") s.role = Role::Client;
     else return;
 
+    for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_errors", "invalid_messages",
+                          "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
+                          "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions"})
+        s.counters[c] = 0;
+
     s.game_build = read_build_id();
     s.gameplay_mods = read_gameplay_mods();
     s.session_id = GetTickCount();
     if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
+    if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
+    if (arg(L"e33lockinput") == L"0") s.lock_input = false;
+    if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     {
         std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
         std::string part;
         while (std::getline(ds, part, ',')) if (!part.empty()) s.draw_filter.push_back(part);
     }
-    for (const std::wstring& tok : {arg(L"e33owners")}) {
-        std::wstringstream ss(tok);
-        std::wstring part;
-        while (std::getline(ss, part, L',')) {
-            const auto c = part.find(L':');
-            if (c != std::wstring::npos) s.owner_overrides[std::stoi(part.substr(0, c))] = static_cast<uint8_t>(std::stoi(part.substr(c + 1)));
+    {
+        std::stringstream os(ue::to_utf8(arg(L"e33owners")));
+        std::string part;
+        while (std::getline(os, part, ',')) {
+            const auto c = part.find(':');
+            if (c != std::string::npos) s.owner_overrides[part.substr(0, c)] = static_cast<uint8_t>(std::atoi(part.substr(c + 1).c_str()));
         }
     }
     std::string err;
@@ -869,7 +1561,7 @@ void init()
         Peer host;
         host.link = std::make_unique<net::Link>(*s.transport, s.connect_to);
         host.accepted = true;
-        host.link->on_invalid = [](const std::string& why) { ++s.invalid; log().write("net_invalid", JsonObj().add("why", why)); };
+        host.link->on_invalid = [](const std::string& why) { bump("invalid_messages"); log().write("net_invalid", JsonObj().add("why", why)); };
         host.link->on_sent = [](const proto::Message& m, bool) { s.recorder.write("c2h", m); log().write("net_send", JsonObj().raw("msg", proto::to_json(m))); };
         host.link->on_delivered = [](const proto::Message& m) { s.recorder.write("h2c", m); log().write("net_recv", JsonObj().raw("msg", proto::to_json(m))); };
         s.peers.push_back(std::move(host));
@@ -890,12 +1582,15 @@ void start_pending_battle()
     if (!s.pending_start || s.now < s.next_trigger_try) return;
     constexpr double kStep = 0.5;   // FindFirstOf parcourt tous les objets : pas à chaque image
     s.next_trigger_try = s.now + kStep;
+    // Pas d'appel au jeu (ProcessEvent sur l'instance de jeu) avant qu'un pion d'exploration existe : au démarrage
+    // (écran d'avertissement), ces appels ont figé le jeu entier (4 runs clients sur ~20, 2026-10-19).
+    if (!game::world_pawn()) { s.world_ready_s = 0; return; }
     const bool ready = game::controller() && !game::map_change_in_progress() && !game::main_menu();
     s.world_ready_s = ready ? s.world_ready_s + kStep : 0;
     if (s.world_ready_s < 5.0) return;
     const proto::BattleStart bs = *s.pending_start;
     std::string err;
-    if (!game::in_battle() && !game::trigger_battle(ue::from_utf8(bs.encounter), err)) {
+    if (!game::in_battle() && !game::trigger_battle(ue::from_utf8(bs.encounter), party_wide(bs.party), err)) {
         log().write("coop_error", JsonObj().add("what", "trigger_battle: " + err));
         s.next_trigger_try = s.now + 2.0;
         return;
@@ -905,29 +1600,156 @@ void start_pending_battle()
     log().write("coop_battle_start", JsonObj().add("battle", bs.battle_id).add("encounter", bs.encounter));
 }
 
+// Visée libre d'un héros d'un autre joueur : rejouée au même rythme que chez lui (décalée de replay_lag_s).
+// Renvoie true tant qu'elle est en cours (l'action du tour attend).
+bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
+{
+    auto& b = s.battle;
+    auto ev = b.fa_events.find(key);
+    if (ev == b.fa_events.end() || ev->second.empty()) return false;
+    auto& r = s.fa_rep;
+    if (r.key != key) r = FreeAimReplay{key};
+    if (r.done) return false;
+    if (!r.started) {
+        if (s.now - b.turn_started_at < s.action_delay_s || s.now - b.fa_arrival[key] < s.replay_lag_s) return true;
+        ue::Call c(game::battle_manager(), STR("StartFreeAimFromUI"));
+        if (c) c.invoke();
+        // Le joueur d'ici ne doit ni orienter la caméra ni tirer pour ce héros (vu par Killian le 2026-10-19).
+        // DisableFreeAimControls coupe la souris/le stick et le bouton de tir ; nos tirs (OnFreeAimShootAction) et
+        // l'annulation (CancelFreeAimFromUI) passent toujours (vérifié en jeu le 2026-10-19).
+        ue::Call off(game::battle_manager(), STR("DisableFreeAimControls"));
+        if (off) { off.invoke(); bump("free_aim_controls_locked"); }
+        r.started = true;
+        r.t0 = SteadyClock::now();
+        bump("free_aims_replayed");
+        log().write("coop_free_aim_start", JsonObj().add("spot", key.second), b.turn);
+        return true;
+    }
+    const auto elapsed = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - r.t0).count());
+    const auto& events = ev->second;
+    // Point visé (affichage) : le plus récent déjà atteint.
+    const proto::FreeAimEvent* aim = nullptr;
+    for (auto& e : events) if (e.kind == proto::FreeAimKind::Aim && e.t_ms <= elapsed && (!aim || e.t_ms >= aim->t_ms)) aim = &e;
+    if (aim && aim->target.spot == proto::kAutoSpot) { r.point = {aim->x, aim->y, aim->z}; r.have_override = true; }
+    // Événements fiables, dans l'ordre.
+    while (r.next < events.size() && events[r.next].t_ms <= elapsed) {
+        const auto& e = events[r.next++];
+        if (e.kind == proto::FreeAimKind::Fire) {
+            ue::Call c(ue::get_object(hero, STR("BP_FreeAimShooterBattleComponent")), STR("OnFreeAimShootAction"));
+            if (c) c.invoke();
+        } else if (e.kind == proto::FreeAimKind::Cancel || e.kind == proto::FreeAimKind::End) {
+            // Fin chez le propriétaire : si la visée est encore ouverte ici, on l'annule pareil.
+            if (ue::get_bool(ue::get_object(hero, STR("BP_FreeAimShooterBattleComponent")), STR("IsAiming"))) {
+                ue::Call c(game::battle_manager(), STR("CancelFreeAimFromUI"));
+                if (c) c.invoke();
+            }
+            r.done = true;
+            r.have_override = false;
+            log().write("coop_free_aim_end", JsonObj().add("spot", key.second).add("kind", static_cast<int>(e.kind)).add("raycasts", static_cast<int>(r.raycasts)), b.turn);
+            return true;
+        }
+    }
+    return true;
+}
+
+// Tour d'un héros contrôlé par un autre joueur : exécuter sa commande (reçue de lui ou relayée par l'hôte).
+void run_remote_action()
+{
+    auto& b = s.battle;
+    if (!b.active || b.ending) return;
+    UObject* cur = game::current_character();
+    if (!cur || !game::is_player(cur)) return;
+    const int spot = game::spot(cur);
+    if (controls(spot)) return;
+    const std::pair<uint32_t, int> key{b.turn, spot};
+    if (b.executed.count(key)) return;
+    if (replay_free_aim(key, cur)) return;   // visée libre du propriétaire d'abord (elle ne termine pas le tour)
+    auto it = b.commands.find(key);
+    if (it == b.commands.end()) {
+        if (!b.action_wait_logged && s.now - b.turn_started_at > 30.0) {
+            b.action_wait_logged = true;
+            bump("action_waits_long");
+            log().write("coop_action_wait", JsonObj().add("spot", spot).add("waited_s", s.now - b.turn_started_at), b.turn);
+        }
+        return;
+    }
+    if (s.now - b.turn_started_at < s.action_delay_s) return;
+    if (s.now - b.command_time[key] < s.replay_lag_s) return;
+    const proto::ActionCommand cmd = it->second;
+    b.executed.insert(key);
+    std::vector<UObject*> targets;
+    bool auto_target = cmd.targets.empty();
+    for (auto& t : cmd.targets) {
+        if (t.spot == proto::kAutoSpot) { auto_target = true; continue; }
+        if (UObject* o = game::find_unit(t.kind == proto::ActorKind::Hero, t.spot)) targets.push_back(o);
+    }
+    const std::wstring secondary = ue::from_utf8(cmd.secondary);
+    // Une commande que le jeu du propriétaire n'aurait pas permise (objet épuisé, PA insuffisants) signale un écart.
+    {
+        int targeting = -1, cost = 0;
+        const bool no_item = cmd.action_type == game::ActItem && game::battle_item_count(secondary) <= 0;
+        const bool no_ap = cmd.action_type == game::ActSkill && game::skill_info(cur, secondary, targeting, cost) &&
+                           ue::get_double(game::stats(cur), STR("CurrentAP")) < cost;
+        if (no_item || no_ap) {
+            bump("remote_action_invalid");
+            log().write("coop_remote_action_invalid", JsonObj().add("spot", spot).add("secondary", cmd.secondary).add("no_item", no_item).add("no_ap", no_ap), b.turn);
+        }
+    }
+    if (auto_target) targets = game::auto_targets(cur, cmd.action_type, secondary);
+    std::string err;
+    // Pas de réussite automatique des QTE : chaque fenêtre reçoit le résultat du propriétaire.
+    if (!game::perform_action(cmd.action_type, secondary, targets, 0, err)) {
+        bump("remote_action_errors");
+        log().write("coop_error", JsonObj().add("what", "perform_action: " + err), b.turn);
+        return;
+    }
+    bump("remote_actions");
+    std::string ts = "[";
+    for (UObject* t : targets) { if (ts.size() > 1) ts += ","; ts += "\"" + game::char_class(t) + "#" + std::to_string(game::spot(t)) + "\""; }
+    log().write("coop_remote_action", JsonObj().add("spot", spot).add("action", static_cast<int>(cmd.action_type)).add("secondary", cmd.secondary)
+                                         .raw("targets", ts + "]").add("auto_target", auto_target), b.turn);
+}
+
 void tick(double dt)
 {
     if (s.role == Role::Solo) return;
     s.game_thread = GetCurrentThreadId();
     s.now += dt;
+    // À-coups d'image en combat (> 50 ms) : un appui de QTE peut sembler « raté d'emblée » si le jeu saccade.
+    if (s.battle.active && dt > 0.05) {
+        bump("frame_hitches");
+        log().write("frame_hitch", JsonObj().add("dt_ms", static_cast<int64_t>(dt * 1000.0)).add("in_combo_window", !s.battle.windows.empty()), s.battle.turn);
+    }
     pump_network();
+    if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
-    // Hôte : exécuter la commande reçue d'un client pour son héros.
-    // Une action distante n'est exécutée qu'une fois le tour prêt (même délai que le runner solo). L'exécuter
-    // dès le début du tour laissait caméra et placement incohérents : attaque ennemie suivante jouée sous la carte.
-    if (s.role == Role::Host && s.battle.active && s.battle.pending_command && s.now - s.turn_started_at >= s.action_delay_s) {
-        UObject* cur = game::current_character();
-        if (cur && game::is_player(cur) && hero_spot(cur) == s.battle.pending_command->actor_spot) {
-            auto cmd = *s.battle.pending_command;
-            s.battle.pending_command.reset();
-            std::vector<UObject*> targets;
-            auto es = game::enemies();
-            for (auto t : cmd.targets) if (t < es.size()) targets.push_back(es[t]);
-            if (targets.empty() && !es.empty()) targets.push_back(es.front());
-            std::string err;
-            if (!game::perform_action(cmd.action_type, targets, cmd.combo_hits, err)) log().write("coop_error", JsonObj().add("what", "perform_action: " + err));
-            else log().write("coop_remote_action", JsonObj().add("spot", static_cast<int>(cmd.actor_spot)).add("action", static_cast<int>(cmd.action_type)).add("combo_hits", static_cast<int>(cmd.combo_hits)), s.battle.turn);
-        }
+    run_remote_action();
+    // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
+    if (s.fa_own.active && s.fa_own.have_point && s.now >= s.fa_own.next_aim_s) {
+        s.fa_own.next_aim_s = s.now + 0.05;
+        proto::FreeAimEvent e;
+        e.battle_id = s.battle.id;
+        e.turn = s.battle.turn;
+        e.spot = static_cast<uint8_t>(s.fa_own.spot);
+        e.kind = proto::FreeAimKind::Aim;
+        e.t_ms = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count());
+        e.x = s.fa_own.point[0]; e.y = s.fa_own.point[1]; e.z = s.fa_own.point[2];
+        publish(e, nullptr, false);
+    }
+    // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
+    if (auto& b = s.battle; b.end_flow_at >= 0 && !b.finalized && (s.role == Role::Host || b.host_end >= 0 || s.now - b.end_flow_at > 8.0))
+        finalize_battle("end_flow");
+    // Appuis de QTE rejoués pour les héros des autres joueurs (instant de leur propriétaire).
+    auto& presses = s.battle.presses;
+    for (size_t i = 0; i < presses.size();) {
+        if (SteadyClock::now() < presses[i].at) { ++i; continue; }
+        const Press p = presses[i];
+        presses.erase(presses.begin() + static_cast<std::ptrdiff_t>(i));
+        auto it = s.battle.windows.find(p.timeline);
+        if (it == s.battle.windows.end() || it->second.pressed) continue;
+        ue::Call c(it->second.hero, STR("Try Activate Skill Combo"));
+        if (c) c.invoke();
+        bump("combo_presses_replayed");
     }
 }
 

@@ -1,0 +1,19 @@
+{
+  "name": "p3_party_client",
+  "description": "Phase 3 : vrai jeu client (Maelle) face au faux hôte qui rejoue p3_party_host : rejoue les actions de Verso et Lune, les défenses de leurs héros, le ciblage des ennemis, la mort et la réanimation ; doit rester identique sans correction.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "setup": { "Maelle": { "dead": true }, "Verso": { "dead": true } },
+  "timeout_s": 700,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
+  ],
+  "defense": ["fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_party_host.jsonl", "--timeout", "700"] },
+  "expect": { "battle_end": "any", "remote_actions": ">=1", "targets_synced": ">=1", "hero_deaths": ">=2", "hero_revives": ">=2" }
+}

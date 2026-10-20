@@ -1,0 +1,19 @@
+{
+  "name": "p3_defeat_client",
+  "description": "Phase 3 : défaite, côté client (Maelle) face au faux hôte qui rejoue p3_defeat_host. Même fin de combat (défaite) des deux côtés.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Lune"],
+  "setup": { "Lune": { "hp": 1, "shield": 0 } },
+  "timeout_s": 500,
+  "max_turns": 30,
+  "shots_every_s": 6,
+  "actions": [
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
+  ],
+  "defense": ["fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_defeat_host.jsonl", "--timeout", "500"] },
+  "expect": { "battle_end": "2", "hero_deaths": ">=1" }
+}
