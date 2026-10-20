@@ -2536,6 +2536,17 @@ void tick(double dt)
     }
     pump_network();
     if (s.ended) return;
+    // Client : les ennemis de la carte ne détectent, ne poursuivent ni n'engagent plus personne ici. Le combat ne part
+    // que de l'hôte (BattleStart), avec son équipe et son engagement. Vu le 2026-10-21 : l'ennemi du client fonçait sur
+    // le pion suiveur et lançait le combat 3,5 s avant l'attaque surprise de l'hôte (« pris par surprise » chez le client).
+    if (static double next_passive = 0; s.role == Role::Client && s.now >= next_passive) {
+        next_passive = s.now + 2.0;
+        if (game::world_pawn() && game::controller() && !game::in_battle() && !game::map_change_in_progress() && !game::main_menu()) {
+            const int n = game::passive_world_enemies();
+            static int last_n = -1;
+            if (n != last_n) { last_n = n; log().write("coop_world_enemies_passive", JsonObj().add("count", n)); }
+        }
+    }
     // Rappel des touches du mod tant que le menu pause est ouvert.
     {
         static bool keys_shown = false;

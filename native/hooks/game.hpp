@@ -142,6 +142,8 @@ bool playing_cinematic();
 bool battle_params(std::string& encounter, std::string& enemy_global_id, int& engage);
 // Ennemi du monde par nom d'acteur ; plus proche du pion si name est vide.
 UObject* find_world_enemy(const std::string& name);
+// Client : ennemis de la carte sans détection, poursuite ni combat au contact (le combat vient de l'hôte). Renvoie le nombre traité.
+int passive_world_enemies();
 // Lance le combat de cet ennemi du monde avec la rencontre imposée (SelectedEncounter) ; encounter vide = la sienne.
 bool start_world_battle(UObject* enemy, const std::wstring& encounter, int engage, std::string& err);
 // Pause du jeu entier (UGameplayStatics::SetGamePaused) et menu pause visible.
