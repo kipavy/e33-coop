@@ -74,6 +74,15 @@ public:
         if (n > max) ok_ = false;
         return ok_ ? n : 0;
     }
+    // Octets bruts préfixés par leur longueur (u16), bornés.
+    std::vector<uint8_t> blob(size_t max_len)
+    {
+        const uint16_t n = u16();
+        if (!ok_ || n > max_len || n > remaining()) { ok_ = false; return {}; }
+        std::vector<uint8_t> v(p_ + i_, p_ + i_ + n);
+        i_ += n;
+        return v;
+    }
     void fail() { ok_ = false; }
 
 private:

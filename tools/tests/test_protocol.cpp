@@ -29,11 +29,20 @@ static std::vector<proto::Message> samples()
     us.mech = {{"BP_PerfectionMechanicComponent_C.Perfection", 42}, {"BP_StainHolderComponent_C.Stains[0]", 3}};
     ss.units = {us, proto::UnitState{{proto::ActorKind::Enemy, 0}, "BP_Enemy", 5.5, 0, 0, 0, true, {}}};
     proto::BattleRewards rw; rw.battle_id = 7; rw.xp = 521235; rw.gold = 10448; rw.loot = {{"Lumicolor", 5}, {"ChromaCatalyst", 2}};
+    h.join = true;
+    proto::BattleStart wb = bs; wb.world_enemy = "BP_EnemyWorld_SpringMeadowElementalGrunt_C_UAID_18C04D921BE3793601_2147027147";
+    wb.enemy_global_id = "ObjectID_Enemy_Level_SpringMeadows_Main_V2_X"; wb.engage = 2;
+    proto::SaveChunk ch; ch.xfer = 3; ch.offset = 16000; ch.data = {0x47, 0x56, 0x41, 0x53, 0, 255};
     return {h, proto::Welcome{1, 99}, proto::Reject{proto::RejectReason::GameBuildMismatch, "host 1 vs client 2"}, proto::Bye{"bye"},
             proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, dq, dr,
             proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}},
             proto::ComboResult{7, 3, 1, 2, true, true, 880}, proto::ComboResult{7, 3, 1, 3, false, false, proto::kNoPress}, ss, rw,
-            proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}}};
+            proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}}},
+            wb, proto::SaveOffer{3, 438435, 0x1122334455667788ull, "Level_SpringMeadows_Main_V2"}, ch, proto::JoinWait{"battle"},
+            proto::JoinReady{3, "Level_SpringMeadows_Main_V2"}, proto::PilotState{0, 12, "Level_Camp_Main", -2191.5, -1232, 192, 120, 300, -10, 0},
+            proto::PilotRequest{1}, proto::PilotChange{1}, proto::WorldInteract{4, "/Game/Levels/X.X:PersistentLevel.NPC_1", false},
+            proto::DialogueChoice{5, 1}, proto::MapChange{6, "Level_Camp_Main", "Level.SpawnPoint.Generic.Dynamic"},
+            proto::NarrativeState{1, proto::NarrativeKind::Cinematic, true, 7}, proto::BarrierRelease{7}, proto::PauseState{2, true, false}};
 }
 
 static void test_roundtrip()
@@ -67,7 +76,7 @@ static void test_invalid()
     for (int i = 0; i < 20000; ++i) {
         std::vector<uint8_t> b(rng() % 64);
         for (auto& x : b) x = static_cast<uint8_t>(rng());
-        if (b.size() >= 2 && (rng() & 1)) { b[0] = static_cast<uint8_t>(1 + rng() % 30); b[1] = 0; }
+        if (b.size() >= 2 && (rng() & 1)) { b[0] = static_cast<uint8_t>(1 + rng() % 55); b[1] = 0; }
         wire::Reader r(b.data(), b.size()); std::string err;
         (void)proto::decode(r, err);
     }

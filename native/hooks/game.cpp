@@ -4,6 +4,10 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 
 #include <Unreal/UObjectGlobals.hpp>
@@ -590,5 +594,227 @@ bool location(UObject* actor, double out[3])
     out[0] = (*l)[0]; out[1] = (*l)[1]; out[2] = (*l)[2];
     return true;
 }
+
+// --- Exploration et session (phase 4) ---------------------------------------------------------
+
+std::wstring saves_dir()
+{
+    const wchar_t* lad = _wgetenv(L"LOCALAPPDATA");
+    return std::wstring(lad ? lad : L"") + L"\\Sandfall\\Saved\\SaveGames";
+}
+
+bool make_snapshot(const std::wstring& slot, std::vector<uint8_t>& bytes, std::string& err)
+{
+    UObject* sm = save_manager();
+    if (!sm) { err = "no save manager"; return false; }
+    ue::Call create(sm, STR("CreateSaveGameDataFromGameState"));
+    if (!create || !create.invoke()) { err = "CreateSaveGameDataFromGameState failed"; return false; }
+    UObject* data = create.out_object(STR("SaveGameData"));
+    if (!data) { err = "no save game data"; return false; }
+    auto* cls = static_cast<UClass*>(load_asset(STR("/Game/Gameplay/Save/SaveObjects/BP_SaveGameObject_V8.BP_SaveGameObject_V8_C")));
+    if (!cls) { err = "BP_SaveGameObject_V8_C not loaded"; return false; }
+    static std::atomic<int> seq{0};
+    const std::wstring name = L"E33Coop_Snapshot_" + std::to_wstring(++seq);
+    FStaticConstructObjectParameters params{cls, gi()};
+    params.Name = FName(name.c_str(), FNAME_Add);
+    UObject* obj = UObjectGlobals::StaticConstructObject(params);
+    if (!obj) { err = "StaticConstructObject failed"; return false; }
+    ue::Call conv(obj, STR("ConvertFromSaveGameData"));
+    if (!conv) { err = "ConvertFromSaveGameData not found"; return false; }
+    conv.set_object(STR("SaveGameData"), data).invoke();
+    UObject* gps = ue::find_object(STR("/Script/Engine.Default__GameplayStatics"));
+    ue::Call save(gps, STR("SaveGameToSlot"));
+    if (!save) { err = "SaveGameToSlot not found"; return false; }
+    save.set_object(STR("SaveGameObject"), obj).set_string(STR("SlotName"), slot.c_str()).set_int(STR("UserIndex"), 0).invoke();
+    if (!save.out_bool(STR("ReturnValue"))) { err = "SaveGameToSlot returned false"; return false; }
+    std::wstring rel = slot;
+    std::replace(rel.begin(), rel.end(), L'/', L'\\');
+    const std::filesystem::path file = std::filesystem::path(saves_dir()) / (rel + L".sav");
+    std::ifstream f(file, std::ios::binary);
+    if (!f) { err = "cannot read " + ue::to_utf8(file.wstring()); return false; }
+    bytes.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    if (bytes.size() < 4) { err = "snapshot too small"; return false; }
+    return true;
+}
+
+UObject* explore_pawn()
+{
+    UObject* ctrl = controller();
+    if (!ctrl) return nullptr;
+    ue::Call c(ctrl, STR("K2_GetPawn"));
+    if (!c || !c.invoke()) return nullptr;
+    UObject* p = c.out_object(STR("ReturnValue"));
+    return p && ue::is_a(p, STR("BP_jRPG_Character_World_C")) ? p : nullptr;
+}
+
+std::string current_level()
+{
+    UObject* p = explore_pawn();
+    if (!p) return {};
+    // "/Game/Levels/WorldMap/Camps/Level_Camp_Main.Level_Camp_Main:PersistentLevel.BP_..." -> "Level_Camp_Main"
+    const std::string full = ue::full_name(p);
+    const auto colon = full.find(":PersistentLevel");
+    if (colon == std::string::npos) return {};
+    const auto dot = full.rfind('.', colon);
+    return dot == std::string::npos ? std::string() : full.substr(dot + 1, colon - dot - 1);
+}
+
+bool pawn_state(UObject* pawn, PawnState& out)
+{
+    auto l = actor_location(pawn);
+    if (!l) return false;
+    out.pos[0] = (*l)[0]; out.pos[1] = (*l)[1]; out.pos[2] = (*l)[2];
+    ue::Call r(pawn, STR("K2_GetActorRotation"));
+    if (r && r.invoke())
+        if (const auto* rot = static_cast<const double*>(r.param_ptr(STR("ReturnValue")))) out.yaw = rot[1];   // FRotator : Pitch, Yaw, Roll
+    ue::Call v(pawn, STR("GetVelocity"));
+    if (v && v.invoke())
+        if (const auto* vel = static_cast<const double*>(v.param_ptr(STR("ReturnValue")))) { out.vel[0] = vel[0]; out.vel[1] = vel[1]; out.vel[2] = vel[2]; }
+    return true;
+}
+
+bool move_pawn(UObject* pawn, double dir_x, double dir_y, double scale)
+{
+    ue::Call c(pawn, STR("AddMovementInput"));
+    if (!c) return false;
+    if (auto* d = static_cast<double*>(c.param_ptr(STR("WorldDirection")))) { d[0] = dir_x; d[1] = dir_y; d[2] = 0; }
+    if (auto* s = static_cast<float*>(c.param_ptr(STR("ScaleValue")))) *s = static_cast<float>(scale);
+    c.set_bool(STR("bForce"), true);
+    return c.invoke();
+}
+
+bool teleport_pawn(UObject* pawn, const double pos[3], double yaw)
+{
+    ue::Call c(pawn, STR("K2_SetActorLocationAndRotation"));
+    if (!c) return false;
+    if (auto* d = static_cast<double*>(c.param_ptr(STR("NewLocation")))) { d[0] = pos[0]; d[1] = pos[1]; d[2] = pos[2]; }
+    if (auto* r = static_cast<double*>(c.param_ptr(STR("NewRotation")))) { r[0] = 0; r[1] = yaw; r[2] = 0; }
+    c.set_bool(STR("bSweep"), false).set_bool(STR("bTeleport"), true);
+    return c.invoke();
+}
+
+bool map_destination(std::string& level, std::string& spawn_tag)
+{
+    UObject* g = gi();
+    if (!g) return false;
+    level = ue::get_name_string(g, STR("LevelDestinationAssetName"));
+    auto* tag = ue::value_ptr<FName>(g, STR("SpawnPointTag"));   // FGameplayTag : TagName en tête
+    spawn_tag = tag ? ue::to_utf8(tag->ToString()) : std::string();
+    return !level.empty() && level != "None";
+}
+
+bool change_map(const std::wstring& level, const std::wstring& spawn_tag)
+{
+    UObject* lib = ue::find_object(STR("/Game/jRPGTemplate/Blueprints/Basics/FL_jRPG_CustomFunctionLibrary.Default__FL_jRPG_CustomFunctionLibrary_C"));
+    UObject* ctx = explore_pawn();
+    if (!ctx) ctx = controller();
+    ue::Call c(lib, STR("ChangeMapByAssetName"));
+    if (!c || !ctx) return false;
+    c.set_fname(STR("LevelAssetName"), level.c_str())
+        .set_fname(STR("SpawnPointTag"), spawn_tag.empty() ? STR("None") : spawn_tag.c_str())
+        .set_object(STR("__WorldContext"), ctx);
+    return c.invoke();
+}
+
+bool interact(UObject* target, bool instant)
+{
+    UObject* pawn = explore_pawn();
+    ue::Call c(target, STR("OnInteractionRequested"));
+    if (!c || !pawn) return false;
+    c.set_object(STR("InteractingWorldCharacter"), pawn).set_bool(STR("Instant"), instant);
+    return c.invoke();
+}
+
+UObject* dialogue_system() { return ue::get_object(controller(), STR("BP_DialogueSystemComponent")); }
+
+bool in_dialogue()
+{
+    ue::Call c(dialogue_system(), STR("IsInDialogue"));
+    if (!c || !c.invoke()) return false;
+    return c.out_bool(STR("ReturnValue"));
+}
+
+int dialogue_choices()
+{
+    auto* a = ue::value_ptr<FScriptArray>(dialogue_system(), STR("CurrentChoices"));
+    return a ? a->Num() : 0;
+}
+
+bool choose_dialogue(int index)
+{
+    ue::Call c(dialogue_system(), STR("OnChoiceMade"));
+    if (!c) return false;
+    c.set_int(STR("ChoiceIndex"), index);
+    return c.invoke();
+}
+
+bool playing_cinematic() { return ue::get_bool(ue::get_object(controller(), STR("BP_CinematicSystem")), STR("IsPlayingCinematic")); }
+
+bool battle_params(std::string& encounter, std::string& enemy_global_id, int& engage)
+{
+    UObject* bm = battle_manager();
+    auto* sp = CastField<FStructProperty>(ue::prop(bm, STR("CurrentBattleStartParams")));
+    if (!sp) return false;
+    UStruct* st = sp->GetStruct();
+    void* base = sp->ContainerPtrToValuePtr<void>(bm);
+    if (auto* row = CastField<FStructProperty>(ue::struct_member(st, STR("EncounterRow")))) {
+        void* rb = row->ContainerPtrToValuePtr<void>(base);
+        if (FProperty* rn = ue::struct_member(row->GetStruct(), STR("RowName")))
+            encounter = ue::to_utf8(static_cast<FName*>(rn->ContainerPtrToValuePtr<void>(rb))->ToString());
+    }
+    if (FProperty* id = ue::struct_member(st, STR("EnemyGlobalID")))
+        enemy_global_id = ue::to_utf8(static_cast<FName*>(id->ContainerPtrToValuePtr<void>(base))->ToString());
+    if (FProperty* e = ue::struct_member(st, STR("EngagementType"))) engage = *static_cast<uint8_t*>(e->ContainerPtrToValuePtr<void>(base));
+    return !encounter.empty() && encounter != "None";
+}
+
+UObject* find_world_enemy(const std::string& name)
+{
+    std::vector<UObject*> all;
+    UObjectGlobals::FindAllOf(STR("BP_jRPG_Enemy_World_Base_Seamless_C"), all);
+    if (!name.empty()) {
+        for (UObject* e : all) if (ue::short_name(e) == name) return e;
+        return nullptr;
+    }
+    UObject* pawn = explore_pawn();
+    auto p = pawn ? actor_location(pawn) : std::nullopt;
+    if (!p) return nullptr;
+    UObject* best = nullptr;
+    double bd = 1e300;
+    for (UObject* e : all) {
+        auto l = actor_location(e);
+        if (!l) continue;
+        const double dx = (*l)[0] - (*p)[0], dy = (*l)[1] - (*p)[1];
+        if (dx * dx + dy * dy < bd) { bd = dx * dx + dy * dy; best = e; }
+    }
+    return best;
+}
+
+bool start_world_battle(UObject* enemy, const std::wstring& encounter, int engage, std::string& err)
+{
+    if (!enemy) { err = "no world enemy"; return false; }
+    if (!encounter.empty()) {
+        auto* sp = CastField<FStructProperty>(ue::prop(enemy, STR("SelectedEncounter")));
+        if (!sp) { err = "SelectedEncounter not found"; return false; }
+        FProperty* rn = ue::struct_member(sp->GetStruct(), STR("RowName"));
+        if (!rn) { err = "RowName not found"; return false; }
+        *static_cast<FName*>(rn->ContainerPtrToValuePtr<void>(sp->ContainerPtrToValuePtr<void>(enemy))) = FName(encounter.c_str(), FNAME_Add);
+    }
+    ue::Call c(enemy, STR("StartBattle"));
+    if (!c) { err = "StartBattle not found"; return false; }
+    c.set_int(STR("EngagementType"), engage);
+    return c.invoke();
+}
+
+bool set_game_paused(bool paused)
+{
+    UObject* gps = ue::find_object(STR("/Script/Engine.Default__GameplayStatics"));
+    ue::Call c(gps, STR("SetGamePaused"));
+    if (!c || !controller()) return false;
+    c.set_object(STR("WorldContextObject"), controller()).set_bool(STR("bPaused"), paused);
+    return c.invoke();
+}
+
+bool pause_menu_visible() { return ue::get_bool(controller(), STR("IsPauseMenuVisible")); }
 
 } // namespace e33::game

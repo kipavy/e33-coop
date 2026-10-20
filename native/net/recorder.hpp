@@ -41,6 +41,9 @@ public:
     void write(const char* dir, const proto::Message& m)
     {
         if (!f_.is_open()) return;
+        // Les octets d'une save ne sont jamais enregistrés (repo public, données du joueur) : le faux hôte
+        // renvoie l'instantané depuis un fichier local, annoncé par la ligne SaveOffer (taille + hash).
+        if (std::holds_alternative<proto::SaveChunk>(m)) return;
         wire::Writer w;
         proto::encode(m, w);
         const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
