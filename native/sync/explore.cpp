@@ -415,8 +415,9 @@ void poll_tick()
         bump(narr ? "narratives_started" : "narratives_finished");
         log().write("coop_narrative", JsonObj().add("active", narr).add("kind", static_cast<int>(s.local_kind)).add("seq", s.narr_seq));
     }
-    // Barrière : fini ici, pas chez les autres -> jeu en pause jusqu'à ce que tout le monde ait fini.
-    const bool hold = !narr && others_in_narrative() && !game::in_battle();
+    // Barrière : fini ici, pas chez les autres -> jeu en pause jusqu'à ce que tout le monde ait fini. Aussi quand la
+    // cinématique enchaîne sur un combat (boss) : personne ne commence le combat avant les autres.
+    const bool hold = !narr && others_in_narrative();
     if (hold && !s.barrier_paused) {
         s.barrier_paused = game::set_game_paused(true);
         s.barrier_since = s.now;
