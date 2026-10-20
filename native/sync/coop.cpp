@@ -25,6 +25,7 @@
 #include "../hooks/ue.hpp"
 #include "../net/link.hpp"
 #include "../net/recorder.hpp"
+#include "../net/steam.hpp"
 #include "../net/transport.hpp"
 #include "../protocol/messages.hpp"
 #include "../ui/ui.hpp"
@@ -216,6 +217,14 @@ struct State {
     uint16_t turn_timer_s = 0;                             // hôte : -e33turntimer=N (0 = aucun, par défaut)
     std::set<std::string> version_rejected;                // adresses d'un autre protocole déjà refusées
     std::map<std::pair<std::string, uint32_t>, double> tombstones;   // hôte : (adresse, époque) d'un pair retiré -> fin d'oubli
+    // Steam (phase 6)
+    bool steam = false;                                    // -e33transport=steam
+    uint64_t lobby_wanted = 0;                             // client : -e33lobby=<id>
+    net::steam::Lobby lobby;
+    bool lobby_announced = false, lobby_error_shown = false, steam_error_shown = false;
+    bool f7_down = false;
+    double next_punch = 0;
+    bool name_from_arg = false;
 };
 
 State s;
@@ -1289,6 +1298,7 @@ void end_session(const std::string& key, const std::string& detail)
     if (s.ended) return;
     s.ended = true;
     s.end_key = key;
+    if (s.steam) net::steam::leave_lobby(s.lobby);
     s.ended_at = s.now;
     bump("session_ended");
     set_local_input(true, "session end");
@@ -1905,6 +1915,131 @@ void subscribe_session()
         s.ended_at = s.now;
     });
 }
+// Client : lien vers l'hôte (UDP : -e33connect ; Steam : propriétaire du lobby) et présentation (Hello).
+void connect_to_host(const std::string& addr)
+{
+    s.connect_to = addr;
+    Peer host;
+    host.link = std::make_unique<net::Link>(*s.transport, s.connect_to);
+    host.created_at = s.now;
+    host.accepted = true;
+    host.player_id = 0;
+    wire_link(*host.link);
+    // Hôte d'une autre version de protocole : il nous répond avec sa version, on l'affiche.
+    host.link->on_protocol_mismatch = [](uint16_t v) {
+        end_session("rejected", ui::text("reject_protocol", {std::to_string(v), std::to_string(proto::kProtocolVersion)}));
+    };
+    s.peers.push_back(std::move(host));
+    proto::Hello h;
+    h.game_build = s.game_build;
+    h.mod_version = kModVersion;
+    h.gameplay_mods = s.gameplay_mods;
+    h.player_name = s.my_name;
+    h.instance_id = GetTickCount64();
+    h.join = s.want_join;
+    send_to(s.peers.front(), h);
+    heartbeat_targets();
+    if (s.want_join) ui::set_status("session", "joining");
+}
+
+// --- Transport Steam (phase 6) ---------------------------------------------------------------------
+// Rien de Steam avant le premier tick (le mod reste inerte les 10 premières secondes). Hôte : lobby « amis seulement »
+// créé d'office, F7 ouvre la fenêtre d'invitation de l'overlay ; les membres du lobby sont « ouverts » (punch) pour
+// que Steam accepte leurs messages. Client : lobby donné par -e33lobby, par Steam (+connect_lobby, invitation acceptée
+// jeu fermé), par une invitation acceptée pendant que le jeu tourne, ou F7 au menu principal (lobby coop d'un ami) ;
+// une fois dedans, connexion au propriétaire du lobby (son SteamID) comme en UDP.
+bool key_pressed(int vk, bool& was_down)
+{
+    const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    const bool pressed = down && !was_down && pid == GetCurrentProcessId();
+    was_down = down;
+    return pressed;
+}
+
+void steam_tick()
+{
+    if (!s.steam) return;
+    if (!s.transport) {
+        std::string err;
+        s.transport = net::steam::make_transport(err);
+        if (!s.transport) {
+            if (!s.steam_error_shown) {
+                s.steam_error_shown = true;
+                bump("steam_errors");
+                ui::toast("steam_unavailable", {err}, 12.0);
+                log().write("coop_steam_error", JsonObj().add("what", err));
+            }
+            return;
+        }
+        if (!s.name_from_arg) {
+            const std::string pn = net::steam::persona_name();
+            if (!pn.empty()) s.my_name = pn;
+        }
+        log().write("coop_steam_ready", JsonObj().add("steam_id", std::to_string(net::steam::my_id())).add("name", s.my_name)
+                                           .add("command_line_lobby", std::to_string(net::steam::command_line_lobby())));
+    }
+    net::steam::poll_lobby(s.lobby);
+    if (s.lobby.state == net::steam::LobbyState::Failed && !s.lobby_error_shown) {
+        s.lobby_error_shown = true;
+        bump("steam_errors");
+        ui::toast("steam_lobby_failed", {s.lobby.error}, 10.0);
+        log().write("coop_steam_lobby_failed", JsonObj().add("what", s.lobby.error));
+    }
+    const bool f7 = key_pressed(VK_F7, s.f7_down);
+    if (s.role == Role::Host) {
+        if (s.lobby.state == net::steam::LobbyState::None) net::steam::create_lobby(s.lobby, kModVersion, proto::kProtocolVersion);
+        if (s.lobby.state == net::steam::LobbyState::Ready && !s.lobby_announced) {
+            s.lobby_announced = true;
+            ui::toast("session_open_steam", {}, 10.0);
+            log().write("coop_steam_lobby", JsonObj().add("lobby", std::to_string(s.lobby.id)));
+        }
+        if (f7) {
+            if (s.lobby.state == net::steam::LobbyState::Ready) { net::steam::invite_dialog(s.lobby); bump("steam_invite_dialogs"); }
+            else if (s.lobby.state == net::steam::LobbyState::Failed) { s.lobby = {}; s.lobby_error_shown = false; }   // nouvel essai
+        }
+        if (s.now >= s.next_punch && s.lobby.state == net::steam::LobbyState::Ready) {
+            s.next_punch = s.now + 1.0;
+            const uint64_t me = net::steam::my_id();
+            for (uint64_t m : net::steam::lobby_members(s.lobby)) if (m && m != me) net::steam::punch(*s.transport, m);
+        }
+        (void)net::steam::take_join_request();   // l'hôte n'en a pas l'usage
+        return;
+    }
+    // Client
+    if (!s.peers.empty()) {
+        if (s.now >= s.next_punch && s.lobby.owner) { s.next_punch = s.now + 1.0; net::steam::punch(*s.transport, s.lobby.owner); }
+        return;
+    }
+    if (s.lobby.state == net::steam::LobbyState::None) {
+        uint64_t id = s.lobby_wanted;
+        if (!id) id = net::steam::command_line_lobby();
+        if (!id) id = net::steam::take_join_request();
+        if (!id && f7) {
+            id = net::steam::find_friend_lobby(kModVersion);
+            if (!id) ui::toast("steam_no_friend_lobby", {}, 8.0);
+        }
+        if (id) {
+            s.lobby_wanted = 0;
+            net::steam::join_lobby(s.lobby, id);
+            ui::set_status("session", "joining");
+            log().write("coop_steam_join", JsonObj().add("lobby", std::to_string(id)));
+        }
+        return;
+    }
+    if (s.lobby.state == net::steam::LobbyState::Failed) {
+        s.lobby = {};   // F7 ou une nouvelle invitation pour réessayer
+        s.lobby_error_shown = false;
+        ui::clear_status("session");
+        return;
+    }
+    if (s.lobby.state == net::steam::LobbyState::Ready && s.lobby.owner) {
+        net::steam::punch(*s.transport, s.lobby.owner);
+        connect_to_host(net::steam::peer_of(s.lobby.owner));
+        log().write("coop_steam_connect", JsonObj().add("host", std::to_string(s.lobby.owner)));
+    }
+}
 } // namespace
 
 void reassign_character(size_t index) { if (s.role == Role::Host) cycle_owner(index); }
@@ -1932,6 +2067,7 @@ void shutdown(const char* reason)
         for (auto& p : s.peers) if (p.link) p.link->update(s.now + 0.3 * (i + 1));
         Sleep(30);
     }
+    if (s.steam) net::steam::leave_lobby(s.lobby);
     log().write("session_shutdown", JsonObj().add("reason", reason ? reason : ""));
 }
 void set_local_aim(const double* point)
@@ -1977,6 +2113,7 @@ void init()
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
     s.my_name = ue::to_utf8(arg(L"e33name"));
+    s.name_from_arg = !s.my_name.empty();
     if (s.my_name.empty()) s.my_name = s.role == Role::Host ? "Hôte" : "Joueur";
     ui::init();
     {
@@ -1995,39 +2132,22 @@ void init()
     std::string err;
     const std::wstring port_s = arg(L"e33port");
     const uint16_t port = static_cast<uint16_t>(port_s.empty() ? (s.role == Role::Host ? 7777 : 0) : std::stoi(port_s));
-    s.transport = net::make_udp(port, err);
-    if (!s.transport) { log().write("coop_error", JsonObj().add("what", err)); s.role = Role::Solo; return; }
+    s.steam = arg(L"e33transport") == L"steam";
+    if (!s.steam) {
+        s.transport = net::make_udp(port, err);
+        if (!s.transport) { log().write("coop_error", JsonObj().add("what", err)); s.role = Role::Solo; return; }
+    }
+    // Steam : transport et lobby créés au premier tick (rien dans les 10 premières secondes, voir dllmain), steam_tick.
+    if (const std::wstring l = arg(L"e33lobby"); !l.empty()) s.lobby_wanted = std::wcstoull(l.c_str(), nullptr, 10);
     s.recorder.open(ue::to_utf8((std::filesystem::path(launch_args().run_dir) / (s.role == Role::Host ? L"recording-host.jsonl" : L"recording-client.jsonl")).wstring()));
     log().set_role(s.role == Role::Host ? "host" : "client");
 
     std::string mods = "[";
     for (auto& m : s.gameplay_mods) { if (mods.size() > 1) mods += ","; mods += "\"" + json_escape(m) + "\""; }
-    log().write("coop_init", JsonObj().add("role", s.role == Role::Host ? "host" : "client").add("local", s.transport->local_address())
+    log().write("coop_init", JsonObj().add("role", s.role == Role::Host ? "host" : "client").add("local", s.transport ? s.transport->local_address() : std::string("steam (pending)"))
                                  .add("game_build", s.game_build).add("mod_version", kModVersion).raw("gameplay_mods", mods + "]"));
 
-    if (s.role == Role::Client) {
-        s.connect_to = ue::to_utf8(arg(L"e33connect"));
-        Peer host;
-        host.link = std::make_unique<net::Link>(*s.transport, s.connect_to);
-        host.accepted = true;
-        host.player_id = 0;
-        wire_link(*host.link);
-        // Hôte d'une autre version de protocole : il nous répond avec sa version, on l'affiche.
-        host.link->on_protocol_mismatch = [](uint16_t v) {
-            end_session("rejected", ui::text("reject_protocol", {std::to_string(v), std::to_string(proto::kProtocolVersion)}));
-        };
-        s.peers.push_back(std::move(host));
-        proto::Hello h;
-        h.game_build = s.game_build;
-        h.mod_version = kModVersion;
-        h.gameplay_mods = s.gameplay_mods;
-        h.player_name = s.my_name;
-        h.instance_id = GetTickCount64();
-        h.join = s.want_join;
-        send_to(s.peers.front(), h);
-        heartbeat_targets();
-        if (s.want_join) ui::set_status("session", "joining");
-    }
+    if (s.role == Role::Client && !s.steam) connect_to_host(ue::to_utf8(arg(L"e33connect")));
     explore::Net net;
     net.publish = [](const proto::Message& m, bool reliable) { publish(m, nullptr, reliable); };
     net.send_to = [](uint8_t player, const proto::Message& m) { for (auto& p : s.peers) if (p.accepted && p.player_id == player) send_to(p, m); };
@@ -2234,6 +2354,7 @@ void tick(double dt)
     s.now += dt;
     hb.last_tick_ms = steady_ms();
     heartbeat_start();
+    steam_tick();
     ui::tick(s.now);
     if (s.ended) {
         // Client : session finie. Message affiché, puis retour au menu principal (la partie chargée est celle de l'hôte).

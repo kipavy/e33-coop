@@ -14,9 +14,10 @@ add_library(e33proto STATIC
     ${NATIVE}/protocol/messages.cpp
     ${NATIVE}/net/link.cpp
     ${NATIVE}/net/udp.cpp
+    ${NATIVE}/net/steam.cpp
 )
 target_include_directories(e33proto PUBLIC ${NATIVE}/common ${NATIVE}/protocol ${NATIVE}/net)
-target_link_libraries(e33proto PUBLIC ws2_32)
+target_link_libraries(e33proto PUBLIC ws2_32 shell32)
 
 add_executable(fakepeer fakepeer/main.cpp)
 target_link_libraries(fakepeer PRIVATE e33proto winmm)

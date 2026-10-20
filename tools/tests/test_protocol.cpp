@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../../native/net/link.hpp"
+#include "../../native/net/steam.hpp"
 #include "../../native/protocol/messages.hpp"
 
 using namespace e33;
@@ -276,8 +277,24 @@ static void test_link_version()
     CHECK(!b.pop(m));
 }
 
+// Transport Steam : adresses, paquet d'ouverture, chargement sans Steam (processus de test : pas de steam_api64.dll).
+static void test_steam()
+{
+    CHECK(net::steam::id_of("steam:76561198355797267") == 76561198355797267ull);
+    CHECK(net::steam::id_of("127.0.0.1:7777") == 0);
+    CHECK(net::steam::peer_of(42) == "steam:42");
+    const uint8_t p[4] = {'E', '3', '3', 'P'};
+    CHECK(net::steam::is_punch(p, 4));
+    CHECK(!net::steam::is_punch(p, 3));
+    std::string err;
+    CHECK(!net::steam::make_transport(err));
+    CHECK(!err.empty());
+    CHECK(!net::steam::loaded());
+}
+
 int main()
 {
+    test_steam();
     test_roundtrip();
     test_invalid();
     test_link();

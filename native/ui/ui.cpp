@@ -45,6 +45,10 @@ constexpr Entry kTexts[] = {
     {"economy_rejected", "Achat ou amélioration impossible chez l'hôte : resynchronisation", "Purchase or upgrade not possible on the host: resynchronizing"},
     {"session_open", "Partie ouverte au coop", "Game open for coop"},
     {"owner_changed", "{0} est maintenant contrôlé par {1}", "{0} is now controlled by {1}"},
+    {"steam_unavailable", "Steam indisponible pour le coop : {0}", "Steam is not available for coop: {0}"},
+    {"steam_lobby_failed", "Lobby Steam impossible : {0}", "Steam lobby failed: {0}"},
+    {"session_open_steam", "Partie ouverte au coop : F7 pour inviter un ami", "Game open for coop: press F7 to invite a friend"},
+    {"steam_no_friend_lobby", "Aucun ami n'a ouvert de partie coop", "No friend has an open coop game"},
     {"you", "vous", "you"},
     {"host", "l'hôte", "the host"},
 };

@@ -15,6 +15,7 @@ add_library(${TARGET} SHARED
     ../protocol/messages.cpp
     ../net/link.cpp
     ../net/udp.cpp
+    ../net/steam.cpp
     ../ui/ui.cpp
     ../ui/overlay.cpp
 )
