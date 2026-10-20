@@ -31,6 +31,7 @@ enum class MsgType : uint16_t {
     SaveOffer = 40, SaveChunk = 41, JoinWait = 42, JoinReady = 43, PilotState = 44, PilotRequest = 45, PilotChange = 46,
     WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52,
     Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
+    BuildOffer = 65, BuildChunk = 66,
 };
 
 const char* type_name(MsgType t);
@@ -230,13 +231,19 @@ struct HashPart { std::string name; uint64_t value = 0; };
 struct WorldHash { uint32_t seq = 0; std::string level; std::vector<HashPart> parts; };
 // Client -> hôte : mon état d'exploration diffère du sien, renvoyer un instantané au prochain point sûr.
 struct ResyncRequest { std::string reason; };
+// Builds des personnages (D13) : états sérialisés par le jeu (save ne contenant que les personnages), envoyés par morceaux
+// comme l'instantané. names : personnages à appliquer (avec l'empreinte de leur build chez l'émetteur). authoritative : envoyé
+// par l'hôte (à appliquer tel quel) ; sinon proposition d'un client, que l'hôte vérifie (propriétaire).
+struct BuildName { std::string name; uint64_t hash = 0; };
+struct BuildOffer { uint32_t xfer = 0; uint8_t origin = 0; bool authoritative = false; uint32_t size = 0; uint64_t hash = 0; std::vector<BuildName> names; std::string reason; };
+struct BuildChunk { uint32_t xfer = 0; uint32_t offset = 0; std::vector<uint8_t> data; };
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
                              DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,
                              BattleRewards, FreeAimEvent,
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
                              WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
-                             Owners, BattleReady, Roster, WorldHash, ResyncRequest>;
+                             Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

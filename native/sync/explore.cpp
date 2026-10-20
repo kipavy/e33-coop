@@ -1,5 +1,7 @@
 #include "explore.hpp"
 
+#include "builds.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <deque>
@@ -244,6 +246,7 @@ void client_join_tick()
         const std::string level = game::current_level();
         s.net.publish(proto::JoinReady{s.joined_xfer, level}, true);
         bump("joins_completed");
+        builds::rebaseline();
         ui::clear_status("session");
         log().write("coop_joined", JsonObj().add("xfer", s.joined_xfer).add("level", level).add("wait_s", s.now - s.cj_since));
     }

@@ -148,6 +148,10 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     const json::Value& dc = script["disconnect"];
     double silent_until = -1, reconnect_at = -1;
     double ready_at = -1;
+    struct BuildIn { proto::BuildOffer offer; std::vector<uint8_t> data; uint32_t got = 0; };
+    std::optional<BuildIn> build_in;
+    std::vector<uint8_t> last_build;
+    size_t build_sends = 0;
     uint32_t ready_battle = 0;
     int stalled = 0;
     bool disconnected = false;
@@ -246,6 +250,19 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ended_at = now_s() - 3.0;
             } else if (auto* fa = std::get_if<proto::ActionCommand>(&m); fa && fa->forced) {
                 ++counts["forced_actions"];
+            } else if (auto* bo = std::get_if<proto::BuildOffer>(&m)) {
+                build_in = BuildIn{*bo, std::vector<uint8_t>(bo->size), 0};
+                ++counts["build_offers"];
+                if (bo->reason == "not yours") ++counts["build_rejections"];
+            } else if (auto* bc = std::get_if<proto::BuildChunk>(&m)) {
+                if (!build_in || bc->xfer != build_in->offer.xfer || bc->offset != build_in->got || bc->offset + bc->data.size() > build_in->offer.size) { session_errors = true; continue; }
+                std::copy(bc->data.begin(), bc->data.end(), build_in->data.begin() + bc->offset);
+                build_in->got += static_cast<uint32_t>(bc->data.size());
+                if (build_in->got == build_in->offer.size) {
+                    if (fnv64(build_in->data) != build_in->offer.hash) session_errors = true;
+                    else { ++counts["builds_received_ok"]; last_build = build_in->data; }
+                    build_in.reset();
+                }
             } else if (std::get_if<proto::WorldHash>(&m)) {
                 ++counts["world_hashes"];
             } else if (std::get_if<proto::JoinWait>(&m)) {
@@ -407,6 +424,27 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
             }
         }
         if (disconnected) continue;   // vient de se déconnecter : plus rien n'est envoyé
+        // "build_send" : [{"after_ok":1,"names":["Lune"]}, …] : renvoie le dernier état reçu comme proposition de ce joueur.
+        if (script["build_send"].is_array() && build_sends < script["build_send"].size() && !last_build.empty() &&
+            counts["builds_received_ok"] >= script["build_send"][build_sends]["after_ok"].as_int(1)) {
+            const json::Value& bs = script["build_send"][build_sends++];
+            proto::BuildOffer o;
+            o.xfer = 0xF0000000u + static_cast<uint32_t>(build_sends);
+            o.origin = my_id;
+            o.size = static_cast<uint32_t>(last_build.size());
+            o.hash = fnv64(last_build);
+            o.reason = "fake client";
+            for (size_t i = 0; i < bs["names"].size(); ++i) o.names.push_back({bs["names"][i].as_string(), 0});
+            lp->send(o);
+            for (uint32_t off = 0; off < last_build.size(); off += proto::kMaxChunk) {
+                proto::BuildChunk c;
+                c.xfer = o.xfer;
+                c.offset = off;
+                c.data.assign(last_build.begin() + off, last_build.begin() + off + std::min<size_t>(proto::kMaxChunk, last_build.size() - off));
+                lp->send(c);
+            }
+            ++counts["builds_sent"];
+        }
         if (ready_at >= 0 && now_s() >= ready_at) { lp->send(proto::BattleReady{ready_battle, my_id}); ready_at = -1; ++counts["ready_sent"]; }
         // "resync_after_s" : une fois entré, demande un nouvel instantané (désync d'exploration simulée).
         if (joined_at >= 0 && counts["resyncs_sent"] == 0 &&
@@ -594,6 +632,23 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     link->send(l.msg);
                     // Instantané : les octets ne sont pas dans l'enregistrement, ils viennent du fichier local (même hash) :
                     // --snapshot, ou <nom>_<xfer>.sav quand la session en contient plusieurs (resynchro).
+                    if (auto* bo = std::get_if<proto::BuildOffer>(&l.msg)) {
+                        std::string stem = a.snapshot;
+                        if (stem.size() > 4 && stem.substr(stem.size() - 4) == ".sav") stem = stem.substr(0, stem.size() - 4);
+                        std::ifstream bf(stem + "_build-" + std::to_string(bo->xfer) + ".sav", std::ios::binary);
+                        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(bf)), std::istreambuf_iterator<char>());
+                        if (bytes.size() != bo->size || fnv64(bytes) != bo->hash) {
+                            log.write("error", JsonObj().add("what", "build file does not match the recorded BuildOffer").add("xfer", bo->xfer));
+                            return 1;
+                        }
+                        for (uint32_t off = 0; off < bytes.size(); off += proto::kMaxChunk) {
+                            proto::BuildChunk c;
+                            c.xfer = bo->xfer;
+                            c.offset = off;
+                            c.data.assign(bytes.begin() + off, bytes.begin() + off + std::min<size_t>(proto::kMaxChunk, bytes.size() - off));
+                            link->send(c);
+                        }
+                    }
                     if (auto* so = std::get_if<proto::SaveOffer>(&l.msg)) {
                         auto read_file = [](const std::string& p) { std::ifstream sf(p, std::ios::binary); return std::vector<uint8_t>((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>()); };
                         std::vector<uint8_t> bytes = read_file(a.snapshot);
@@ -618,7 +673,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     }
                     ++cursor;
                 } else if (std::holds_alternative<proto::NarrativeState>(l.msg) || std::holds_alternative<proto::PauseState>(l.msg) ||
-                           std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg)) {
+                           std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg) ||
+                           std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;

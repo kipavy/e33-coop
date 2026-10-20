@@ -1,0 +1,18 @@
+{
+  "name": "p5_builds_host",
+  "description": "Phase 5 : builds des personnages (D13). Verso appartient à l'hôte, Lune au faux client. L'hôte modifie le build de Verso (remise à zéro des attributs, comme dans le menu) : l'état de Verso, sérialisé par le jeu, part au client. Le client renvoie ensuite deux propositions : Lune (son personnage : acceptée et appliquée par l'hôte) et Verso (pas le sien : refusée, l'hôte lui renvoie son état). Produit l'enregistrement et les états rejoués par p5_builds_client.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 6 },
+    { "do": "build", "character": "Verso", "op": "reset_attributes" },
+    { "do": "wait", "until": "build_offers_authoritative", "is": ">=1", "timeout": 60 },
+    { "do": "wait", "until": "builds_rejected", "is": ">=1", "timeout": 120 },
+    { "do": "wait", "until": "builds_applied", "is": ">=1", "timeout": 60 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:0,Lune:1", "-e33name=Killian"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_builds.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "build_offers_authoritative": ">=2", "builds_applied": ">=1", "builds_rejected": "1", "build_errors": "0", "build_changes_detected": ">=1", "ui:build_applied": ">=1" }
+}

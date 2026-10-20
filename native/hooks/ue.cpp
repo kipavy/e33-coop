@@ -212,6 +212,19 @@ Call& Call::set_string(const wchar_t* name, const wchar_t* v)
     return *this;
 }
 
+Call& Call::set_raw(const wchar_t* name, const void* src)
+{
+    FProperty* p = param(name);
+    if (p && src) std::memcpy(p->ContainerPtrToValuePtr<void>(buf_.data()), src, static_cast<size_t>(p->GetSize()));
+    return *this;
+}
+
+size_t Call::param_size(const wchar_t* name)
+{
+    FProperty* p = param(name);
+    return p ? static_cast<size_t>(p->GetSize()) : 0;
+}
+
 Call& Call::set_object_array(const wchar_t* name, const std::vector<UObject*>& v)
 {
     void* d = param_ptr(name);

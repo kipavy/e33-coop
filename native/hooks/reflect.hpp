@@ -28,4 +28,7 @@ std::string diff_json(const Leaves& mine, const Leaves& theirs, size_t max = 20)
 // Nom de membre lisible : "Quantity_12_8F3A…" -> "Quantity".
 std::string clean_name(const std::wstring& n);
 
+// Parcourt une map d'un objet (champ TMap) : visit(adresse de la clé, adresse de la valeur, propriété clé, propriété valeur).
+bool map_pairs(RC::Unreal::UObject* o, const wchar_t* field, std::vector<std::pair<void*, void*>>& pairs, RC::Unreal::FProperty** key_prop, RC::Unreal::FProperty** value_prop);
+
 } // namespace e33::reflect

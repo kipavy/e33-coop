@@ -10,6 +10,7 @@ add_library(${TARGET} SHARED
     ../testrunner/runner.cpp
     ../sync/coop.cpp
     ../sync/explore.cpp
+    ../sync/builds.cpp
     ../sync/state.cpp
     ../protocol/messages.cpp
     ../net/link.cpp

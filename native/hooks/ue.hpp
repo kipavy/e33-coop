@@ -74,8 +74,12 @@ public:
     Call& set_fname(const wchar_t* param, const wchar_t* v);
     Call& set_string(const wchar_t* param, const wchar_t* v);   // FString
     Call& set_object_array(const wchar_t* param, const std::vector<UObject*>& v);
+    // Copie brute d'une valeur (struct, FText…) de la taille du paramètre ; size_out : taille du paramètre.
+    Call& set_raw(const wchar_t* param, const void* src);
+    size_t param_size(const wchar_t* param);
     // Accès brut à la valeur d'un paramètre (pour les structs).
     void* param_ptr(const wchar_t* param);
+    FProperty* param_property(const wchar_t* name) { return param(name); }
 
     bool invoke();   // ProcessEvent ; false si la fonction est introuvable
 

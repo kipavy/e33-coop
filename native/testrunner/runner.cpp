@@ -759,6 +759,7 @@ void subscribe()
 //   {"do":"skip_cinematic","after_s":5}   passe la cinématique en cours (après after_s s dans l'étape)
 //   {"do":"wait_key"}                     validation en jeu : attend la touche F9
 //   {"do":"trigger","players":1}          combat du scénario (encounter, party) dès que "players" clients sont connectés
+//   {"do":"build","character":"Verso","op":"reset_attributes"}   modifie un build (comme un menu)
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -868,6 +869,15 @@ void run_explore_step(float dt)
             if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
         }
         // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
+    } else if (what == "build") {   // modifie le build d'un personnage comme le ferait un menu (phase 5)
+        UObject* cd = game::character_data(st["character"].as_string("Verso"));
+        const std::string op = st["op"].as_string("reset_attributes");
+        const wchar_t* fn = op == "reset_attributes" ? STR("ResetAssignedAttributePoints") : nullptr;
+        ue::Call c(cd, fn ? fn : STR("?"));
+        if (!cd || !fn || !c || !c.invoke()) { fail("build: " + op + " failed"); return; }
+        ++g.metrics["build_ops"];
+        log().write("tr_build_op", JsonObj().add("character", st["character"].as_string("Verso")).add("op", op));
+        next_step("done");
     } else if (what == "wait_follow") {   // suiveur : écart au pilote sous "max" (u) pendant 2 s
         const double e = explore::follow_error();
         g.metrics["follow_error"] = static_cast<int>(e);

@@ -149,6 +149,13 @@ void encode_payload(const Message& m, wire::Writer& w)
             for (auto& p : x.parts) { w.str(p.name); w.u64(p.value); }
         } else if constexpr (std::is_same_v<T, ResyncRequest>) {
             w.str(x.reason);
+        } else if constexpr (std::is_same_v<T, BuildOffer>) {
+            w.u32(x.xfer); w.u8(x.origin); w.boolean(x.authoritative); w.u32(x.size); w.u64(x.hash);
+            w.u16(static_cast<uint16_t>(x.names.size()));
+            for (auto& n : x.names) { w.str(n.name); w.u64(n.hash); }
+            w.str(x.reason);
+        } else if constexpr (std::is_same_v<T, BuildChunk>) {
+            w.u32(x.xfer); w.u32(x.offset); w.u16(static_cast<uint16_t>(x.data.size())); w.bytes(x.data.data(), x.data.size());
         } else {
             static_assert(always_false<T>, "message non géré");
         }
@@ -314,6 +321,19 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         return finish(x);
     }
     case MsgType::ResyncRequest: { ResyncRequest x; x.reason = r.str(kMaxStr); return finish(x); }
+    case MsgType::BuildOffer: {
+        BuildOffer x; x.xfer = r.u32(); x.origin = r.u8(); x.authoritative = r.boolean(); x.size = r.u32(); x.hash = r.u64();
+        if (x.origin > 3 || x.size > kMaxSaveSize) r.fail();
+        const uint16_t n = r.count(16);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) { BuildName b; b.name = r.str(64); b.hash = r.u64(); x.names.push_back(b); }
+        x.reason = r.str(kMaxStr);
+        return finish(x);
+    }
+    case MsgType::BuildChunk: {
+        BuildChunk x; x.xfer = r.u32(); x.offset = r.u32(); x.data = r.blob(kMaxChunk);
+        if (x.data.empty() || x.offset > kMaxSaveSize - x.data.size()) r.fail();
+        return finish(x);
+    }
     }
     err = "unknown message type " + std::to_string(static_cast<unsigned>(t));
     return std::nullopt;
@@ -360,6 +380,8 @@ const char* type_name(MsgType t)
     case MsgType::Roster: return "Roster";
     case MsgType::WorldHash: return "WorldHash";
     case MsgType::ResyncRequest: return "ResyncRequest";
+    case MsgType::BuildOffer: return "BuildOffer";
+    case MsgType::BuildChunk: return "BuildChunk";
     }
     return "?";
 }
@@ -373,7 +395,8 @@ MsgType type_of(const Message& m)
                                         MsgType::SaveOffer, MsgType::SaveChunk, MsgType::JoinWait, MsgType::JoinReady, MsgType::PilotState,
                                         MsgType::PilotRequest, MsgType::PilotChange, MsgType::WorldInteract, MsgType::DialogueChoice,
                                         MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState,
-                                        MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest};
+                                        MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
+                                        MsgType::BuildOffer, MsgType::BuildChunk};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -499,6 +522,11 @@ std::string to_json(const Message& m)
             for (size_t i = 0; i < x.parts.size(); ++i) { if (i) ps += ","; char b[24]; std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(x.parts[i].value)); ps += "\"" + json_escape(x.parts[i].name) + "\":\"" + b + "\""; }
             o.add("seq", x.seq).add("level", x.level).raw("parts", ps + "}");
         } else if constexpr (std::is_same_v<T, ResyncRequest>) { o.add("reason", x.reason); }
+        else if constexpr (std::is_same_v<T, BuildOffer>) {
+            std::string ns = "[";
+            for (size_t i = 0; i < x.names.size(); ++i) { if (i) ns += ","; ns += "\"" + json_escape(x.names[i].name) + "\""; }
+            o.add("xfer", x.xfer).add("origin", static_cast<int>(x.origin)).add("authoritative", x.authoritative).add("size", x.size).raw("names", ns + "]").add("reason", x.reason);
+        } else if constexpr (std::is_same_v<T, BuildChunk>) { o.add("xfer", x.xfer).add("offset", x.offset).add("bytes", static_cast<int64_t>(x.data.size())); }
     }, m);
     return o.str();
 }

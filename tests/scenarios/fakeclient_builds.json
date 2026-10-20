@@ -1,0 +1,11 @@
+{
+  "player_name": "Ami",
+  "game_build": 23765773,
+  "mod_version": "0.5.0",
+  "gameplay_mods": [],
+  "join": true,
+  "session": true,
+  "defense": ["fail"],
+  "build_send": [{ "after_ok": 1, "names": ["Lune"] }, { "after_ok": 1, "names": ["Verso"] }],
+  "expect": { "snapshots": "1", "build_offers": ">=2", "builds_received_ok": ">=2", "build_rejections": "1", "builds_sent": "2" }
+}

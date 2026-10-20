@@ -201,3 +201,25 @@ std::string diff_json(const Leaves& mine, const Leaves& theirs, size_t max)
 }
 
 } // namespace e33::reflect
+
+namespace e33::reflect {
+
+bool map_pairs(UObject* o, const wchar_t* field, std::vector<std::pair<void*, void*>>& pairs, FProperty** key_prop, FProperty** value_prop)
+{
+    pairs.clear();
+    if (!o) return false;
+    auto* mp = CastField<FMapProperty>(o->GetPropertyByNameInChain(field));
+    if (!mp) return false;
+    auto* m = mp->ContainerPtrToValuePtr<FScriptMap>(o);
+    const FScriptMapLayout& layout = mp->GetMapLayout();
+    for (int32 i = 0; i < m->GetMaxIndex(); ++i) {
+        if (!m->IsValidIndex(i)) continue;
+        auto* pair = static_cast<uint8_t*>(m->GetData(i, layout));
+        pairs.emplace_back(pair, pair + layout.ValueOffset);
+    }
+    if (key_prop) *key_prop = mp->GetKeyProp();
+    if (value_prop) *value_prop = mp->GetValueProp();
+    return true;
+}
+
+} // namespace e33::reflect

@@ -43,7 +43,7 @@ public:
         if (!f_.is_open()) return;
         // Les octets d'une save ne sont jamais enregistrés (repo public, données du joueur) : le faux hôte
         // renvoie l'instantané depuis un fichier local, annoncé par la ligne SaveOffer (taille + hash).
-        if (std::holds_alternative<proto::SaveChunk>(m)) return;
+        if (std::holds_alternative<proto::SaveChunk>(m) || std::holds_alternative<proto::BuildChunk>(m)) return;
         const double now_t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
         // Positions du pilote (~20 par seconde, non fiables) : 5 par seconde suffisent au rejeu.
         if (std::holds_alternative<proto::PilotState>(m)) {

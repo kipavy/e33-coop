@@ -19,6 +19,7 @@
 #include <Unreal/UAssetRegistryHelpers.hpp>
 
 #include "log.hpp"
+#include "reflect.hpp"
 #include "ue.hpp"
 
 using namespace RC;
@@ -860,6 +861,160 @@ bool skip_cinematic()
 {
     ue::Call c(ue::get_object(controller(), STR("BP_CinematicSystem")), STR("SkipCinematic"));
     return c && c.invoke();
+}
+
+// --- Builds des personnages (phase 5, D13) ----------------------------------------------------
+
+std::vector<std::string> character_names()
+{
+    std::vector<std::string> out;
+    std::vector<std::pair<void*, void*>> pairs;
+    if (!reflect::map_pairs(gi(), STR("CharactersCollection"), pairs, nullptr, nullptr)) return out;
+    for (auto& [k, v] : pairs) out.push_back(ue::to_utf8(static_cast<FName*>(k)->ToString()));
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<std::string> party_names()
+{
+    std::vector<std::string> out;
+    auto* ap = CastField<FArrayProperty>(ue::prop(gi(), STR("CurrentParty")));
+    if (!ap) return out;
+    auto* inner = CastField<FStructProperty>(ap->GetInner());
+    auto* arr = ap->ContainerPtrToValuePtr<FScriptArray>(gi());
+    if (!inner || !arr) return out;
+    FProperty* name = ue::struct_member(inner->GetStruct(), STR("CharacterHardcodedName"));
+    auto* data = static_cast<uint8_t*>(arr->GetData());
+    for (int32 i = 0; i < arr->Num() && name; ++i)
+        out.push_back(ue::to_utf8(static_cast<FName*>(name->ContainerPtrToValuePtr<void>(data + static_cast<size_t>(i) * inner->GetSize()))->ToString()));
+    return out;
+}
+
+UObject* character_data(const std::string& wanted)
+{
+    std::vector<std::pair<void*, void*>> pairs;
+    if (!reflect::map_pairs(gi(), STR("CharactersCollection"), pairs, nullptr, nullptr)) return nullptr;
+    for (auto& [k, v] : pairs)
+        if (ue::to_utf8(static_cast<FName*>(k)->ToString()) == wanted) return *static_cast<UObject**>(v);
+    return nullptr;
+}
+
+bool character_build(const std::string& name, uint64_t& hash, std::string* summary)
+{
+    UObject* cd = character_data(name);
+    ue::Call c(cd, STR("SaveCharacterState"));
+    if (!c || !c.invoke()) return false;
+    FProperty* p = c.param_property(STR("OutState"));
+    void* v = c.param_ptr(STR("OutState"));
+    if (!p || !v) return false;
+    reflect::Leaves all, kept;
+    reflect::flatten(p, v, "", all);
+    // PV et PM changent hors des menus (dégâts d'exploration, soins) : ce n'est pas le build.
+    for (auto& l : all)
+        if (l.first.find("CurrentHP") == std::string::npos && l.first.find("CurrentMP") == std::string::npos) kept.push_back(l);
+    hash = reflect::hash(kept);
+    if (summary) *summary = std::to_string(kept.size()) + " leaves";
+    // Les sorties sont des copies (tableaux, maps) : libérées ici, sinon fuite à chaque contrôle.
+    p->DestroyValue(v);
+    if (FProperty* p2 = c.param_property(STR("StructOut"))) p2->DestroyValue(c.param_ptr(STR("StructOut")));
+    return true;
+}
+
+namespace {
+UObject* new_save_object(const wchar_t* prefix, std::string& err)
+{
+    auto* cls = static_cast<UClass*>(load_asset(STR("/Game/Gameplay/Save/SaveObjects/BP_SaveGameObject_V8.BP_SaveGameObject_V8_C")));
+    if (!cls) { err = "BP_SaveGameObject_V8_C not loaded"; return nullptr; }
+    static std::atomic<int> seq{0};
+    const std::wstring name = std::wstring(prefix) + std::to_wstring(++seq);
+    FStaticConstructObjectParameters params{cls, gi()};
+    params.Name = FName(name.c_str(), FNAME_Add);
+    UObject* obj = UObjectGlobals::StaticConstructObject(params);
+    if (!obj) err = "StaticConstructObject failed";
+    return obj;
+}
+
+std::filesystem::path slot_file(const std::wstring& slot)
+{
+    std::wstring rel = slot;
+    std::replace(rel.begin(), rel.end(), L'/', L'\\');
+    return std::filesystem::path(saves_dir()) / (rel + L".sav");
+}
+
+bool write_slot_file(const std::wstring& slot, const std::vector<uint8_t>& bytes, std::string& err)
+{
+    const auto file = slot_file(slot);
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::ofstream f(file, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!f) { err = "cannot write " + ue::to_utf8(file.wstring()); return false; }
+    return true;
+}
+
+bool read_slot_file(const std::wstring& slot, std::vector<uint8_t>& bytes, std::string& err)
+{
+    const auto file = slot_file(slot);
+    std::ifstream f(file, std::ios::binary);
+    if (!f) { err = "cannot read " + ue::to_utf8(file.wstring()); return false; }
+    bytes.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    return bytes.size() >= 4;
+}
+} // namespace
+
+bool make_characters_blob(const std::wstring& slot, std::vector<uint8_t>& bytes, std::string& err)
+{
+    UObject* sm = save_manager();
+    if (!sm) { err = "no save manager"; return false; }
+    ue::Call create(sm, STR("CreateSaveGameDataFromGameState"));
+    if (!create || !create.invoke()) { err = "CreateSaveGameDataFromGameState failed"; return false; }
+    UObject* data = create.out_object(STR("SaveGameData"));
+    if (!data) { err = "no save game data"; return false; }
+    UObject* obj = new_save_object(L"E33Coop_Build_", err);
+    if (!obj) return false;
+    // Seulement les personnages : copie profonde de la map (même type des deux côtés), le reste de la save reste vide.
+    FProperty* src = ue::prop(data, STR("CharactersCollection"));
+    FProperty* dst = ue::prop(obj, STR("CharactersCollection"));
+    if (!src || !dst) { err = "CharactersCollection not found"; return false; }
+    dst->CopyCompleteValue(dst->ContainerPtrToValuePtr<void>(obj), src->ContainerPtrToValuePtr<void>(data));
+    UObject* gps = ue::find_object(STR("/Script/Engine.Default__GameplayStatics"));
+    ue::Call save(gps, STR("SaveGameToSlot"));
+    if (!save) { err = "SaveGameToSlot not found"; return false; }
+    save.set_object(STR("SaveGameObject"), obj).set_string(STR("SlotName"), slot.c_str()).set_int(STR("UserIndex"), 0).invoke();
+    if (!save.out_bool(STR("ReturnValue"))) { err = "SaveGameToSlot returned false"; return false; }
+    return read_slot_file(slot, bytes, err);
+}
+
+bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>& bytes, const std::vector<std::string>& names,
+                           std::vector<std::string>& applied, std::string& err)
+{
+    applied.clear();
+    if (!write_slot_file(slot, bytes, err)) return false;
+    UObject* gps = ue::find_object(STR("/Script/Engine.Default__GameplayStatics"));
+    ue::Call load(gps, STR("LoadGameFromSlot"));
+    if (!load) { err = "LoadGameFromSlot not found"; return false; }
+    load.set_string(STR("SlotName"), slot.c_str()).set_int(STR("UserIndex"), 0).invoke();
+    UObject* obj = load.out_object(STR("ReturnValue"));
+    if (!obj) { err = "LoadGameFromSlot returned null"; return false; }
+    std::vector<std::pair<void*, void*>> pairs;
+    if (!reflect::map_pairs(obj, STR("CharactersCollection"), pairs, nullptr, nullptr)) { err = "no CharactersCollection in blob"; return false; }
+    for (auto& [k, v] : pairs) {
+        const std::string name = ue::to_utf8(static_cast<FName*>(k)->ToString());
+        if (std::find(names.begin(), names.end(), name) == names.end()) continue;
+        UObject* cd = character_data(name);
+        ue::Call c(cd, STR("LoadCharacterState"));
+        FProperty* p = c ? c.param_property(STR("CharacterState")) : nullptr;
+        if (!p) { err = "LoadCharacterState not found for " + name; continue; }
+        void* dst = c.param_ptr(STR("CharacterState"));
+        p->InitializeValue(dst);
+        p->CopyCompleteValue(dst, v);
+        c.invoke();
+        p->DestroyValue(dst);
+        ue::Call d(cd, STR("DispatchModificationsIfPossible"));
+        if (d) d.set_string(STR("DebugReason"), STR("E33Coop build")).invoke();
+        applied.push_back(name);
+    }
+    return true;
 }
 
 } // namespace e33::game

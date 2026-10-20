@@ -2,6 +2,7 @@
 // voir docs/GAME-INTERNALS.md). Toutes ces fonctions doivent être appelées sur le game thread.
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -149,6 +150,18 @@ bool back_to_title();              // contrôleur : BackToTitleMenu (retour au m
 // Exécute l'action « au passage » d'une zone de déclenchement (BP_GameActionTriggerZone_C dont le nom contient name_part).
 bool run_zone_action(const std::string& name_part, std::string& err);
 bool skip_cinematic();
+
+// --- Builds des personnages (phase 5, D13) ---
+std::vector<std::string> character_names();   // personnages connus (GI.CharactersCollection), triés
+std::vector<std::string> party_names();       // équipe courante, dans l'ordre (GI.CurrentParty)
+UObject* character_data(const std::string& name);
+// Empreinte du build (SaveCharacterState sans PV/PM).
+bool character_build(const std::string& name, uint64_t& hash, std::string* summary = nullptr);
+// États de tous les personnages, sérialisés par le jeu (save V8 ne contenant que CharactersCollection).
+bool make_characters_blob(const std::wstring& slot, std::vector<uint8_t>& bytes, std::string& err);
+// Applique (LoadCharacterState) les personnages nommés d'un tel blob.
+bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>& bytes, const std::vector<std::string>& names,
+                           std::vector<std::string>& applied, std::string& err);
 
 // Visée libre
 inline const wchar_t* const FreeAimComp = L"/Game/Gameplay/FreeAim/BP_FreeAimShooterBattleComponent.BP_FreeAimShooterBattleComponent_C:";

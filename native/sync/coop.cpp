@@ -28,6 +28,7 @@
 #include "../net/transport.hpp"
 #include "../protocol/messages.hpp"
 #include "../ui/ui.hpp"
+#include "builds.hpp"
 #include "explore.hpp"
 #include "state.hpp"
 
@@ -303,6 +304,22 @@ std::string player_name(uint8_t id)
     auto it = s.roster.find(id);
     if (it != s.roster.end() && !it->second.empty()) return it->second;
     return id == 0 ? ui::text("host") : "Joueur " + std::to_string(id + 1);
+}
+
+// Joueur qui contrôle un personnage hors combat (builds, D13) et par défaut en combat : -e33owners (nom), sinon le
+// k-ième personnage de l'équipe va au k-ième joueur (hôte, puis clients par numéro), l'hôte garde le reste.
+uint8_t character_owner(const std::string& name)
+{
+    if (auto it = s.owner_overrides.find(name); it != s.owner_overrides.end()) return it->second;
+    if (!s.owner_overrides.empty()) return 0;
+    const auto party = game::party_names();
+    const auto pos = std::find(party.begin(), party.end(), name);
+    if (pos == party.end()) return 0;
+    std::vector<uint8_t> players{0};
+    for (auto& [id, n] : s.roster) if (id != 0) players.push_back(id);
+    std::sort(players.begin() + 1, players.end());
+    const auto idx = static_cast<size_t>(pos - party.begin());
+    return idx < players.size() ? players[idx] : 0;
 }
 
 // --- Battement « occupé » --------------------------------------------------------------------------
@@ -645,6 +662,7 @@ void handle(Peer& p, proto::Message& m)
             log().write("coop_battle_ready", JsonObj().add("player", static_cast<int>(p.player_id)).add("battle", br->battle_id));
             return;
         }
+        if (builds::handle(p.player_id, m)) return;
         if (explore::handle(p.player_id, m)) return;
         if (handle_battle_common(p, m)) return;
         return;
@@ -653,6 +671,7 @@ void handle(Peer& p, proto::Message& m)
     if (auto* w = std::get_if<proto::Welcome>(&m)) {
         s.accepted = true; s.my_player_id = w->player_id; s.session_id = w->session_id;
         explore::set_player_id(w->player_id);
+        builds::set_player_id(w->player_id);
         log().write("session_welcome", JsonObj().add("player_id", static_cast<int>(w->player_id)));
         return;
     }
@@ -691,6 +710,7 @@ void handle(Peer& p, proto::Message& m)
         log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
         return;
     }
+    if (builds::handle(0, m)) return;
     if (explore::handle(0, m)) return;
     if (handle_battle_common(p, m)) return;
     if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
@@ -949,9 +969,8 @@ uint8_t default_owner(int index, int spot, const std::string& name)
     if (auto it = s.owner_overrides.find(std::to_string(spot)); it != s.owner_overrides.end()) return it->second;
     if (auto it = s.owner_overrides.find(name); it != s.owner_overrides.end()) return it->second;
     if (!s.owner_overrides.empty()) return 0;
-    std::vector<uint8_t> players{0};
-    for (auto& p : s.peers) if (p.accepted) players.push_back(p.player_id);
-    return index < static_cast<int>(players.size()) ? players[static_cast<size_t>(index)] : 0;
+    (void)index;
+    return character_owner(name);   // même répartition qu'hors combat (builds) : le k-ième de l'équipe au k-ième joueur
 }
 
 void begin_turn_common()
@@ -1974,6 +1993,17 @@ void init()
     net.bump = [](const char* c, int n) { s.counters[c] += n; };
     net.name_of = [](uint8_t id) { return player_name(id); };
     explore::init(s.role == Role::Host, s.want_join, net);
+    {
+        builds::Net bn;
+        bn.publish = [](const proto::Message& m) { publish(m); };
+        bn.send_to = [](uint8_t player, const proto::Message& m) { for (auto& p : s.peers) if (p.accepted && p.player_id == player) send_to(p, m); };
+        bn.relay = [](const proto::Message& m, uint8_t origin) { for (auto& p : s.peers) if (in_game(p) && p.player_id != origin) send_to(p, m); };
+        bn.bump = [](const char* c, int n) { s.counters[c] += n; };
+        bn.name_of = [](uint8_t id) { return player_name(id); };
+        bn.owner_of = [](const std::string& n) { return character_owner(n); };
+        bn.sharing = [] { if (s.role == Role::Client) return explore::joined() && s.accepted; for (auto& p : s.peers) if (in_game(p)) return true; return false; };
+        builds::init(s.role == Role::Host, bn);
+    }
     subscribe();
     explore::subscribe();
     subscribe_session();
@@ -2210,6 +2240,7 @@ void tick(double dt)
     if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
     explore::tick(s.now);
+    builds::tick(s.now);
     run_remote_action();
     // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
     if (s.fa_own.active && s.fa_own.have_point && s.now >= s.fa_own.next_aim_s) {

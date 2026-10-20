@@ -1,0 +1,13 @@
+{
+  "name": "p5_builds_client",
+  "description": "Phase 5 : builds vus du client. Le vrai jeu client rejoint le faux hôte (rejeu de p5_builds_host) et reçoit l'état de Verso modifié par l'hôte (attributs remis à zéro) : il l'applique (LoadCharacterState) et retrouve exactement l'empreinte du build de l'hôte.",
+  "join": true,
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait", "until": "builds_applied", "is": ">=1", "timeout": 400 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33owners=Verso:0,Lune:1"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p5_builds_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p5_builds_snapshot.sav", "--paced", "1", "--timeout", "600"] },
+  "expect": { "builds_applied": ">=1", "build_hash_mismatches": "0", "build_errors": "0", "build_offers_sent": "0" }
+}
