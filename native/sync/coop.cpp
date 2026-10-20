@@ -1550,13 +1550,21 @@ void subscribe()
     // (Steam, 2 PC), l'hôte a ouvert avec Maelle et le client avec Verso, puis chacun attendait l'autre. On attend
     // donc le TurnStart de l'hôte et on remplace le paramètre Character avant que le tour ne commence.
     bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn"), [](HookCtx& ctx, UFunction* f) {
-        if (s.role != Role::Client || !s.battle.active || s.battle.ending) return;
+        if (s.role != Role::Client || s.battle.ending) return;
         if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
+        // Premier tour d'un combat engagé ici avant que le mod le lance (pion suiveur) : le combat n'est pas encore
+        // « actif », mais l'hôte l'a annoncé (avis précoce ou BattleStart). Vu le 2026-10-21 : sans ça, le client
+        // jouait Verso au tour 1 pendant que l'hôte jouait Maelle.
+        const bool first = !s.battle.active;
+        if (first && !s.pending_start && !(s.early_start && s.now - s.early_start_at < 30.0)) return;
         auto& b = s.battle;
-        const uint32_t next = b.turn + 1;
-        if (!wait_for([&] { return b.host_turns.count(next) > 0 || b.host_end >= 0; }, 15.0)) {
+        const uint32_t next = first ? 1 : b.turn + 1;
+        if (!wait_for([&] {
+                if (first) return (s.pending_start || b.active) && b.host_turns.count(1) > 0;
+                return b.host_turns.count(next) > 0 || b.host_end >= 0;
+            }, 15.0)) {
             bump("actor_wait_timeouts");
-            log().write("coop_actor_wait_timeout", JsonObj().add("battle", b.id), next);
+            log().write("coop_actor_wait_timeout", JsonObj().add("battle", b.id).add("first", first), next);
             return;
         }
         auto it = b.host_turns.find(next);
