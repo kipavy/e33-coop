@@ -6,6 +6,7 @@ add_library(${TARGET} SHARED
     ../hooks/log.cpp
     ../hooks/hookbus.cpp
     ../hooks/game.cpp
+    ../hooks/reflect.cpp
     ../testrunner/runner.cpp
     ../sync/coop.cpp
     ../sync/explore.cpp

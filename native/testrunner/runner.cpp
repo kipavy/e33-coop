@@ -989,6 +989,14 @@ void tick(float dt)
         break;
     case Phase::Battle:
         tick_free_aim();
+        // Menu pause que le scénario n'a pas demandé (le jeu se met en pause quand sa fenêtre perd le focus, vu le
+        // 2026-10-20 sur p3_party_client) : refermé, sinon le combat reste bloqué jusqu'au délai du test.
+        if (!g.sc.manual && g.pause_until <= 0 && g.frame % 15 == 0 && game::pause_menu_visible()) {
+            ue::Call c(ue::get_object(game::controller(), STR("PauseMenuWidget")), STR("OnResumeClicked"));
+            if (c) c.invoke();
+            ++g.metrics["unexpected_pauses"];
+            log().write("tr_unexpected_pause_closed", JsonObj(), g.turn);
+        }
         if (g.pause_until > 0 && g.t >= g.pause_until) {   // menu pause du scénario : refermé par « Reprendre »
             g.pause_until = 0;
             ue::Call c(ue::get_object(game::controller(), STR("PauseMenuWidget")), STR("OnResumeClicked"));
