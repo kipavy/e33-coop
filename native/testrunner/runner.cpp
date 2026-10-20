@@ -18,6 +18,7 @@
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
 #include "../sync/coop.hpp"
+#include "../sync/explore.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -30,7 +31,7 @@ namespace e33::testrunner {
 
 namespace {
 
-enum class Phase { Off, WaitMenu, LoadSave, WaitWorld, Trigger, WaitBattle, Battle, Ending, Done };
+enum class Phase { Off, WaitMenu, LoadSave, WaitWorld, Trigger, WaitBattle, Battle, Ending, Explore, Done };
 
 const char* phase_name(Phase p)
 {
@@ -43,6 +44,7 @@ const char* phase_name(Phase p)
     case Phase::WaitBattle: return "wait_battle";
     case Phase::Battle: return "battle";
     case Phase::Ending: return "ending";
+    case Phase::Explore: return "explore";
     case Phase::Done: return "done";
     }
     return "?";
@@ -80,6 +82,8 @@ struct Scenario {
     std::vector<std::string> defense;     // parry | dodge | perfect_dodge | jump | fail | manual, cyclique par vague de coups
     json::Value expect;
     json::Value setup;                    // {"<Héros>": {"hp": n, "shield": n, "dead": true}} : appliqué au tour 1, à l'identique sur chaque instance
+    bool join = false;                    // client : rejoindre la partie de l'hôte (instantané) au lieu de charger "save"
+    std::vector<json::Value> explore;     // étapes d'exploration (phase 4) : voir run_explore_step
 };
 
 struct State {
@@ -114,6 +118,12 @@ struct State {
     double end_at = -1;
     bool rewards_rolled = false;
     std::string fail_reason;
+    // Exploration
+    size_t step = 0;
+    double step_t = 0;
+    bool step_started = false;
+    bool battle_from_explore = false;
+    int battles = 0;
     std::vector<std::string> errors;
 };
 
@@ -179,7 +189,10 @@ bool load_scenario(const std::wstring& path, std::string& err)
     for (size_t i = 0; i < v["defense"].size(); ++i) s.defense.push_back(v["defense"][i].as_string("fail"));
     s.expect = v["expect"];
     s.setup = v["setup"];
-    if (s.save.empty() || s.encounter.empty()) { err = "scenario needs save and encounter"; return false; }
+    s.join = v["join"].as_bool(false);
+    for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
+    if (s.save.empty() && !s.join) { err = "scenario needs save (or join)"; return false; }
+    if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
     return true;
 }
 
@@ -283,9 +296,11 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         for (const char* c : {"desyncs", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages", "defense_timeouts", "combo_timeouts", "turn_wait_timeouts",
                               "actor_mismatches", "end_mismatches", "rewards_mismatches", "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_action_errors", "remote_action_invalid"})
             wants[c] = "0";
-        wants["hashes_compared"] = ">0";
-        wants["gameplay_draws"] = ">0";
-        wants["battle_finalized"] = "1";
+        if (g.sc.explore.empty() || g.battles > 0) {   // scénario d'exploration sans combat : pas de contrôles de combat
+            wants["hashes_compared"] = ">0";
+            wants["gameplay_draws"] = ">0";
+            wants["battle_finalized"] = "1";
+        }
         if (coop::role() == coop::Role::Client) wants["raw_hash_diffs"] = "0";
     }
     static const char* special[] = {"battle_end", "min_parries_ok", "min_defenses_ok", "defense_commands_obeyed", "min_fails_ok", "max_forced_parries", "min_player_turns"};
@@ -547,8 +562,15 @@ void subscribe()
     bus.post(fn(game::path::BattleChar, L"OnTurnStart"), [](HookCtx& ctx, RC::Unreal::UFunction*) {
         // Un client coop peut voir le combat (lancé par le module coop) démarrer avant que le runner ait fini
         // d'attendre le monde : tout début de tour pendant ces attentes fait passer en combat.
-        const bool waiting = g.phase == Phase::WaitWorld || g.phase == Phase::Trigger || g.phase == Phase::WaitBattle;
+        const bool waiting = g.phase == Phase::WaitWorld || g.phase == Phase::Trigger || g.phase == Phase::WaitBattle || g.phase == Phase::Explore;
         if (g.phase != Phase::Battle && !waiting) return;
+        if (g.phase == Phase::Explore) {   // combat d'exploration (lancé ici ou par un autre joueur) : on le joue puis on reprend
+            g.battle_from_explore = true;
+            g.turn = 0;
+            g.action_index.clear();
+            ++g.battles;
+            ++g.metrics["explore_battles"];
+        }
         if (waiting) set_phase(Phase::Battle);
         UObject* ch = ctx.Context;
         UObject* bm = game::battle_manager();
@@ -693,6 +715,130 @@ void subscribe()
 
 } // namespace
 
+// --- Exploration (phase 4) ------------------------------------------------------------------
+// Étapes "explore" d'un scénario, exécutées dans l'ordre :
+//   {"do":"wait","s":3} | {"do":"wait","until":"<compteur>","is":">=1","timeout":60}
+//   {"do":"wait_world"}                    monde prêt et stable 3 s (après chargement / transition)
+//   {"do":"wait_join","players":1}         hôte : clients entrés dans la partie
+//   {"do":"move","dir":[1,0],"s":3}        pilote : marche dans une direction (AddMovementInput)
+//   {"do":"interact","actor":"<préfixe>"}  interaction avec un PNJ / objet (nom d'acteur commençant par)
+//   {"do":"choose","index":1}              choix de dialogue (attend que la question soit posée)
+//   {"do":"wait_dialogue_end"}
+//   {"do":"change_map","level":"Level_Camp_Main","spawn":"<tag>"}
+//   {"do":"world_battle"}                  pilote : combat avec l'ennemi du monde le plus proche (actions du scénario)
+//   {"do":"battle"}                        attend un combat lancé par un autre joueur, puis le joue
+//   {"do":"request_pilot"} | {"do":"end"}
+// "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
+UObject* find_interactable(const std::string& prefix)
+{
+    for (const wchar_t* cls : {STR("BP_jRPG_NPC_Dialog_C"), STR("BP_jRPG_NPC_Base_C"), STR("BP_InteractionObjectBase_C"),
+                               STR("BP_jRPG_InteractionObject_Base_C"), STR("BP_Chest_Regular_C")}) {
+        std::vector<UObject*> all;
+        RC::Unreal::UObjectGlobals::FindAllOf(cls, all);
+        for (UObject* o : all)
+            if (ue::short_name(o).rfind(prefix, 0) == 0) return o;
+    }
+    return nullptr;
+}
+
+void next_step(const char* why)
+{
+    const auto& st = g.sc.explore[g.step];
+    log().write("tr_step_done", JsonObj().add("step", static_cast<int64_t>(g.step)).add("do", st["do"].as_string("")).add("why", why).add("t", g.step_t));
+    if (st["check"].is_object()) {
+        for (const auto& [k, v] : st["check"].obj) {
+            const std::string w = expect_string(v);
+            const int val = metric(k);
+            if (!satisfies(val, w)) {
+                g.errors.push_back("step " + std::to_string(g.step) + " check " + k + " " + w + " (got " + std::to_string(val) + ")");
+                return;
+            }
+        }
+    }
+    ++g.step;
+    g.step_t = 0;
+    g.step_started = false;
+}
+
+bool world_stable(double need)
+{
+    const bool ok = game::controller() && !game::map_change_in_progress() && game::explore_pawn() && !game::in_battle();
+    if (!ok) g.step_t = 0;
+    return ok && g.step_t >= need;
+}
+
+// Fin d'un combat d'exploration : retour aux étapes (l'étape "battle" / "world_battle" en cours est terminée).
+void resume_explore(const char* why)
+{
+    g.battle_from_explore = false;
+    log().write("tr_explore_resume", JsonObj().add("why", why).add("battles", g.battles));
+    set_phase(Phase::Explore);
+    if (g.step < g.sc.explore.size()) {
+        const std::string what = g.sc.explore[g.step]["do"].as_string("");
+        if (what == "battle" || what == "world_battle") next_step(why);
+    }
+}
+
+void run_explore_step(float dt)
+{
+    if (g.step >= g.sc.explore.size()) { finish(true, "explore done"); return; }
+    g.step_t += dt;
+    const auto& st = g.sc.explore[g.step];
+    const std::string what = st["do"].as_string("");
+    const double timeout = st["timeout"].as_number(what == "battle" ? 600 : 180);
+    const bool first = !g.step_started;
+    if (first) {
+        g.step_started = true;
+        log().write("tr_step", JsonObj().add("step", static_cast<int64_t>(g.step)).add("do", what));
+    }
+    if (g.step_t > timeout) { fail("explore step " + std::to_string(g.step) + " (" + what + ") timed out"); return; }
+    std::string err;
+    if (what == "wait") {
+        if (st["until"].is_string()) {
+            if (satisfies(metric(st["until"].as_string()), expect_string(st["is"]))) next_step("condition");
+        } else if (g.step_t >= st["s"].as_number(1)) next_step("time");
+    } else if (what == "wait_world") {
+        if (world_stable(st["s"].as_number(3))) next_step("world ready");
+    } else if (what == "wait_join") {
+        if (coop::counter("joined_players") >= st["players"].as_int(1)) next_step("joined");
+    } else if (what == "move") {
+        if (g.step_t >= st["s"].as_number(2)) { next_step("time"); return; }
+        if (UObject* pawn = game::explore_pawn())
+            game::move_pawn(pawn, st["dir"][0].as_number(1), st["dir"][1].as_number(0), st["scale"].as_number(1));
+    } else if (what == "interact") {
+        UObject* o = find_interactable(st["actor"].as_string());
+        if (!o) { fail("interact: no actor starting with " + st["actor"].as_string()); return; }
+        if (!game::interact(o, false)) { fail("interact failed"); return; }
+        ++g.metrics["interactions"];
+        next_step("done");
+    } else if (what == "choose") {
+        if (game::dialogue_choices() > 0 && g.step_t > 1.0) {
+            if (!game::choose_dialogue(static_cast<int>(st["index"].as_int(0)))) { fail("choose failed"); return; }
+            ++g.metrics["choices"];
+            next_step("done");
+        }
+    } else if (what == "wait_dialogue_end") {
+        if (!game::in_dialogue() && !game::playing_cinematic() && g.step_t > 1.0) next_step("done");
+    } else if (what == "change_map") {
+        if (!game::change_map(ue::from_utf8(st["level"].as_string()), ue::from_utf8(st["spawn"].as_string("")))) { fail("change_map failed"); return; }
+        ++g.metrics["map_changes"];
+        next_step("requested");
+    } else if (what == "world_battle" || what == "battle") {
+        if (what == "world_battle" && first) {
+            UObject* e = game::find_world_enemy(st["enemy"].as_string(""));
+            if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
+        }
+        // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
+    } else if (what == "request_pilot") {
+        explore::request_pilot();
+        next_step("requested");
+    } else if (what == "end") {
+        finish(true, "explore end");
+    } else {
+        fail("unknown explore step: " + what);
+    }
+}
+
 bool active() { return g.phase != Phase::Off && g.phase != Phase::Done; }
 
 void init()
@@ -727,7 +873,7 @@ void tick(float dt)
         ++g.metrics["combo_presses"];
         log().write("tr_combo_press", JsonObj(), g.turn);
     }
-    if (g.t < g.next_poll && g.phase != Phase::Battle) return;
+    if (g.t < g.next_poll && g.phase != Phase::Battle && g.phase != Phase::Explore) return;
     g.next_poll = g.t + 0.5;
 
     std::string err;
@@ -736,13 +882,18 @@ void tick(float dt)
         if (game::gi() && game::main_menu() && g.phase_t > 3.0) set_phase(Phase::LoadSave);
         break;
     case Phase::LoadSave:
+        if (g.sc.join) {   // client qui rejoint : le module coop charge l'instantané de l'hôte
+            if (explore::joined()) set_phase(Phase::WaitWorld);
+            else if (g.phase_t > 400.0) fail("join: snapshot not loaded");
+            break;
+        }
         if (!game::load_save_slot(g.sc.save, err)) { fail("load_save: " + err); return; }
         set_phase(Phase::WaitWorld);
         break;
     case Phase::WaitWorld:
         // monde prêt : un contrôleur de monde existe, pas de changement de carte, et quelques secondes de stabilité
         if (game::controller() && !game::map_change_in_progress()) {
-            if (g.phase_t > 8.0) set_phase(Phase::Trigger);
+            if (g.phase_t > 8.0) set_phase(g.sc.explore.empty() ? Phase::Trigger : Phase::Explore);
         } else {
             g.phase_t = 0;
         }
@@ -761,6 +912,8 @@ void tick(float dt)
         break;
     case Phase::Battle:
         tick_free_aim();
+        // Fuite : le jeu revient à l'exploration sans StartBattleEndFlow.
+        if (g.battle_from_explore && g.frame % 30 == 0 && g.phase_t > 5.0 && !game::in_battle() && game::explore_pawn()) { resume_explore("left battle"); break; }
         if (g.pending_action_at >= 0 && g.t >= g.pending_action_at) {
             g.pending_action_at = -1;
             if (game::current_character() != g.pending_actor) { log().write("tr_action_skipped", JsonObj().add("why", "actor changed"), g.turn); break; }
@@ -770,9 +923,15 @@ void tick(float dt)
     case Phase::Ending: {
         // Attendre la fin de combat complète (récompenses tirées et comparées), bornée.
         const bool done = coop::active() ? coop::battle_finalized() : (g.rewards_rolled || g.end_result != game::EndVictory);
-        if ((done && g.t >= g.end_at) || g.t >= g.end_at + 15.0) finish(true, done ? "battle ended" : "battle ended (end flow incomplete)");
+        if ((done && g.t >= g.end_at) || g.t >= g.end_at + 15.0) {
+            if (g.battle_from_explore) { resume_explore(done ? "battle ended" : "battle ended (end flow incomplete)"); break; }
+            finish(true, done ? "battle ended" : "battle ended (end flow incomplete)");
+        }
         break;
     }
+    case Phase::Explore:
+        run_explore_step(dt);
+        break;
     default:
         break;
     }

@@ -37,7 +37,7 @@ static std::vector<proto::Message> samples()
             proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, dq, dr,
             proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}},
             proto::ComboResult{7, 3, 1, 2, true, true, 880}, proto::ComboResult{7, 3, 1, 3, false, false, proto::kNoPress}, ss, rw,
-            proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}}},
+            proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}},
             wb, proto::SaveOffer{3, 438435, 0x1122334455667788ull, "Level_SpringMeadows_Main_V2"}, ch, proto::JoinWait{"battle"},
             proto::JoinReady{3, "Level_SpringMeadows_Main_V2"}, proto::PilotState{0, 12, "Level_Camp_Main", -2191.5, -1232, 192, 120, 300, -10, 0},
             proto::PilotRequest{1}, proto::PilotChange{1}, proto::WorldInteract{4, "/Game/Levels/X.X:PersistentLevel.NPC_1", false},
