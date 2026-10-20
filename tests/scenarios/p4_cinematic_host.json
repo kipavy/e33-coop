@@ -4,6 +4,7 @@
   "save": "e33coop-test/TEST_A",
   "timeout_s": 600,
   "end_on_battle": true,
+  "shots_every_s": 5,
   "explore": [
     { "do": "wait_join", "players": 1, "timeout": 300 },
     { "do": "wait", "s": 3 },

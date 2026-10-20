@@ -91,6 +91,7 @@ struct S {
     std::deque<proto::WorldInteract> interactions;
     std::deque<std::pair<proto::DialogueChoice, double>> choices;
     bool choice_pending = false;                  // question posée (StartChoice), pas encore répondue
+    bool sequence_playing = false;                // OnSequenceStarted reçu, pas encore OnSequenceFinished
     // Narration (barrière) et pause
     double next_poll = 0;
     bool local_narr = false;
@@ -631,6 +632,14 @@ void subscribe()
         s.choice_pending = true;
         log().write("coop_choice_asked", JsonObj());
     });
+    bus.post(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:OnSequenceStarted", [](HookCtx&, UFunction*) {
+        s.sequence_playing = true;
+        log().write("coop_sequence_started", JsonObj());
+    });
+    bus.post(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:OnSequenceFinished", [](HookCtx&, UFunction*) {
+        s.sequence_playing = false;
+        log().write("coop_sequence_finished", JsonObj());
+    });
     bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:EndDialogue", [](HookCtx&, UFunction*) { s.choice_pending = false; });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:ChangeMap", [](HookCtx&, UFunction*) {
         if (s.replaying || !s.active || !is_pilot() || !sharing()) return;   // pas pendant le chargement de l'instantané
@@ -667,6 +676,7 @@ void request_pilot()
 }
 bool narrative_active() { return s.local_narr; }
 bool choice_pending() { return s.choice_pending; }
+bool sequence_playing() { return s.sequence_playing; }
 bool remote_paused() { return s.remote_paused_game; }
 double follow_error() { return s.follow_error; }
 std::string take_world_enemy()

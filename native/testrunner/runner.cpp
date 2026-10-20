@@ -127,6 +127,7 @@ struct State {
     bool battle_from_explore = false;
     double follow_since = -1;
     double pause_until = -1;
+    double seq_since = -1;
     int battles = 0;
     std::vector<std::string> errors;
 };
@@ -862,7 +863,11 @@ void run_explore_step(float dt)
         ++g.metrics["zone_actions"];
         next_step("done");
     } else if (what == "skip_cinematic") {
-        if (game::playing_cinematic() && g.step_t >= st["after_s"].as_number(0)) {
+        // Seulement une fois la séquence commencée (OnSequenceStarted, ~4 s après le déclenchement) : passée plus tôt,
+        // la cinématique ne se terminait jamais (2026-10-20).
+        if (first) g.seq_since = -1;
+        if (explore::sequence_playing() && g.seq_since < 0) g.seq_since = g.step_t;
+        if (g.seq_since >= 0 && g.step_t - g.seq_since >= st["after_s"].as_number(0)) {
             if (!game::skip_cinematic()) { fail("skip_cinematic failed"); return; }
             ++g.metrics["cinematics_skipped"];
             next_step("skipped");
