@@ -9,6 +9,10 @@
 
 #include <Unreal/UClass.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
+#include <Unreal/Property/FStrProperty.hpp>
+#include <Unreal/Property/FNameProperty.hpp>
+#include <Unreal/Property/FMapProperty.hpp>
+#include <Unreal/Property/FSetProperty.hpp>
 #include <Unreal/Core/Containers/Map.hpp>
 #include <Unreal/Core/Containers/Set.hpp>
 
@@ -83,7 +87,7 @@ void flatten(FProperty* p, const void* v, const std::string& path, Leaves& out, 
     if (CastField<FNameProperty>(p)) { out.emplace_back(path, ue::to_utf8(static_cast<const FName*>(v)->ToString())); return; }
     if (CastField<FStrProperty>(p)) {
         const auto* s = static_cast<const FString*>(v);
-        const wchar_t* c = s->GetCharArray();
+        const wchar_t* c = **s;
         out.emplace_back(path, c ? ue::to_utf8(c) : std::string());
         return;
     }
