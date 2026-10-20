@@ -55,6 +55,9 @@ if (Test-Path $testSavesSrc) {
     Get-ChildItem $testSavesDst -File | ForEach-Object { $_.IsReadOnly = $false }
 }
 Log ("saves de test : " + ((Get-ChildItem $testSavesDst -File | ForEach-Object Name) -join ", "))
+# Emplacement coop (instantanés de l'hôte reçus ou envoyés, D12) : vidé avant chaque run.
+$coopSaves = Join-Path $savesRoot "e33coop"
+if (Test-Path $coopSaves) { Get-ChildItem $coopSaves -File | Remove-Item -Force }
 
 # 4. Mods
 $win64 = Join-Path $GameDir "Sandfall\Binaries\Win64"

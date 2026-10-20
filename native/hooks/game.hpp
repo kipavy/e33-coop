@@ -109,6 +109,45 @@ bool location(UObject* actor, double out[3]);
 std::vector<std::pair<std::string, int64_t>> mechanic_fields(UObject* hero);
 // Réécrit les champs qui diffèrent ; renvoie le nombre corrigé (failed : champs non réparables).
 int set_mechanic_fields(UObject* hero, const std::vector<std::pair<std::string, int64_t>>& wanted, int& failed);
+// --- Exploration et session (phase 4, D12) -----------------------------------------------------
+// Dossier des saves (%LOCALAPPDATA%\Sandfall\Saved\SaveGames).
+std::wstring saves_dir();
+// Instantané de la partie en cours : CreateSaveGameDataFromGameState -> BP_SaveGameObject_V8_C -> SaveGameToSlot(slot),
+// puis lecture du fichier. slot relatif à SaveGames (ex. "e33coop/snapshot").
+bool make_snapshot(const std::wstring& slot, std::vector<uint8_t>& bytes, std::string& err);
+// Pion d'exploration possédé par le contrôleur (K2_GetPawn, sans parcours d'objets) ; nul en combat ou au menu.
+UObject* explore_pawn();
+// Niveau courant (nom court du package du pion, ex. "Level_Camp_Main") ; vide sinon.
+std::string current_level();
+struct PawnState { double pos[3]{}; double yaw = 0; double vel[3]{}; };
+bool pawn_state(UObject* pawn, PawnState& out);
+bool move_pawn(UObject* pawn, double dir_x, double dir_y, double scale);   // AddMovementInput (monde)
+bool teleport_pawn(UObject* pawn, const double pos[3], double yaw);
+// Destination d'un changement de niveau en cours (GI : LevelDestinationAssetName, SpawnPointTag).
+bool map_destination(std::string& level, std::string& spawn_tag);
+bool change_map(const std::wstring& level, const std::wstring& spawn_tag);   // FL_jRPG_CustomFunctionLibrary_C:ChangeMapByAssetName
+// Interaction avec un objet du monde (BPI_Interaction:OnInteractionRequested) par le pion d'ici.
+bool interact(UObject* target, bool instant);
+// Dialogues
+UObject* dialogue_system();
+bool in_dialogue();
+int dialogue_choices();                  // nombre de réponses proposées (0 = aucune attente de choix)
+bool choose_dialogue(int index);
+// Cinématique en cours (BP_CinematicSystem.IsPlayingCinematic).
+bool playing_cinematic();
+// Combat d'exploration : paramètres du combat courant (CurrentBattleStartParams du gestionnaire).
+bool battle_params(std::string& encounter, std::string& enemy_global_id, int& engage);
+// Ennemi du monde par nom d'acteur ; plus proche du pion si name est vide.
+UObject* find_world_enemy(const std::string& name);
+// Lance le combat de cet ennemi du monde avec la rencontre imposée (SelectedEncounter) ; encounter vide = la sienne.
+bool start_world_battle(UObject* enemy, const std::wstring& encounter, int engage, std::string& err);
+// Pause du jeu entier (UGameplayStatics::SetGamePaused) et menu pause visible.
+bool set_game_paused(bool paused);
+bool pause_menu_visible();
+// Exécute l'action « au passage » d'une zone de déclenchement (BP_GameActionTriggerZone_C dont le nom contient name_part).
+bool run_zone_action(const std::string& name_part, std::string& err);
+bool skip_cinematic();
+
 // Visée libre
 inline const wchar_t* const FreeAimComp = L"/Game/Gameplay/FreeAim/BP_FreeAimShooterBattleComponent.BP_FreeAimShooterBattleComponent_C:";
 inline const wchar_t* const FreeAimProjectile = L"/Game/Gameplay/WorldSkills/BP_FreeAimProjectile_Base.BP_FreeAimProjectile_Base_C:";

@@ -1,0 +1,30 @@
+{
+  "name": "p4_session_host",
+  "description": "Phase 4 : vrai jeu hôte (pilote) face au faux client qui rejoint la partie. L'hôte envoie l'instantané de sa partie au point sûr, marche, lance un combat avec un ennemi du monde (fuite), change de niveau (camp), parle à Lune et choisit une réponse. Le faux client vérifie l'instantané (hash, en-tête GVAS) et compte les messages d'exploration. Produit l'enregistrement rejoué par p4_session_client.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 900,
+  "max_turns": 10,
+  "shots_every_s": 10,
+  "actions": [{ "type": "flee" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 3 },
+    { "do": "move", "dir": [1, 0], "s": 4 },
+    { "do": "move", "dir": [0, 1], "s": 3 },
+    { "do": "wait", "s": 2 },
+    { "do": "world_battle" },
+    { "do": "wait_world", "s": 3 },
+    { "do": "change_map", "level": "Level_Camp_Main" },
+    { "do": "wait", "s": 5 },
+    { "do": "wait_world", "s": 3 },
+    { "do": "move", "dir": [1, 0], "s": 2 },
+    { "do": "interact", "actor": "BP_Character_Camp_Lune_C" },
+    { "do": "choose", "index": 1, "timeout": 300 },
+    { "do": "wait_dialogue_end", "timeout": 120 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_session.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "world_battles": ">=1", "map_changes_published": ">=1", "interactions_published": ">=1", "choices_published": ">=1", "snapshot_errors": "0" }
+}

@@ -24,6 +24,7 @@
 #include "../net/recorder.hpp"
 #include "../net/transport.hpp"
 #include "../protocol/messages.hpp"
+#include "explore.hpp"
 #include "state.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -39,7 +40,7 @@ namespace e33::coop {
 
 namespace {
 
-constexpr const char* kModVersion = "0.3.0";
+constexpr const char* kModVersion = "0.4.0";
 constexpr double kDefenseTimeout = 3.0;
 constexpr double kComboTimeout = 3.0;
 
@@ -102,6 +103,7 @@ struct Battle {
     bool active = false;
     bool ending = false;                                   // fin de combat commencée (tirages des récompenses encore remplacés)
     bool finalized = false;
+    bool left = false;                                     // fuite : le dernier tour n'est pas comparable (l'hôte a pu en commencer un de plus)
     std::map<int, uint8_t> owner_by_spot;                  // emplacement de héros -> player_id
     // Actions des héros
     std::map<std::pair<uint32_t, int>, proto::ActionCommand> commands;   // (tour, emplacement) -> commande reçue
@@ -169,6 +171,7 @@ struct State {
     std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
     bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
+    bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     bool input_enabled = true;
     UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
     std::map<UObject*, int> removed_contexts;              // contextes d'entrée retirés pendant le blocage -> priorité
@@ -428,20 +431,24 @@ void handle(Peer& p, proto::Message& m)
             p.accepted = true;
             p.name = h->player_name;
             send_to(p, proto::Welcome{p.player_id, s.session_id});
+            explore::on_peer_accepted(p.player_id, h->join);
             log().write("session_join", JsonObj().add("player", h->player_name).add("player_id", static_cast<int>(p.player_id)));
             return;
         }
         if (!p.accepted) return;
+        if (explore::handle(p.player_id, m)) return;
         if (handle_battle_common(p, m)) return;
         if (std::get_if<proto::Bye>(&m)) {
             log().write("session_leave", JsonObj().add("player_id", static_cast<int>(p.player_id)));
             p.accepted = false;
+            explore::on_peer_left(p.player_id);
         }
         return;
     }
     // Client
     if (auto* w = std::get_if<proto::Welcome>(&m)) {
         s.accepted = true; s.my_player_id = w->player_id; s.session_id = w->session_id;
+        explore::set_player_id(w->player_id);
         log().write("session_welcome", JsonObj().add("player_id", static_cast<int>(w->player_id)));
         return;
     }
@@ -460,6 +467,7 @@ void handle(Peer& p, proto::Message& m)
         log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
         return;
     }
+    if (explore::handle(0, m)) return;
     if (handle_battle_common(p, m)) return;
     if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
         if (ts->battle_id == s.battle.id) s.battle.host_turns[ts->turn] = *ts;
@@ -666,9 +674,22 @@ void compare_draws(uint32_t turn)
         auto it = s.battle.stream_names.find(static_cast<uint32_t>(k >> 16));
         return it != s.battle.stream_names.end() ? it->second : std::to_string(k >> 16);
     };
+    // Nombre de tirages par flux de chaque côté : un tirage au-delà du dernier rang de l'autre côté vient d'un
+    // coup en plus (le nombre de coups d'une compétence varie d'un run à l'autre, même en solo : GAME-INTERNALS §15),
+    // pas d'un tirage faux. Compté à part (draw_count_diffs) ; l'état complet de l'hôte corrige ses effets.
+    std::map<uint32_t, uint16_t> mine_n, host_n;
+    for (auto& [k, v] : mine) { auto& n = mine_n[static_cast<uint32_t>(k >> 16)]; n = std::max<uint16_t>(n, static_cast<uint16_t>((k & 0xFFFF) + 1)); }
+    for (auto& [k, v] : host) { auto& n = host_n[static_cast<uint32_t>(k >> 16)]; n = std::max<uint16_t>(n, static_cast<uint16_t>((k & 0xFFFF) + 1)); }
+    auto tail = [](const std::map<uint32_t, uint16_t>& other, uint64_t k) {
+        auto it = other.find(static_cast<uint32_t>(k >> 16));
+        return (k & 0xFFFF) >= (it == other.end() ? 0u : it->second);
+    };
     for (auto& [k, v] : mine) {
         auto it = host.find(k);
-        if (it == host.end() || std::fabs(it->second - v) > 1e-9) {
+        if (it == host.end() && tail(host_n, k)) {
+            bump("draw_count_diffs");
+            log().write("coop_draw_count_diff", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("extra", "local"), turn);
+        } else if (it == host.end() || std::fabs(it->second - v) > 1e-9) {
             bump("draw_mismatches");
             log().write("coop_draw_mismatch", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("local", v)
                                                   .add("host_has", it != host.end()).add("host", it != host.end() ? it->second : 0.0), turn);
@@ -676,6 +697,11 @@ void compare_draws(uint32_t turn)
     }
     for (auto& [k, v] : host) {
         if (mine.count(k)) continue;
+        if (tail(mine_n, k)) {
+            bump("draw_count_diffs");
+            log().write("coop_draw_count_diff", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("extra", "host"), turn);
+            continue;
+        }
         bump("draw_mismatches");
         log().write("coop_draw_mismatch", JsonObj().add("stream", name(k)).add("rank", static_cast<int>(k & 0xFFFF)).add("local_has", false).add("host", v), turn);
     }
@@ -728,6 +754,19 @@ void host_turn_start(UObject* actor)
         bs.battle_id = b.id;
         bs.encounter = ue::to_utf8(game::last_encounter());
         for (auto& p : game::last_party()) bs.party.push_back(ue::to_utf8(p));
+        // Combat lancé depuis l'exploration (pas par le test runner) : rencontre et ennemi du monde réels (D12).
+        {
+            std::string enc, gid;
+            int engage = 0;
+            if (game::battle_params(enc, gid, engage) && gid != "E33CoopTest") {
+                bs.encounter = enc;
+                bs.enemy_global_id = gid;
+                bs.engage = static_cast<uint8_t>(engage);
+                bs.world_enemy = explore::take_world_enemy();
+                bs.party.clear();
+                bump("world_battles");
+            }
+        }
         b.rng_seed = s.fixed_seed ? *s.fixed_seed : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ b.id);
         bs.rng_seed = b.rng_seed;
         auto ps = game::players();
@@ -942,7 +981,7 @@ void finalize_battle(const char* why)
             bump("end_mismatches");
             log().write("coop_end_mismatch", JsonObj().add("local", b.local_end).add("host", b.host_end));
         }
-        compare_draws(b.turn);
+        if (!b.left) compare_draws(b.turn);
     }
     b.finalized = true;
     b.active = false;
@@ -1476,6 +1515,19 @@ void subscribe()
         // Sans victoire, pas de récompenses : la fin est traitée tout de suite.
         if (result != game::EndVictory) s.battle.end_flow_at = s.now;
     });
+
+    // Fuite : retour à l'exploration sans StartBattleEndFlow (vu le 2026-10-20) -> fin « neutre », même chemin.
+    bus.post(fn(game::path::CtrlWorld, L"ResumeExplorationOnBattleEnd"), [](HookCtx&, UFunction*) {
+        auto& b = s.battle;
+        if (!b.active || b.ending) return;
+        b.ending = true;
+        b.local_end = game::EndNeutral;
+        b.left = true;
+        if (s.role == Role::Host) broadcast(proto::BattleEnd{b.id, static_cast<uint8_t>(game::EndNeutral)});
+        bump("battles_left");
+        log().write("coop_battle_left", JsonObj().add("battle", b.id));
+        b.end_flow_at = s.now;
+    });
 }
 
 } // namespace
@@ -1491,6 +1543,16 @@ int connected_players()
 }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
 bool battle_finalized() { return s.battle.finalized; }
+void shutdown(const char* reason)
+{
+    if (s.role == Role::Solo) return;
+    for (auto& p : s.peers) if (p.accepted) send_to(p, proto::Bye{reason ? reason : ""});
+    for (int i = 0; i < 3; ++i) {
+        for (auto& p : s.peers) if (p.link) p.link->update(s.now + 0.3 * (i + 1));
+        Sleep(30);
+    }
+    log().write("session_shutdown", JsonObj().add("reason", reason ? reason : ""));
+}
 void set_local_aim(const double* point)
 {
     if (point) s.local_aim = std::array<double, 3>{point[0], point[1], point[2]};
@@ -1517,7 +1579,7 @@ void init()
     else if (r == L"client") s.role = Role::Client;
     else return;
 
-    for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_errors", "invalid_messages",
+    for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages",
                           "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
                           "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions"})
         s.counters[c] = 0;
@@ -1529,6 +1591,7 @@ void init()
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
+    if (arg(L"e33join") == L"1") s.want_join = true;
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     {
         std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
@@ -1571,9 +1634,17 @@ void init()
         h.gameplay_mods = s.gameplay_mods;
         h.player_name = "client";
         h.instance_id = GetTickCount64();
+        h.join = s.want_join;
         send_to(s.peers.front(), h);
     }
+    explore::Net net;
+    net.publish = [](const proto::Message& m, bool reliable) { publish(m, nullptr, reliable); };
+    net.send_to = [](uint8_t player, const proto::Message& m) { for (auto& p : s.peers) if (p.accepted && p.player_id == player) send_to(p, m); };
+    net.relay = [](const proto::Message& m, uint8_t origin, bool reliable) { for (auto& p : s.peers) if (p.accepted && p.player_id != origin) send_to(p, m, reliable); };
+    net.bump = [](const char* c, int n) { s.counters[c] += n; };
+    explore::init(s.role == Role::Host, s.want_join, net);
     subscribe();
+    explore::subscribe();
 }
 
 // Client : lance le combat reçu de l'hôte quand le monde local est chargé et stable depuis quelques secondes.
@@ -1590,7 +1661,22 @@ void start_pending_battle()
     if (s.world_ready_s < 5.0) return;
     const proto::BattleStart bs = *s.pending_start;
     std::string err;
-    if (!game::in_battle() && !game::trigger_battle(ue::from_utf8(bs.encounter), party_wide(bs.party), err)) {
+    bool started = game::in_battle();
+    if (started) {
+        // Notre pion a déjà engagé un combat (il suit le pilote) : ce doit être le même.
+        std::string enc, gid;
+        int engage = 0;
+        if (game::battle_params(enc, gid, engage) && enc != bs.encounter) {
+            bump("battle_encounter_mismatches");
+            log().write("coop_battle_encounter_mismatch", JsonObj().add("local", enc).add("host", bs.encounter));
+        }
+    } else if (!bs.world_enemy.empty()) {
+        if (UObject* enemy = game::find_world_enemy(bs.world_enemy)) started = game::start_world_battle(enemy, ue::from_utf8(bs.encounter), bs.engage, err);
+        else err = "world enemy not found: " + bs.world_enemy;
+        if (!started) log().write("coop_error", JsonObj().add("what", "start_world_battle: " + err));
+        else bump("world_battles");
+    }
+    if (!started && !game::trigger_battle(ue::from_utf8(bs.encounter), party_wide(bs.party), err)) {
         log().write("coop_error", JsonObj().add("what", "trigger_battle: " + err));
         s.next_trigger_try = s.now + 2.0;
         return;
@@ -1675,6 +1761,7 @@ void run_remote_action()
     }
     if (s.now - b.turn_started_at < s.action_delay_s) return;
     if (s.now - b.command_time[key] < s.replay_lag_s) return;
+    if (explore::remote_paused() || game::pause_menu_visible()) return;   // jeu en pause : l'action attend la reprise
     const proto::ActionCommand cmd = it->second;
     b.executed.insert(key);
     std::vector<UObject*> targets;
@@ -1723,6 +1810,7 @@ void tick(double dt)
     pump_network();
     if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
+    explore::tick(s.now);
     run_remote_action();
     // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
     if (s.fa_own.active && s.fa_own.have_point && s.now >= s.fa_own.next_aim_s) {

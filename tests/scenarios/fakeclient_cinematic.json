@@ -1,0 +1,10 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "0.4.0",
+  "gameplay_mods": [],
+  "join": true,
+  "session": true,
+  "narrative_echo": { "hold_s": 10 },
+  "expect": { "snapshots": "1", "narratives_started": ">=1", "narratives_finished": ">=1", "narratives_echoed": "2" }
+}

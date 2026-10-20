@@ -1,0 +1,44 @@
+// Session et exploration (phase 4, D12) : rejoindre une partie (instantané de l'hôte), pilote unique suivi par les
+// autres instances, interactions et choix de dialogue rejoués, transitions de niveau, barrière à la fin des
+// cinématiques et dialogues, pause partagée en combat. Le réseau reste dans coop.cpp (fonctions fournies ici).
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <string>
+
+#include "../protocol/messages.hpp"
+
+namespace e33::explore {
+
+struct Net {
+    std::function<void(const proto::Message&, bool reliable)> publish;            // hôte : à tous les clients ; client : à l'hôte
+    std::function<void(uint8_t player, const proto::Message&)> send_to;           // hôte : à un client
+    std::function<void(const proto::Message&, uint8_t origin, bool reliable)> relay;   // hôte : à tous sauf origin
+    std::function<void(const char* counter, int n)> bump;
+};
+
+void init(bool host, bool want_join, const Net& net);   // want_join : client qui rejoint la partie de l'hôte
+void set_player_id(uint8_t id);
+void on_peer_accepted(uint8_t player, bool wants_join);   // hôte
+void on_peer_left(uint8_t player);                        // hôte
+bool handle(uint8_t from, const proto::Message& m);       // true si le message est consommé ici
+void tick(double now);
+void subscribe();
+
+bool join_requested();        // client : -e33join=1
+bool joined();                // client : instantané chargé et monde prêt
+int joined_players();         // hôte : clients entrés dans la partie
+uint8_t pilot();
+bool is_pilot();
+void request_pilot();         // demande la main (touche F8, test runner)
+bool narrative_active();      // dialogue ou cinématique en cours ici
+bool choice_pending();        // question de dialogue posée ici, sans réponse
+bool sequence_playing();      // séquence de cinématique en cours (OnSequenceStarted … OnSequenceFinished)
+bool remote_paused();         // jeu mis en pause ici par la pause d'un autre joueur (combat)
+double follow_error();        // suiveur : dernier écart au pilote (u), -1 si inconnu
+// Dernier ennemi du monde qui a lancé un combat ici (nom d'acteur, engagement), pour BattleStart.
+std::string take_world_enemy();   // vide si le combat n'a pas été lancé par un ennemi du monde à l'instant
+int last_world_engage();
+
+} // namespace e33::explore

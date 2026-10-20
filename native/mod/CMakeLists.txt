@@ -8,6 +8,7 @@ add_library(${TARGET} SHARED
     ../hooks/game.cpp
     ../testrunner/runner.cpp
     ../sync/coop.cpp
+    ../sync/explore.cpp
     ../sync/state.cpp
     ../protocol/messages.cpp
     ../net/link.cpp

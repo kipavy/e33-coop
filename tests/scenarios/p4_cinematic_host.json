@@ -1,0 +1,18 @@
+{
+  "name": "p4_cinematic_host",
+  "description": "Phase 4 : cinématique avec barrière. Save TEST_A (Lumière, acte 3) : l'hôte lance l'action de la zone du boss Renoir (vraie cinématique), la regarde jusqu'au bout (≈ 5 min : impossible à passer, jamais vue dans cette save) ; le faux client la « regarde » 10 s de plus. L'hôte doit se mettre en pause (barrière) à la fin de sa cinématique ; le test s'arrête au début du combat de boss qui suit (le jeu lance ce combat malgré la pause : limite connue). Produit l'enregistrement rejoué par p4_cinematic_client.",
+  "save": "e33coop-test/TEST_A",
+  "timeout_s": 900,
+  "end_on_battle": true,
+  "shots_every_s": 5,
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 3 },
+    { "do": "zone_action", "zone": "1914046506" },
+    { "do": "wait", "until": "narratives_finished", "is": ">=1", "timeout": 420 },
+    { "do": "wait", "s": 30 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_cinematic.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "narratives_started": ">=1", "narratives_finished": ">=1", "barrier_waits": ">=1", "barrier_timeouts": "0" }
+}

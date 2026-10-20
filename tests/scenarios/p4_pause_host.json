@@ -1,0 +1,19 @@
+{
+  "name": "p4_pause_host",
+  "description": "Phase 4 : pause en combat. Combat d'exploration ; l'hôte ouvre son menu pause au 2e tour (3 s, diffusé au faux client), puis le faux client met en pause au 4e tour (3 s) : l'hôte doit se mettre en pause puis reprendre. Le héros attaque 3 fois puis fuit (« passer le tour » ne fait rien quand il est seul dans l'équipe).",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 600,
+  "max_turns": 20,
+  "pause_at_turn": 2,
+  "actions": [{ "type": "attack" }, { "type": "attack" }, { "type": "attack" }, { "type": "flee" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 2 },
+    { "do": "world_battle" },
+    { "do": "wait_world", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_pause.json", "--timeout", "600"] },
+  "expect": { "snapshots_sent": "1", "world_battles": ">=1", "pauses_opened": "1", "pauses_local": "1", "remote_pauses_applied": "1", "remote_pauses_released": "1" }
+}

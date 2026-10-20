@@ -1,4 +1,4 @@
-# Batterie de non-régression de la phase 3 : lance chaque scénario l'un après l'autre et résume.
+# Batterie de non-régression (phases 2 à 4) : lance chaque scénario l'un après l'autre et résume.
 #   battery.ps1 -Package <dossier e33coop-mod> [-Only p3_party_host,p3_party_client]
 # Les scénarios *_client rejouent les enregistrements commités (tests/recordings) : ils ne sont pas réécrits.
 param(
@@ -13,7 +13,10 @@ $all = @(
     "p3_freeaim_host", "p3_freeaim_client",
     "p3_defeat_host", "p3_defeat_client",
     "p3_resync_client",
-    "p3_three_host"
+    "p3_three_host",
+    "p4_session_host", "p4_session_client",
+    "p4_pilot_host", "p4_pause_host",
+    "p4_cinematic_host", "p4_cinematic_client"
 )
 $list = if ($Only) { $Only -split "," } else { $all }
 $results = @()

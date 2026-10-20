@@ -16,7 +16,8 @@ namespace e33::proto {
 // v2 : AiDraws ; v3 : graine de combat + Draws (D10) ;
 // v4 : modèle de rejeu symétrique (D11) : cibles (camp, emplacement), compétences/objets, ComboResult,
 //      défenses par héros relayées, StateSync (état complet), BattleRewards, équipe imposée, visée libre (FreeAimEvent).
-inline constexpr uint16_t kProtocolVersion = 4;
+// v5 : session et exploration (D12) : instantané de save, pilote, interactions, dialogues, transitions, barrière narrative, pause.
+inline constexpr uint16_t kProtocolVersion = 5;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
 enum class MsgType : uint16_t {
@@ -24,6 +25,8 @@ enum class MsgType : uint16_t {
     BattleStart = 20, TurnStart = 21, ActionCommand = 22,
     DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, Draws = 28,
     ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33,
+    SaveOffer = 40, SaveChunk = 41, JoinWait = 42, JoinReady = 43, PilotState = 44, PilotRequest = 45, PilotChange = 46,
+    WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52,
 };
 
 const char* type_name(MsgType t);
@@ -36,6 +39,7 @@ struct Hello {
     std::vector<std::string> gameplay_mods;   // autres mods de gameplay installés (triés)
     std::string player_name;
     uint64_t instance_id = 0;
+    bool join = false;                    // v5 : le client veut l'instantané de la partie de l'hôte (rejoindre)
 };
 struct Welcome {
     uint8_t player_id = 0;
@@ -63,6 +67,10 @@ struct BattleStart {
     std::vector<SpotOwner> owners;        // qui contrôle quel héros
     uint64_t rng_seed = 0;                // graine des tirages de gameplay (D10)
     std::vector<std::string> party;       // équipe imposée (noms internes) ; vide = équipe de la save
+    // v5 : combat lancé depuis l'exploration (vide = combat déclenché par le test runner)
+    std::string world_enemy;              // nom de l'acteur ennemi du monde (stable entre instances)
+    std::string enemy_global_id;          // EnemyGlobalID des paramètres de combat
+    uint8_t engage = 0;                   // E_jRPG_EngageTypes
 };
 struct TurnStart {
     uint32_t battle_id = 0;
@@ -163,9 +171,49 @@ struct FreeAimEvent {
     Unit target{ActorKind::Enemy, kAutoSpot};
 };
 
+// --- Session et exploration (v5, D12) ----------------------------------------------------------
+// Instantané de la partie de l'hôte (save complète) : annoncé puis envoyé par morceaux, dans l'ordre.
+inline constexpr uint32_t kMaxSaveSize = 16u * 1024u * 1024u;
+inline constexpr uint16_t kMaxChunk = 16000;
+struct SaveOffer {
+    uint32_t xfer = 0;
+    uint32_t size = 0;
+    uint64_t hash = 0;                    // FNV-1a 64 des octets
+    std::string level;                    // niveau de l'instantané (logs, vérification)
+};
+struct SaveChunk {
+    uint32_t xfer = 0;
+    uint32_t offset = 0;
+    std::vector<uint8_t> data;            // <= kMaxChunk octets
+};
+struct JoinWait { std::string reason; };  // hôte -> client : entrée au prochain point sûr (ex. "battle")
+struct JoinReady { uint32_t xfer = 0; std::string level; };   // client -> hôte : instantané chargé, monde prêt
+// Position du pilote, ~20 fois par seconde (non fiable). seq croissant : les paquets en retard sont ignorés.
+struct PilotState {
+    uint8_t pilot = 0;
+    uint32_t seq = 0;
+    std::string level;
+    double x = 0, y = 0, z = 0, yaw = 0;
+    double vx = 0, vy = 0, vz = 0;
+};
+struct PilotRequest { uint8_t player = 0; };        // un joueur demande la main
+struct PilotChange { uint8_t pilot = 0; };          // hôte -> tous : nouveau pilote
+// Interaction du pilote avec un objet du monde (PNJ, coffre, porte…), rejouée par les autres instances.
+struct WorldInteract { uint32_t seq = 0; std::string actor; bool instant = false; };
+struct DialogueChoice { uint32_t seq = 0; int32_t index = 0; };
+// Changement de niveau du pilote (niveau + point d'apparition).
+struct MapChange { uint32_t seq = 0; std::string level; std::string spawn_tag; };
+// Début / fin d'une cinématique ou d'un dialogue sur une instance (barrière : tout le monde attend tout le monde).
+enum class NarrativeKind : uint8_t { Dialogue = 0, Cinematic = 1 };
+struct NarrativeState { uint8_t player = 0; NarrativeKind kind = NarrativeKind::Dialogue; bool active = false; uint32_t seq = 0; };
+struct BarrierRelease { uint32_t seq = 0; };
+struct PauseState { uint8_t player = 0; bool paused = false; bool in_battle = false; };
+
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
                              DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,
-                             BattleRewards, FreeAimEvent>;
+                             BattleRewards, FreeAimEvent,
+                             SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
+                             WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).
