@@ -203,7 +203,7 @@ void on_complete(Inbound& in)
     }
 }
 
-void check()
+void check_builds()
 {
     const auto cur = current_hashes();
     if (cur.empty()) return;
@@ -313,7 +313,7 @@ void tick(double now)
     if (now < s.next_check) return;
     s.next_check = now + kCheckPeriod;
     if (!can_check()) return;
-    check();
+    check_builds();
 }
 
 void rebaseline()
