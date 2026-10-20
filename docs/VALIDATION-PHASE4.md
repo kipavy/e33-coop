@@ -6,16 +6,18 @@ Limite : un seul PC et un seul compte Steam, donc l'autre joueur est toujours le
 
 Durée : environ 18 minutes.
 
+État : batterie complète **pas repassée** (à ta demande). Verts sur ce code : `p4_session_host`, `p4_session_client`, `p4_pilot_host`, `p4_pause_host`, `p3_actions_client`. Le correctif du délai de barrière (10 min) n'a pas encore été revérifié par `p4_cinematic_client` (test 3 ci-dessous).
+
 ## Avant de commencer
 - Ferme le jeu s'il tourne. Ne touche pas au PC pendant le chargement (environ 1 min 30) : la fenêtre doit pouvoir prendre le focus.
 - `cd ~/dev/e33-coop`
-- Paquet : `.tools/artifacts/<BUILD>/e33coop-mod` (artefact CI déjà téléchargé, build du commit en tête de la branche `phase-4`).
+- Paquet : `.tools/artifacts/39439326222/e33coop-mod` (artefact CI déjà téléchargé, build du commit en tête de la branche `phase-4`).
 - Le lanceur réinstalle UE4SS et le mod, et repasse tes saves en lecture seule après copie. Pour rejouer normalement ensuite : `powershell -NoProfile -File tools/reset-env/vanilla.ps1`.
 - Tes saves ne sont jamais ouvertes en écriture : l'instantané de l'hôte est écrit dans `SaveGames\e33coop\`, un dossier à part, vidé avant chaque test.
 
 ## 1. Tu es l'hôte et le pilote (≈ 10 min, tu joues)
 ```powershell
-powershell -NoProfile -File tools/run-scenario/run-scenario.ps1 p4_manual_host -Package .tools/artifacts/<BUILD>/e33coop-mod
+powershell -NoProfile -File tools/run-scenario/run-scenario.ps1 p4_manual_host -Package .tools/artifacts/39439326222/e33coop-mod
 ```
 Save TEST_B (Vallons fleuris, Verso). Le faux client rejoint ta partie quelques secondes après le chargement : il reçoit l'instantané de ta partie et suit ton personnage. Le son est activé. Clique une fois dans la fenêtre au début.
 
@@ -29,7 +31,7 @@ Save TEST_B (Vallons fleuris, Verso). Le faux client rejoint ta partie quelques 
 
 ## 2. Tu es le client : rejoindre et suivre (≈ 3 min, tu regardes)
 ```powershell
-powershell -NoProfile -File tools/run-scenario/run-scenario.ps1 p4_session_client -Package .tools/artifacts/<BUILD>/e33coop-mod
+powershell -NoProfile -File tools/run-scenario/run-scenario.ps1 p4_session_client -Package .tools/artifacts/39439326222/e33coop-mod
 ```
 Ton jeu démarre au menu principal, puis rejoint la partie d'un hôte enregistré (rejeu de `p4_session_host`, au rythme réel).
 - [ ] Depuis le menu, la partie de l'hôte se charge toute seule (Vallons fleuris) en quelques secondes.
@@ -40,7 +42,7 @@ Ton jeu démarre au menu principal, puis rejoint la partie d'un hôte enregistr�
 
 ## 3. Cinématique avec barrière, côté client (≈ 6 min, tu regardes)
 ```powershell
-powershell -NoProfile -File tools/run-scenario/run-scenario.ps1 p4_cinematic_client -Package .tools/artifacts/<BUILD>/e33coop-mod
+powershell -NoProfile -File tools/run-scenario/run-scenario.ps1 p4_cinematic_client -Package .tools/artifacts/39439326222/e33coop-mod
 ```
 Save de l'hôte : TEST_A (Lumière, acte 3). L'hôte enregistré regarde la cinématique d'intro du boss Renoir (≈ 5 min, impossible à passer).
 - [ ] Après le chargement, ton jeu se **met en pause** : l'hôte est dans sa cinématique, tu ne peux pas avancer.
@@ -57,6 +59,6 @@ Pendant le test 2, appuie sur **F8** : ton jeu demande la main à l'hôte. Le fa
 
 ## Batterie automatique (pour info, ≈ 1 h, sans toi)
 ```powershell
-powershell -NoProfile -File tools/run-scenario/battery.ps1 -Package .tools/artifacts/<BUILD>/e33coop-mod
+powershell -NoProfile -File tools/run-scenario/battery.ps1 -Package .tools/artifacts/39439326222/e33coop-mod
 ```
 Les scénarios `p4_*_client` ont besoin des instantanés locaux `.tools/testsaves/p4_session_snapshot.sav` et `p4_cinematic_snapshot.sav`. Ils ne sont jamais versionnés, car ce sont des données de tes saves. S'ils manquent, `.tools/pair4.sh p4_session` (ou `p4_cinematic`) les régénère avec l'enregistrement.
