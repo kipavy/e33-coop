@@ -6,7 +6,7 @@
   "end_on_battle": true,
   "explore": [
     { "do": "wait", "until": "barrier_waits", "is": ">=1", "timeout": 600 },
-    { "do": "wait", "until": "barrier_releases", "is": ">=1", "timeout": 120 },
+    { "do": "wait", "until": "barrier_releases", "is": ">=1", "timeout": 420 },
     { "do": "wait", "s": 2 }
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],

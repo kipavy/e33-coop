@@ -32,7 +32,7 @@ constexpr const wchar_t* kCoopSlot = L"e33coop/host";               // client : 
 constexpr double kPilotPeriod = 0.05;                               // PilotState ~20 par seconde
 constexpr double kPollPeriod = 0.2;                                 // dialogues, cinématiques, menu pause
 constexpr double kTeleportDistance = 800;                           // écart au-delà duquel le suiveur est téléporté
-constexpr double kBarrierTimeout = 180;
+constexpr double kBarrierTimeout = 600;   // les cinématiques durent jusqu'à ~5 min (intro de Renoir : 295 s)
 
 uint64_t fnv64(const std::vector<uint8_t>& b)
 {
