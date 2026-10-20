@@ -1,0 +1,20 @@
+{
+  "name": "p4_session_client",
+  "description": "Phase 4 : vrai jeu client qui rejoint la partie du faux hôte (rejeu de p4_session_host au rythme enregistré). Le client reçoit l'instantané (fichier local .tools/testsaves, jamais versionné), le charge dans l'emplacement coop, suit le pilote, rejoue le combat avec l'ennemi du monde, suit le changement de niveau, l'interaction avec Lune et le choix de dialogue.",
+  "join": true,
+  "timeout_s": 1000,
+  "max_turns": 10,
+  "shots_every_s": 10,
+  "actions": [{ "type": "flee" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "until": "interactions_replayed", "is": ">=1", "timeout": 600 },
+    { "do": "wait", "until": "choices_replayed", "is": ">=1", "timeout": 300 },
+    { "do": "wait_dialogue_end", "timeout": 120 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p4_session_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p4_session_snapshot.sav", "--paced", "1", "--timeout", "1000"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "map_changes_followed": ">=1", "interactions_replayed": ">=1", "choices_replayed": ">=1",
+              "world_battles": ">=1", "interactions_missing": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
+}

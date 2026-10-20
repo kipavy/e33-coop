@@ -1514,6 +1514,18 @@ void subscribe()
         // Sans victoire, pas de récompenses : la fin est traitée tout de suite.
         if (result != game::EndVictory) s.battle.end_flow_at = s.now;
     });
+
+    // Fuite : retour à l'exploration sans StartBattleEndFlow (vu le 2026-10-20) -> fin « neutre », même chemin.
+    bus.post(fn(game::path::CtrlWorld, L"ResumeExplorationOnBattleEnd"), [](HookCtx&, UFunction*) {
+        auto& b = s.battle;
+        if (!b.active || b.ending) return;
+        b.ending = true;
+        b.local_end = game::EndNeutral;
+        if (s.role == Role::Host) broadcast(proto::BattleEnd{b.id, static_cast<uint8_t>(game::EndNeutral)});
+        bump("battles_left");
+        log().write("coop_battle_left", JsonObj().add("battle", b.id));
+        b.end_flow_at = s.now;
+    });
 }
 
 } // namespace

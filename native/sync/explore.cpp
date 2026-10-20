@@ -90,6 +90,7 @@ struct S {
     bool replaying = false;
     std::deque<proto::WorldInteract> interactions;
     std::deque<std::pair<proto::DialogueChoice, double>> choices;
+    bool choice_pending = false;                  // question posée (StartChoice), pas encore répondue
     // Narration (barrière) et pause
     double next_poll = 0;
     bool local_narr = false;
@@ -354,7 +355,7 @@ void replay_tick()
     }
     if (!s.choices.empty()) {
         auto& [dc, at] = s.choices.front();
-        if (game::dialogue_choices() > 0) {
+        if (s.choice_pending) {
             s.replaying = true;
             const bool ok = game::choose_dialogue(dc.index);
             s.replaying = false;
@@ -610,6 +611,7 @@ void subscribe()
         });
     }
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
+        s.choice_pending = false;
         if (s.replaying || !s.active || !sharing()) return;
         const int index = static_cast<int>(ue::read_param_int(ctx, f, STR("ChoiceIndex")).value_or(-1));
         if (!is_pilot()) {
@@ -622,6 +624,12 @@ void subscribe()
         bump("choices_published");
         log().write("coop_choice", JsonObj().add("index", index));
     });
+    // Question de dialogue : CurrentChoices reste vide pendant la question (vu le 2026-10-20), on suit StartChoice.
+    bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:StartChoice", [](HookCtx&, UFunction*) {
+        s.choice_pending = true;
+        log().write("coop_choice_asked", JsonObj());
+    });
+    bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:EndDialogue", [](HookCtx&, UFunction*) { s.choice_pending = false; });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:ChangeMap", [](HookCtx&, UFunction*) {
         if (s.replaying || !s.active || !is_pilot() || !sharing()) return;   // pas pendant le chargement de l'instantané
         std::string level, tag;
@@ -655,6 +663,7 @@ void request_pilot()
     else s.net.publish(proto::PilotRequest{s.me}, true);
 }
 bool narrative_active() { return s.local_narr; }
+bool choice_pending() { return s.choice_pending; }
 double follow_error() { return s.follow_error; }
 const std::string& last_world_enemy() { return s.last_enemy; }
 int last_world_engage() { return s.last_engage; }

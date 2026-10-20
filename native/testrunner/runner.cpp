@@ -813,7 +813,7 @@ void run_explore_step(float dt)
         ++g.metrics["interactions"];
         next_step("done");
     } else if (what == "choose") {
-        if (game::dialogue_choices() > 0 && g.step_t > 1.0) {
+        if (explore::choice_pending() && g.step_t > 1.0) {
             if (!game::choose_dialogue(static_cast<int>(st["index"].as_int(0)))) { fail("choose failed"); return; }
             ++g.metrics["choices"];
             next_step("done");

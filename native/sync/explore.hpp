@@ -33,6 +33,7 @@ uint8_t pilot();
 bool is_pilot();
 void request_pilot();         // demande la main (touche F8, test runner)
 bool narrative_active();      // dialogue ou cinématique en cours ici
+bool choice_pending();        // question de dialogue posée ici, sans réponse
 double follow_error();        // suiveur : dernier écart au pilote (u), -1 si inconnu
 // Dernier ennemi du monde qui a lancé un combat ici (nom d'acteur, engagement), pour BattleStart.
 const std::string& last_world_enemy();

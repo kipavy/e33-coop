@@ -44,6 +44,12 @@ public:
         // Les octets d'une save ne sont jamais enregistrés (repo public, données du joueur) : le faux hôte
         // renvoie l'instantané depuis un fichier local, annoncé par la ligne SaveOffer (taille + hash).
         if (std::holds_alternative<proto::SaveChunk>(m)) return;
+        const double now_t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
+        // Positions du pilote (~20 par seconde, non fiables) : 5 par seconde suffisent au rejeu.
+        if (std::holds_alternative<proto::PilotState>(m)) {
+            if (now_t - last_pilot_t_ < 0.2) return;
+            last_pilot_t_ = now_t;
+        }
         wire::Writer w;
         proto::encode(m, w);
         const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
@@ -54,6 +60,7 @@ public:
 private:
     std::ofstream f_;
     std::chrono::steady_clock::time_point t0_;
+    double last_pilot_t_ = -1;
 };
 
 } // namespace e33::net
