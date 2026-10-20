@@ -365,7 +365,7 @@ void cycle_owner(size_t index)
     broadcast(character_owner_map());
     bump("owner_reassignments");
     ui::toast("owner_changed", {ch, player_name(next)});
-    ui::toast("owners_summary", {owners_summary()}, 8.0);
+    if (const std::string sum = owners_summary(); !sum.empty()) ui::toast("owners_summary", {sum}, 8.0);   // vide : partie pas encore chargée (arrivée du client)
     log().write("coop_owner_reassigned", JsonObj().add("character", ch).add("player", static_cast<int>(next)));
 }
 
@@ -753,7 +753,7 @@ void handle(Peer& p, proto::Message& m)
             s.owner_overrides.clear();
             for (auto& o : ow->owners) s.owner_overrides[o.character] = o.player_id;
             bump("owner_maps_received");
-            ui::toast("owners_summary", {owners_summary()}, 8.0);
+            if (const std::string sum = owners_summary(); !sum.empty()) ui::toast("owners_summary", {sum}, 8.0);   // vide : partie pas encore chargée (arrivée du client)
             log().write("coop_character_owners", JsonObj().raw("msg", proto::to_json(m)));
             return;
         }
