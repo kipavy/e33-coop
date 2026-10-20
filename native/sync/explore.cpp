@@ -445,6 +445,10 @@ constexpr const wchar_t* kLocomotionContexts[] = {
     L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_Locomotion_Crouch.IMC_Locomotion_Crouch",
     L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_Locomotion_CustomMovement.IMC_Locomotion_CustomMovement",
     L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_Locomotion_WorldMapCharacter.IMC_Locomotion_WorldMapCharacter",
+    // Phase 5 : interactions du suiveur (touche d'interaction : PNJ, coffres…) et choix de dialogue pendant une question
+    // (la réponse vient du pilote). Indices 4 et 5 : voir context_wanted_locked.
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_UI_Exploration.IMC_UI_Exploration",
+    L"/Game/Gameplay/Inputs/InputMappingProfiles/IMC_UI_Dialogue.IMC_UI_Dialogue",
 };
 
 UObject* input_sub()
@@ -470,22 +474,32 @@ std::optional<int> context_priority(UObject* sub, UObject* imc)
     return static_cast<int>(has.out_int(STR("OutFoundPriority")));
 }
 
+bool context_wanted_locked(size_t i)
+{
+    const bool follower = sharing() && !is_pilot() && !game::in_battle();
+    if (i < 4) return follower && game::explore_pawn();   // déplacement
+    if (i == 4) return follower && game::explore_pawn() && !game::in_dialogue();   // interactions
+    return follower && s.choice_pending;                  // choix de dialogue
+}
+
 void movement_lock_tick()
 {
-    const bool lock = sharing() && !is_pilot() && !game::in_battle() && game::explore_pawn();
-    if (!lock && s.removed_locomotion.empty()) return;
+    bool any = false;
+    for (size_t i = 0; i < std::size(kLocomotionContexts); ++i) any = any || context_wanted_locked(i);
+    if (!any && s.removed_locomotion.empty()) return;
     UObject* sub = input_sub();
     if (!sub) return;
     for (size_t i = 0; i < std::size(kLocomotionContexts); ++i) {
         UObject* imc = locomotion_context(i);
         if (!imc) continue;
         const auto prio = context_priority(sub, imc);
+        const bool lock = context_wanted_locked(i);
         if (lock && prio) {
             ue::Call rm(sub, STR("RemoveMappingContext"));
             if (!rm) return;
             rm.set_object(STR("MappingContext"), imc).invoke();
             if (!s.removed_locomotion.count(imc)) s.removed_locomotion[imc] = *prio;
-            bump("movement_contexts_removed");
+            bump(i < 4 ? "movement_contexts_removed" : "follower_actions_blocked");
             log().write("coop_movement_context", JsonObj().add("removed", ue::to_utf8(imc->GetName())).add("priority", *prio));
         } else if (!lock) {
             auto it = s.removed_locomotion.find(imc);
