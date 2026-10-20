@@ -95,6 +95,7 @@ struct FreeAimOwner {                                      // visée libre d'un 
     double next_aim_s = 0;
     bool in_raycast = false;
     bool have_point = false, raycast_point = false;
+    bool seen_aiming = false;                              // IsAiming vu vrai : sa retombée = fin de visée
     std::array<double, 3> point{}, shot_point{};
 };
 
@@ -618,7 +619,15 @@ bool handle_battle_common(Peer& p, proto::Message& m)
         if (fa->battle_id != b.id) return true;
         if (s.role == Role::Host && owner_of_spot(fa->spot) != p.player_id) return true;
         const std::pair<uint32_t, int> key{fa->turn, fa->spot};
-        if (fa->kind == proto::FreeAimKind::Start) { b.fa_events[key].clear(); b.fa_arrival[key] = s.now; }
+        if (fa->kind == proto::FreeAimKind::Start) {
+            b.fa_events[key].clear();
+            b.fa_arrival[key] = s.now;
+            // Nouvelle visée du même héros dans le même tour (il est sorti puis revenu) : le rejeu repart de zéro.
+            if (s.fa_rep.key == key && s.fa_rep.started) {
+                if (!s.fa_rep.done) { ue::Call c(game::battle_manager(), STR("CancelFreeAimFromUI")); if (c) c.invoke(); }
+                s.fa_rep = FreeAimReplay{key};
+            }
+        }
         b.fa_events[key].push_back(*fa);
         if (s.role == Role::Host) publish(*fa, &p, fa->kind != proto::FreeAimKind::Aim);
         return true;
@@ -2325,6 +2334,18 @@ bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
             return true;
         }
     }
+    // Filet : le propriétaire a déjà choisi une autre action et tous ses événements de visée sont joués, sans fin
+    // reçue (ancienne version, chemin de sortie inconnu) : on ferme la visée ici pour ne pas bloquer son action.
+    if (r.next >= events.size() && b.commands.count(key)) {
+        if (ue::get_bool(ue::get_object(hero, STR("BP_FreeAimShooterBattleComponent")), STR("IsAiming"))) {
+            ue::Call c(game::battle_manager(), STR("CancelFreeAimFromUI"));
+            if (c) c.invoke();
+        }
+        r.done = true;
+        r.have_override = false;
+        bump("free_aim_closed_by_action");
+        log().write("coop_free_aim_end", JsonObj().add("spot", key.second).add("kind", -1).add("raycasts", static_cast<int>(r.raycasts)), b.turn);
+    }
     return true;
 }
 
@@ -2483,6 +2504,25 @@ void tick(double dt)
     explore::tick(s.now);
     builds::tick(s.now);
     run_remote_action();
+    // Visée libre d'un héros d'ici quittée par un autre chemin que CancelFreeAimFromUI / EndFreeAim (touche
+    // d'annulation de la visée : vu le 2026-10-21, l'autre joueur restait en visée et l'action suivante attendait).
+    if (s.fa_own.active) {
+        const bool aiming = ue::get_bool(ue::get_object(game::find_unit(true, s.fa_own.spot), STR("BP_FreeAimShooterBattleComponent")), STR("IsAiming"));
+        if (aiming) s.fa_own.seen_aiming = true;
+        else if (s.fa_own.seen_aiming) {
+            proto::FreeAimEvent e;
+            e.battle_id = s.battle.id;
+            e.turn = s.battle.turn;
+            e.spot = static_cast<uint8_t>(s.fa_own.spot);
+            e.kind = proto::FreeAimKind::Cancel;
+            e.t_ms = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count());
+            e.x = s.fa_own.point[0]; e.y = s.fa_own.point[1]; e.z = s.fa_own.point[2];
+            publish(e);
+            s.fa_own.active = false;
+            bump("free_aim_exits_detected");
+            log().write("coop_free_aim_local_exit", JsonObj().add("spot", s.fa_own.spot), s.battle.turn);
+        }
+    }
     // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
     if (s.fa_own.active && s.fa_own.have_point && s.now >= s.fa_own.next_aim_s) {
         s.fa_own.next_aim_s = s.now + 0.05;
