@@ -943,6 +943,11 @@ void tick(float dt)
         }
         // Fuite : le jeu revient à l'exploration sans StartBattleEndFlow.
         if (g.battle_from_explore && g.frame % 30 == 0 && g.phase_t > 5.0 && !game::in_battle() && game::explore_pawn()) { resume_explore("left battle"); break; }
+        // Menu pause ouvert (le nôtre ou celui d'un autre joueur : jeu en pause) : aucune action avant la reprise.
+        if (g.pending_action_at >= 0 && g.t >= g.pending_action_at && (g.pause_until > 0 || explore::remote_paused() || game::pause_menu_visible())) {
+            g.pending_action_at = g.t + 0.5;
+            break;
+        }
         if (g.pending_action_at >= 0 && g.t >= g.pending_action_at) {
             g.pending_action_at = -1;
             if (game::current_character() != g.pending_actor) { log().write("tr_action_skipped", JsonObj().add("why", "actor changed"), g.turn); break; }

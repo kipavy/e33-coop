@@ -1761,6 +1761,7 @@ void run_remote_action()
     }
     if (s.now - b.turn_started_at < s.action_delay_s) return;
     if (s.now - b.command_time[key] < s.replay_lag_s) return;
+    if (explore::remote_paused() || game::pause_menu_visible()) return;   // jeu en pause : l'action attend la reprise
     const proto::ActionCommand cmd = it->second;
     b.executed.insert(key);
     std::vector<UObject*> targets;

@@ -664,6 +664,7 @@ void request_pilot()
 }
 bool narrative_active() { return s.local_narr; }
 bool choice_pending() { return s.choice_pending; }
+bool remote_paused() { return s.remote_paused_game; }
 double follow_error() { return s.follow_error; }
 const std::string& last_world_enemy() { return s.last_enemy; }
 int last_world_engage() { return s.last_engage; }
