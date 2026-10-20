@@ -1,6 +1,8 @@
 #include "link.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <random>
 
 namespace e33::net {
 
@@ -14,7 +16,68 @@ void put_u16(std::vector<uint8_t>& v, uint16_t x) { v.push_back(static_cast<uint
 void put_u32(std::vector<uint8_t>& v, uint32_t x) { for (int i = 0; i < 4; ++i) v.push_back(static_cast<uint8_t>(x >> (8 * i))); }
 uint16_t get_u16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
 uint32_t get_u32(const uint8_t* p) { return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24); }
+
+uint32_t new_epoch()
+{
+    static std::mt19937 rng([] {
+        std::random_device rd;
+        return rd() ^ static_cast<uint32_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    }());
+    uint32_t e = 0;
+    while (e == 0) e = rng();
+    return e;
+}
+
+std::vector<uint8_t> header(uint32_t epoch, uint32_t ack)
+{
+    std::vector<uint8_t> v;
+    v.reserve(kHeaderSize);
+    put_u32(v, proto::kMagic);
+    put_u16(v, proto::kProtocolVersion);
+    put_u32(v, epoch);
+    put_u32(v, ack);
+    v.push_back(0);
+    return v;
+}
 } // namespace
+
+Link::Link(Transport& t, std::string peer) : t_(t), peer_(std::move(peer)), epoch_(new_epoch()) {}
+
+uint32_t Link::packet_epoch(const uint8_t* data, size_t len)
+{
+    if (len < kHeaderSize || get_u32(data) != proto::kMagic || get_u16(data + 4) != proto::kProtocolVersion) return 0;
+    return get_u32(data + 6);
+}
+
+uint16_t Link::packet_protocol(const uint8_t* data, size_t len)
+{
+    if (len < 6 || get_u32(data) != proto::kMagic) return 0;
+    return get_u16(data + 4);
+}
+
+std::vector<uint8_t> Link::busy_packet(uint32_t epoch) { return header(epoch, kBusyAck); }
+std::vector<uint8_t> Link::version_packet(uint32_t epoch) { return header(epoch, 0); }
+
+bool Link::timed_out(double now, double timeout_s, double busy_max_s) const
+{
+    if (last_heard_ < 0) return false;
+    if (now - last_heard_ <= timeout_s) return false;
+    // Seulement des battements « occupé » depuis : vivant, mais pas indéfiniment.
+    if (last_busy_ >= 0 && now - last_busy_ <= timeout_s && now - last_heard_ <= busy_max_s) return false;
+    return true;
+}
+
+void Link::reset_exchange()
+{
+    next_id_ = 1;
+    recv_contiguous_ = 0;
+    out_of_order_.clear();
+    outbox_.clear();
+    unreliable_.clear();
+    frag_buf_.clear();
+    frag_total_ = 0;
+    ++resets_;
+}
 
 void Link::send(const proto::Message& m, bool reliable)
 {
@@ -76,16 +139,33 @@ void Link::on_datagram(const uint8_t* data, size_t len, double now)
     wire::Reader r(data, len);
     const uint32_t magic = r.u32();
     const uint16_t proto_v = r.u16();
+    if (r.ok() && magic == proto::kMagic && proto_v != proto::kProtocolVersion) {
+        // Autre version du mod : signalé une fois (refus avec un message clair), jamais interprété.
+        if (!mismatch_reported_) { mismatch_reported_ = true; if (on_protocol_mismatch) on_protocol_mismatch(proto_v); }
+        invalid("protocol version " + std::to_string(proto_v));
+        return;
+    }
+    const uint32_t epoch = r.u32();
     const uint32_t ack = r.u32();
     const uint8_t n = r.u8();
-    if (!r.ok() || magic != proto::kMagic) { invalid("bad packet header"); return; }
-    if (proto_v != proto::kProtocolVersion) { invalid("protocol version " + std::to_string(proto_v)); return; }
+    if (!r.ok() || magic != proto::kMagic || epoch == 0) { invalid("bad packet header"); return; }
+    if (remote_epoch_ != 0 && epoch != remote_epoch_) {
+        // Le pair a redémarré : on repart de zéro des deux côtés (il ne connaît plus nos numéros, ni nous les siens).
+        reset_exchange();
+        remote_epoch_ = epoch;
+        if (on_remote_reset) on_remote_reset();
+    }
+    remote_epoch_ = epoch;
+    if (ack == kBusyAck) {
+        if (n == 0) last_busy_ = now;   // battement « occupé » : vivant, thread de jeu bloqué
+        return;
+    }
     last_heard_ = now;
 
     // Acquittement cumulatif
     while (!outbox_.empty() && outbox_.front().id <= ack) outbox_.pop_front();
 
-    size_t pos = 4 + 2 + 4 + 1;
+    size_t pos = kHeaderSize;
     for (uint8_t i = 0; i < n; ++i) {
         // msg_id u32 | type u16 | longueur u16 | charge utile
         if (len - pos < 8) { invalid("truncated packet"); return; }
@@ -143,6 +223,7 @@ void Link::flush(double now, bool)
         wire::Writer w;
         w.u32(proto::kMagic);
         w.u16(proto::kProtocolVersion);
+        w.u32(epoch_);
         w.u32(recv_contiguous_);
         const size_t count_pos = w.size();
         w.u8(0);

@@ -8,6 +8,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include "../common/jsonlog.hpp"
@@ -15,6 +16,7 @@
 #include "../hooks/hookbus.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
+#include "../ui/ui.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -49,7 +51,8 @@ std::string hex64(uint64_t h)
     return s;
 }
 
-enum class JoinState { None, Pending, Waiting, Sent, Joined };
+// InGame : client accepté sans « rejoindre » (tests de combat) : il participe d'emblée, sans instantané.
+enum class JoinState { None, Pending, Waiting, Sent, Joined, InGame };
 
 struct PeerJoin { JoinState state = JoinState::None; double since = 0; bool wait_sent = false; };
 
@@ -109,6 +112,11 @@ struct S {
     int last_engage = 0;
     double last_enemy_at = -1;
     std::map<UObject*, int> removed_locomotion;   // suiveur : contextes de déplacement retirés -> priorité
+    // Pause partagée (raisons) et robustesse (phase 5)
+    std::set<std::string> pause_reasons;
+    bool pause_applied = false;
+    double last_chunk_at = -1;                    // client : réception de l'instantané en cours
+    bool ended = false;
 } s;
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
@@ -181,6 +189,16 @@ void host_join_tick()
 
 void client_join_tick()
 {
+    if (s.cj == S::ClientJoin::Receiving && s.now - s.last_chunk_at > 60.0) {
+        // Instantané interrompu (aucun morceau depuis 60 s) : on le redemande.
+        bump("snapshot_timeouts");
+        log().write("coop_snapshot_timeout", JsonObj().add("received", s.inbound ? static_cast<int64_t>(s.inbound->received) : -1));
+        s.inbound.reset();
+        s.cj = S::ClientJoin::None;
+        s.last_chunk_at = s.now;
+        s.net.publish(proto::ResyncRequest{"snapshot timeout"}, true);
+        return;
+    }
     if (s.cj == S::ClientJoin::Loading) {
         // Charger depuis le menu principal ou depuis une partie en cours (même chemin que les saves de test).
         if (!game::gi() || game::map_change_in_progress()) return;
@@ -206,6 +224,7 @@ void client_join_tick()
         const std::string level = game::current_level();
         s.net.publish(proto::JoinReady{s.joined_xfer, level}, true);
         bump("joins_completed");
+        ui::clear_status("session");
         log().write("coop_joined", JsonObj().add("xfer", s.joined_xfer).add("level", level).add("wait_s", s.now - s.cj_since));
     }
 }
@@ -219,6 +238,7 @@ void on_chunk(const proto::SaveChunk& c)
         return;
     }
     std::copy(c.data.begin(), c.data.end(), in->data.begin() + c.offset);
+    s.last_chunk_at = s.now;
     in->received += static_cast<uint32_t>(c.data.size());
     if (in->received < in->size) return;
     const uint64_t h = fnv64(in->data);
@@ -460,6 +480,23 @@ void movement_lock_tick()
 
 // --- Barrière narrative et pause ------------------------------------------------------------------
 
+// Pause du jeu entier tenue par une ou plusieurs raisons. Le jeu peut l'enlever de lui-même (fin de cinématique :
+// ResumeGameAfterCinematic) : elle est alors réappliquée, sinon le combat qui suit une cinématique démarre quand même.
+void apply_pause()
+{
+    const bool want = !s.pause_reasons.empty();
+    if (want != s.pause_applied) {
+        if (game::set_game_paused(want)) s.pause_applied = want;
+        return;
+    }
+    if (want && !game::is_game_paused()) {
+        game::set_game_paused(true);
+        bump("pause_reasserted");
+        log().write("coop_pause_reasserted", JsonObj().add("reasons", static_cast<int64_t>(s.pause_reasons.size())));
+    }
+}
+
+
 bool others_in_narrative()
 {
     for (auto& [p, a] : s.remote_narr) if (a && p != s.me) return true;
@@ -488,14 +525,17 @@ void poll_tick()
     // cinématique enchaîne sur un combat (boss) : personne ne commence le combat avant les autres.
     const bool hold = !narr && others_in_narrative();
     if (hold && !s.barrier_paused) {
-        s.barrier_paused = game::set_game_paused(true);
+        s.pause_reasons.insert("barrier");
+        s.barrier_paused = true;
+        ui::set_status("wait", "waiting_players");
         s.barrier_since = s.now;
         bump("barrier_waits");
         log().write("coop_barrier_hold", JsonObj());
     } else if (s.barrier_paused && (!hold || s.now - s.barrier_since > kBarrierTimeout)) {
         if (hold) { bump("barrier_timeouts"); s.remote_narr.clear(); }
-        game::set_game_paused(false);
+        s.pause_reasons.erase("barrier");
         s.barrier_paused = false;
+        ui::clear_status("wait");
         bump("barrier_releases");
         log().write("coop_barrier_release", JsonObj().add("waited_s", s.now - s.barrier_since).add("timeout", hold));
     }
@@ -509,15 +549,18 @@ void poll_tick()
         log().write("coop_pause_local", JsonObj().add("paused", paused).add("in_battle", battle));
     }
     // Pause d'un autre joueur en combat : tout le monde en pause.
-    bool any_remote = false;
-    for (auto& [p, v] : s.remote_pause) if (v && p != s.me) any_remote = true;
-    const bool want_remote_pause = any_remote && game::in_battle() && !paused;
+    int by = -1;
+    for (auto& [p, v] : s.remote_pause) if (v && p != s.me) by = p;
+    const bool want_remote_pause = by >= 0 && game::in_battle() && !paused;
+    if (want_remote_pause) ui::set_status("pause", "paused_by", {s.net.name_of ? s.net.name_of(static_cast<uint8_t>(by)) : std::to_string(by)});
+    else ui::clear_status("pause");
     if (want_remote_pause != s.remote_paused_game) {
-        game::set_game_paused(want_remote_pause);
+        if (want_remote_pause) s.pause_reasons.insert("remote_pause"); else s.pause_reasons.erase("remote_pause");
         s.remote_paused_game = want_remote_pause;
         bump(want_remote_pause ? "remote_pauses_applied" : "remote_pauses_released");
         log().write("coop_pause_remote", JsonObj().add("paused", want_remote_pause));
     }
+    apply_pause();
 }
 
 bool sharing() { return s.host ? joined_players() > 0 : (!s.want_join || s.cj == S::ClientJoin::Joined); }
@@ -547,10 +590,40 @@ void set_player_id(uint8_t id) { s.me = id; }
 void on_peer_accepted(uint8_t player, bool wants_join)
 {
     if (!s.host) return;
-    if (!wants_join) return;
+    if (!wants_join) { s.peers[player] = PeerJoin{JoinState::InGame, s.now, false}; return; }
     s.peers[player] = PeerJoin{JoinState::Pending, s.now, false};
     log().write("coop_join_requested", JsonObj().add("player", static_cast<int>(player)));
 }
+
+bool peer_in_game(uint8_t player)
+{
+    auto it = s.peers.find(player);
+    return it != s.peers.end() && (it->second.state == JoinState::Joined || it->second.state == JoinState::InGame);
+}
+
+void on_session_end()
+{
+    s.ended = true;
+    s.pause_reasons.clear();
+    apply_pause();
+    s.barrier_paused = false;
+    s.remote_paused_game = false;
+    s.interactions.clear();
+    s.choices.clear();
+    s.last_pilot.reset();
+    s.pilot = s.me;            // plus de pilote distant : le déplacement local est rendu (movement_lock_tick)
+    movement_lock_tick();
+    ui::clear_status("pause");
+    ui::clear_status("wait");
+}
+
+void hold_pause(const char* reason, bool on)
+{
+    if (on) s.pause_reasons.insert(reason); else s.pause_reasons.erase(reason);
+    apply_pause();
+}
+
+bool pause_held(const char* reason) { return s.pause_reasons.count(reason) > 0; }
 
 void on_peer_left(uint8_t player)
 {
@@ -570,11 +643,27 @@ bool handle(uint8_t from, const proto::Message& m)
         in.data.assign(o->size, 0);
         s.inbound = std::move(in);
         s.cj = S::ClientJoin::Receiving;
+        s.last_chunk_at = s.now;
+        ui::set_status("session", "loading_host_game");
         log().write("coop_snapshot_offer", JsonObj().add("xfer", o->xfer).add("size", o->size).add("hash", hex64(o->hash)).add("level", o->level));
         return true;
     }
     if (auto* c = std::get_if<proto::SaveChunk>(&m)) { if (!s.host) on_chunk(*c); return true; }
-    if (auto* w = std::get_if<proto::JoinWait>(&m)) { log().write("coop_join_waiting", JsonObj().add("reason", w->reason)); bump("join_waits"); return true; }
+    if (auto* w = std::get_if<proto::JoinWait>(&m)) {
+        log().write("coop_join_waiting", JsonObj().add("reason", w->reason));
+        bump("join_waits");
+        // Écran d'attente : l'hôte est en combat (ou en cinématique, en chargement) ; entrée dès son prochain point sûr.
+        ui::set_status("session", w->reason == "battle" ? "waiting_battle_end" : "joining");
+        return true;
+    }
+    if (std::get_if<proto::ResyncRequest>(&m)) {
+        if (!s.host) return true;
+        // Le client recharge un instantané : il ne participe plus jusqu'à son JoinReady.
+        s.peers[from] = PeerJoin{JoinState::Pending, s.now, false};
+        bump("resyncs_requested");
+        log().write("coop_resync_requested", JsonObj().add("player", static_cast<int>(from)));
+        return true;
+    }
     if (auto* r = std::get_if<proto::JoinReady>(&m)) {
         if (!s.host) return true;
         auto& pj = s.peers[from];
@@ -639,6 +728,7 @@ bool handle(uint8_t from, const proto::Message& m)
 void tick(double now)
 {
     if (!s.active) return;
+    if (s.ended) return;
     s.now = now;
     if (s.host) host_join_tick();
     else client_join_tick();

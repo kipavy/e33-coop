@@ -16,12 +16,19 @@ struct Net {
     std::function<void(uint8_t player, const proto::Message&)> send_to;           // hôte : à un client
     std::function<void(const proto::Message&, uint8_t origin, bool reliable)> relay;   // hôte : à tous sauf origin
     std::function<void(const char* counter, int n)> bump;
+    std::function<std::string(uint8_t player)> name_of;                          // nom affiché d'un joueur
 };
 
 void init(bool host, bool want_join, const Net& net);   // want_join : client qui rejoint la partie de l'hôte
 void set_player_id(uint8_t id);
 void on_peer_accepted(uint8_t player, bool wants_join);   // hôte
 void on_peer_left(uint8_t player);                        // hôte
+bool peer_in_game(uint8_t player);                        // hôte : client entré dans la partie (ou session sans « rejoindre »)
+void on_session_end();                                    // client : session finie (entrées et pause rendues)
+// Pause du jeu entier partagée entre plusieurs raisons (barrière narrative, pause d'un autre joueur, démarrage de
+// combat coordonné) : le jeu est en pause tant qu'une raison la tient, et elle est réappliquée si le jeu l'enlève.
+void hold_pause(const char* reason, bool on);
+bool pause_held(const char* reason);
 bool handle(uint8_t from, const proto::Message& m);       // true si le message est consommé ici
 void tick(double now);
 void subscribe();

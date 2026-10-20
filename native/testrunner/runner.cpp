@@ -85,6 +85,7 @@ struct Scenario {
     bool join = false;                    // client : rejoindre la partie de l'hôte (instantané) au lieu de charger "save"
     int pause_at_turn = 0;                // ouvre le menu pause au début de ce tour (3 s), puis le referme (phase 4)
     bool end_on_battle = false;           // exploration : le test se termine (vert) quand un combat commence
+    bool end_on_session_end = false;      // client : le test se termine quand la session est finie et le menu principal atteint (phase 5)
     std::vector<json::Value> explore;     // étapes d'exploration (phase 4) : voir run_explore_step
 };
 
@@ -109,6 +110,9 @@ struct State {
     int damage_events = 0;
     double pending_action_at = -1;
     UObject* pending_actor = nullptr;
+    int planned_turn = -1;                // dernier tour (g.turn) dont l'action d'un héros d'ici a été programmée
+    double session_end_t = -1;
+    bool triggered = false;               // étape "trigger" : combat déjà déclenché
     // QTE offensifs joués par de vrais appuis
     std::vector<std::string> combo_plan;
     int combo_window = 0;
@@ -198,6 +202,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.join = v["join"].as_bool(false);
     s.pause_at_turn = static_cast<int>(v["pause_at_turn"].as_int(0));
     s.end_on_battle = v["end_on_battle"].as_bool(false);
+    s.end_on_session_end = v["end_on_session_end"].as_bool(false);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
     if (s.save.empty() && !s.join) { err = "scenario needs save (or join)"; return false; }
     if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
@@ -600,6 +605,7 @@ void subscribe()
             ++g.player_turns;
             g.pending_actor = ch;
             if (!g.sc.manual) g.pending_action_at = g.t + g.sc.action_delay_s;
+            g.planned_turn = g.turn;
         }
     });
 
@@ -748,6 +754,7 @@ void subscribe()
 //   {"do":"zone_action","zone":"<nom>"}  action « au passage » d'une zone de déclenchement (cinématique, combat…)
 //   {"do":"skip_cinematic","after_s":5}   passe la cinématique en cours (après after_s s dans l'étape)
 //   {"do":"wait_key"}                     validation en jeu : attend la touche F9
+//   {"do":"trigger","players":1}          combat du scénario (encounter, party) dès que "players" clients sont connectés
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -764,6 +771,7 @@ UObject* find_interactable(const std::string& prefix)
 
 void next_step(const char* why)
 {
+    g.triggered = false;
     const auto& st = g.sc.explore[g.step];
     log().write("tr_step_done", JsonObj().add("step", static_cast<int64_t>(g.step)).add("do", st["do"].as_string("")).add("why", why).add("t", g.step_t));
     if (st["check"].is_object()) {
@@ -796,7 +804,7 @@ void resume_explore(const char* why)
     set_phase(Phase::Explore);
     if (g.step < g.sc.explore.size()) {
         const std::string what = g.sc.explore[g.step]["do"].as_string("");
-        if (what == "battle" || what == "world_battle") next_step(why);
+        if (what == "battle" || what == "world_battle" || what == "trigger") next_step(why);
     }
 }
 
@@ -844,7 +852,13 @@ void run_explore_step(float dt)
         if (!game::change_map(ue::from_utf8(st["level"].as_string()), ue::from_utf8(st["spawn"].as_string("")))) { fail("change_map failed"); return; }
         ++g.metrics["map_changes"];
         next_step("requested");
-    } else if (what == "world_battle" || what == "battle") {
+    } else if (what == "world_battle" || what == "battle" || what == "trigger") {
+        // "trigger" : combat du scénario (encounter, party), une fois "players" joueurs dans la partie (phase 5).
+        if (what == "trigger" && !g.triggered) {
+            if (coop::connected_players() < st["players"].as_int(0)) return;
+            if (!game::trigger_battle(g.sc.encounter, g.sc.party, err)) { fail("trigger: " + err); return; }
+            g.triggered = true;
+        }
         if (what == "world_battle" && first) {
             UObject* e = game::find_world_enemy(st["enemy"].as_string(""));
             if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
@@ -919,6 +933,13 @@ void tick(float dt)
     ++g.frame;
     if (!g.errors.empty()) { finish(false, g.errors.front()); return; }
     if (g.t > g.sc.timeout_s) { fail(std::string("timeout in phase ") + phase_name(g.phase)); return; }
+    // Fin de session (hôte parti, refus) : le jeu revient au menu principal ; le scénario conclut alors.
+    if (g.sc.end_on_session_end && coop::session_ended()) {
+        if (g.session_end_t < 0) g.session_end_t = g.t;
+        if (game::main_menu() && g.t - g.session_end_t > 2.0) { ++g.metrics["back_to_title"]; finish(true, "session ended, back to title"); return; }
+        if (g.t - g.session_end_t > 60.0) { finish(true, "session ended (title not reached)"); return; }
+        return;
+    }
     // Appuis de QTE programmés (temps réel)
     if (!g.presses.empty() && Clock::now() >= g.presses.front()) {
         g.presses.erase(g.presses.begin());
@@ -975,13 +996,26 @@ void tick(float dt)
         // Fuite : le jeu revient à l'exploration sans StartBattleEndFlow.
         if (g.battle_from_explore && g.frame % 30 == 0 && g.phase_t > 5.0 && !game::in_battle() && game::explore_pawn()) { resume_explore("left battle"); break; }
         // Menu pause ouvert (le nôtre ou celui d'un autre joueur : jeu en pause) : aucune action avant la reprise.
-        if (g.pending_action_at >= 0 && g.t >= g.pending_action_at && (g.pause_until > 0 || explore::remote_paused() || game::pause_menu_visible())) {
+        // Héros repris à un joueur parti pendant son tour (phase 5) : le « joueur » de l'hôte le joue.
+        if (g.pending_action_at < 0 && g.planned_turn != g.turn && !g.sc.manual) {
+            UObject* cur = game::current_character();
+            if (cur && game::is_player(cur) && coop::active() && coop::controls_spot(game::spot(cur)) && !coop::action_forced(game::spot(cur)) &&
+                !ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) {
+                g.planned_turn = g.turn;
+                g.pending_actor = cur;
+                g.pending_action_at = g.t + g.sc.action_delay_s;
+                ++g.metrics["takeover_turns"];
+                log().write("tr_takeover_turn", JsonObj().add("actor", game::char_class(cur)), g.turn);
+            }
+        }
+        if (g.pending_action_at >= 0 && g.t >= g.pending_action_at && (g.pause_until > 0 || explore::remote_paused() || game::pause_menu_visible() || coop::holding())) {
             g.pending_action_at = g.t + 0.5;
             break;
         }
         if (g.pending_action_at >= 0 && g.t >= g.pending_action_at) {
             g.pending_action_at = -1;
             if (game::current_character() != g.pending_actor) { log().write("tr_action_skipped", JsonObj().add("why", "actor changed"), g.turn); break; }
+            if (coop::action_forced(game::spot(g.pending_actor))) { log().write("tr_action_skipped", JsonObj().add("why", "forced by the host (turn timer)"), g.turn); break; }
             play_turn(g.pending_actor);
         }
         break;

@@ -17,7 +17,10 @@ namespace e33::proto {
 // v4 : modèle de rejeu symétrique (D11) : cibles (camp, emplacement), compétences/objets, ComboResult,
 //      défenses par héros relayées, StateSync (état complet), BattleRewards, équipe imposée, visée libre (FreeAimEvent).
 // v5 : session et exploration (D12) : instantané de save, pilote, interactions, dialogues, transitions, barrière narrative, pause.
-inline constexpr uint16_t kProtocolVersion = 5;
+// v6 : robustesse (phase 5) : époque du lien (reconnexion), battement « occupé », propriétaires réattribués en combat
+//      (Owners), démarrage de combat coordonné (BattleReady), joueurs (Roster), hash d'exploration (WorldHash) et
+//      resynchro (ResyncRequest), minuteur de tour (BattleStart.turn_timer_s, ActionCommand.forced).
+inline constexpr uint16_t kProtocolVersion = 6;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
 enum class MsgType : uint16_t {
@@ -27,6 +30,7 @@ enum class MsgType : uint16_t {
     ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33,
     SaveOffer = 40, SaveChunk = 41, JoinWait = 42, JoinReady = 43, PilotState = 44, PilotRequest = 45, PilotChange = 46,
     WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52,
+    Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
 };
 
 const char* type_name(MsgType t);
@@ -71,6 +75,7 @@ struct BattleStart {
     std::string world_enemy;              // nom de l'acteur ennemi du monde (stable entre instances)
     std::string enemy_global_id;          // EnemyGlobalID des paramètres de combat
     uint8_t engage = 0;                   // E_jRPG_EngageTypes
+    uint16_t turn_timer_s = 0;            // v6 : minuteur de tour (0 = aucun, réglage par défaut)
 };
 struct TurnStart {
     uint32_t battle_id = 0;
@@ -88,6 +93,7 @@ struct ActionCommand {
     std::string secondary;                // FName de la compétence ou de l'objet (vide pour l'attaque)
     std::vector<Unit> targets;
     std::vector<uint8_t> combo;           // résultats de QTE déjà connus (faux client) : bit0 réussi, bit1 parfait
+    bool forced = false;                  // v6 : action imposée par l'hôte (minuteur de tour écoulé)
 };
 // Résultat d'une fenêtre de QTE offensif, résolu chez le propriétaire du héros (seq : n° de fenêtre du héros dans le tour).
 // Les autres instances rejouent un vrai appui au même instant de la fenêtre (press, en millièmes de sa durée).
@@ -209,11 +215,28 @@ struct NarrativeState { uint8_t player = 0; NarrativeKind kind = NarrativeKind::
 struct BarrierRelease { uint32_t seq = 0; };
 struct PauseState { uint8_t player = 0; bool paused = false; bool in_battle = false; };
 
+// --- Robustesse (v6, phase 5) -----------------------------------------------------------------
+// Hôte -> clients : propriétaires des héros du combat en cours, après une déconnexion (l'hôte reprend les héros du
+// joueur parti) ou une réattribution.
+struct Owners { uint32_t battle_id = 0; std::vector<SpotOwner> owners; };
+// Client -> hôte : ce combat a commencé ici (premier tour). L'hôte attend tout le monde avant de jouer son premier tour.
+struct BattleReady { uint32_t battle_id = 0; uint8_t player = 0; };
+// Hôte -> clients : joueurs de la session (indicateurs « tour de X », « pause demandée par X »).
+struct RosterEntry { uint8_t player = 0; std::string name; };
+struct Roster { std::vector<RosterEntry> players; };
+// État d'exploration résumé (or, objets, drapeaux, objets du monde utilisés…) : hôte -> clients au point sûr. seq : n° de
+// la dernière interaction / du dernier choix publiés, pour comparer au même point de la partie.
+struct HashPart { std::string name; uint64_t value = 0; };
+struct WorldHash { uint32_t seq = 0; std::string level; std::vector<HashPart> parts; };
+// Client -> hôte : mon état d'exploration diffère du sien, renvoyer un instantané au prochain point sûr.
+struct ResyncRequest { std::string reason; };
+
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
                              DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,
                              BattleRewards, FreeAimEvent,
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
-                             WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState>;
+                             WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
+                             Owners, BattleReady, Roster, WorldHash, ResyncRequest>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

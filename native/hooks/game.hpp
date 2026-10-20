@@ -144,6 +144,8 @@ bool start_world_battle(UObject* enemy, const std::wstring& encounter, int engag
 // Pause du jeu entier (UGameplayStatics::SetGamePaused) et menu pause visible.
 bool set_game_paused(bool paused);
 bool pause_menu_visible();
+bool is_game_paused();             // UGameplayStatics::IsGamePaused
+bool back_to_title();              // contrôleur : BackToTitleMenu (retour au menu principal)
 // Exécute l'action « au passage » d'une zone de déclenchement (BP_GameActionTriggerZone_C dont le nom contient name_part).
 bool run_zone_action(const std::string& name_part, std::string& err);
 bool skip_cinematic();

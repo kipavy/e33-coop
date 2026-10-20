@@ -1,5 +1,6 @@
-// Session coop dans le mod : réseau (UDP derrière net::Transport) + synchro du combat (D8, D10, D11).
-// Activée par -e33role=host|client (+ -e33port=7777, -e33connect=ip:port).
+// Session coop dans le mod : réseau (UDP derrière net::Transport) + synchro du combat (D8, D10, D11) + robustesse
+// (phase 5 : départs et retours de joueurs, fin de session, démarrage de combat coordonné, minuteur de tour).
+// Activée par -e33role=host|client (+ -e33port=7777, -e33connect=ip:port, -e33name=, -e33turntimer=N, -e33lang=fr|en).
 #pragma once
 
 #include <cstdint>
@@ -20,6 +21,14 @@ int connected_players();     // hôte : clients acceptés ; client : 1 si accept
 bool session_ok();           // connecté et accepté (ou solo)
 // Fin de combat traitée (récompenses comparées, derniers tirages vérifiés) : le test runner peut conclure.
 bool battle_finalized();
+// Hôte : premier tour d'un combat en attente des autres joueurs (démarrage coordonné, jeu en pause).
+bool holding();
+// Client : session terminée (hôte parti ou injoignable, refus de version) ; hôte : retour au menu principal.
+bool session_ended();
+// Action de ce héros pour le tour courant imposée par l'hôte (minuteur de tour écoulé) : le joueur n'agit plus.
+bool action_forced(int spot);
+// Nom affiché d'un joueur (« vous » pour soi).
+std::string name_of(uint8_t player);
 // Fin de session propre (fin de test, sortie) : Bye à tous les pairs, envoyé immédiatement.
 void shutdown(const char* reason);
 // Test runner : point visé par le « joueur » simulé pendant une visée libre d'un héros d'ici (nullptr = aucun).

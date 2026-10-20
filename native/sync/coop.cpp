@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -9,9 +10,11 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -24,6 +27,7 @@
 #include "../net/recorder.hpp"
 #include "../net/transport.hpp"
 #include "../protocol/messages.hpp"
+#include "../ui/ui.hpp"
 #include "explore.hpp"
 #include "state.hpp"
 
@@ -40,15 +44,26 @@ namespace e33::coop {
 
 namespace {
 
-constexpr const char* kModVersion = "0.4.0";
+constexpr const char* kModVersion = "0.5.0";
 constexpr double kDefenseTimeout = 3.0;
 constexpr double kComboTimeout = 3.0;
 
+constexpr double kLinkTimeout = 15.0;      // silence total -> pair perdu
+constexpr double kBusyMax = 300.0;         // pair seulement « occupé » (chargement interminable) -> perdu
+constexpr double kHandshakeTimeout = 30.0; // hôte : connexion sans Hello valide
+constexpr double kClientHandshakeTimeout = 90.0;   // client : pas de réponse de l'hôte (il peut être en plein chargement)
+constexpr double kReadyTimeout = 600.0;    // hôte : attente des autres au début d'un combat (cinématique de boss : ~5 min)
+constexpr uint8_t kMaxClients = 2;         // 3 joueurs au plus
+
 struct Peer {
     std::unique_ptr<net::Link> link;
-    uint8_t player_id = 0;
+    uint8_t player_id = 0xFF;              // hôte : attribué à l'acceptation du Hello (plus petit libre)
     bool accepted = false;
+    bool wants_join = false;
     std::string name;
+    double created_at = 0;
+    std::string drop;                      // non vide : à retirer à la fin de la pompe réseau (raison)
+    double drop_at = -1;                   // retrait différé (refus : laisser partir le Reject)
 };
 
 using TurnSpotSeq = std::tuple<uint32_t, int, uint16_t>;   // (tour, emplacement, n°)
@@ -142,6 +157,14 @@ struct Battle {
     int host_end = -1;
     double end_flow_at = -1;                               // fin sans victoire : clôture différée (tick), jamais bloquante dans le flux de fin
     std::optional<proto::BattleRewards> host_rewards;
+    // Démarrage coordonné (hôte) : clients qui ont commencé ce combat ; jeu en pause tant qu'il en manque.
+    std::set<uint8_t> ready;
+    bool hold = false;
+    double hold_since = 0;
+    bool ready_sent = false;                               // client
+    // Minuteur de tour (option, 0 = aucun)
+    uint16_t turn_timer_s = 0;
+    std::set<std::pair<uint32_t, int>> forced;             // actions imposées par l'hôte (minuteur écoulé)
 };
 
 struct State {
@@ -179,6 +202,17 @@ struct State {
     FreeAimOwner fa_own;                                   // visée d'un héros d'ici
     FreeAimReplay fa_rep;                                  // visée rejouée d'un héros d'un autre joueur
     std::optional<std::array<double, 3>> local_aim;        // test runner : point visé par le « joueur » (set_local_aim)
+    // Session (phase 5)
+    std::string my_name;
+    std::map<uint8_t, std::string> roster;                 // joueurs connus (nom affiché)
+    bool ended = false;                                    // client : session terminée (hôte parti, refus…)
+    std::string end_key;                                   // texte affiché (clé de traduction)
+    double ended_at = -1;
+    bool title_requested = false;
+    double hello_at = 0;
+    bool takeover = false;                                 // hôte : héros repris, entrées locales à rendre
+    uint16_t turn_timer_s = 0;                             // hôte : -e33turntimer=N (0 = aucun, par défaut)
+    std::set<std::string> version_rejected;                // adresses d'un autre protocole déjà refusées
 };
 
 State s;
@@ -252,11 +286,59 @@ std::vector<std::string> read_gameplay_mods()
 }
 
 void send_to(Peer& p, const proto::Message& m, bool reliable = true) { if (p.link) p.link->send(m, reliable); }
-void broadcast(const proto::Message& m) { for (auto& p : s.peers) if (p.accepted) send_to(p, m); }
+// Pair qui participe à la partie : accepté, et entré (instantané chargé) s'il a demandé à rejoindre. Un joueur qui
+// charge encore l'instantané (ou attend la fin d'un combat pour entrer) ne reçoit pas les messages de jeu.
+bool in_game(const Peer& p) { return p.accepted && p.drop.empty() && (s.role == Role::Client || explore::peer_in_game(p.player_id)); }
+void broadcast(const proto::Message& m) { for (auto& p : s.peers) if (in_game(p)) send_to(p, m); }
 // Hôte : à tous les clients sauf l'émetteur ; client : à l'hôte.
 void publish(const proto::Message& m, const Peer* origin = nullptr, bool reliable = true)
 {
-    for (auto& p : s.peers) if (p.accepted && &p != origin) send_to(p, m, reliable);
+    for (auto& p : s.peers) if (in_game(p) && &p != origin) send_to(p, m, reliable);
+}
+
+std::string player_name(uint8_t id)
+{
+    if (id == s.my_player_id && s.role != Role::Solo) return ui::text("you");
+    auto it = s.roster.find(id);
+    if (it != s.roster.end() && !it->second.empty()) return it->second;
+    return id == 0 ? ui::text("host") : "Joueur " + std::to_string(id + 1);
+}
+
+// --- Battement « occupé » --------------------------------------------------------------------------
+// Pendant un chargement de niveau, le thread de jeu ne tourne plus pendant 30 à 60 s : un thread à part envoie alors
+// à chaque pair un paquet « occupé » (net::Link::busy_packet), pour qu'il ne nous croie pas partis.
+struct Heartbeat {
+    std::mutex mu;
+    std::vector<std::pair<std::string, uint32_t>> targets;   // adresse, époque de notre lien vers elle
+    std::atomic<int64_t> last_tick_ms{0};
+    std::atomic<bool> started{false};
+} hb;
+
+int64_t steady_ms() { return std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count(); }
+
+void heartbeat_targets()
+{
+    std::lock_guard lk(hb.mu);
+    hb.targets.clear();
+    for (auto& p : s.peers) if (p.link && p.drop.empty()) hb.targets.emplace_back(p.link->peer(), p.link->epoch());
+}
+
+void heartbeat_start()
+{
+    if (hb.started.exchange(true)) return;
+    std::thread([] {
+        for (;;) {
+            Sleep(250);
+            const int64_t last = hb.last_tick_ms.load();
+            if (last == 0 || steady_ms() - last < 750) continue;   // thread de jeu vivant : rien à faire
+            std::vector<std::pair<std::string, uint32_t>> t;
+            { std::lock_guard lk(hb.mu); t = hb.targets; }
+            for (auto& [peer, epoch] : t) {
+                const auto pkt = net::Link::busy_packet(epoch);
+                s.transport->send(peer, pkt.data(), pkt.size());
+            }
+        }
+    }).detach();
 }
 
 uint8_t owner_of_spot(int spot)
@@ -307,35 +389,103 @@ void check_hash(uint32_t turn)
 // --- Réseau ------------------------------------------------------------------------------
 
 void handle(Peer& p, proto::Message& m);
+void on_player_left(uint8_t player, const std::string& name, const std::string& why);
+void end_session(const std::string& key, const std::string& detail);
+void turn_indicator(const proto::Unit& u);
+void set_local_input(bool enabled, const char* why, bool local_turn = false);
+
+void wire_link(net::Link& l)
+{
+    const bool host = s.role == Role::Host;
+    l.on_invalid = [](const std::string& why) { bump("invalid_messages"); log().write("net_invalid", JsonObj().add("why", why)); };
+    l.on_sent = [host](const proto::Message& m, bool) { s.recorder.write(host ? "h2c" : "c2h", m); log().write("net_send", JsonObj().raw("msg", proto::to_json(m))); };
+    l.on_delivered = [host](const proto::Message& m) { s.recorder.write(host ? "c2h" : "h2c", m); log().write("net_recv", JsonObj().raw("msg", proto::to_json(m))); };
+}
+
+// Retire les pairs marqués (départ, silence, redémarrage, refus) : l'hôte reprend leurs héros.
+void sweep_peers()
+{
+    bool changed = false;
+    for (size_t i = 0; i < s.peers.size();) {
+        Peer& p = s.peers[i];
+        if (p.drop.empty() || (p.drop_at >= 0 && s.now < p.drop_at)) { ++i; continue; }
+        if (p.link) p.link->update(s.now);   // derniers messages (Reject, Bye)
+        const bool was_player = p.accepted;
+        const uint8_t id = p.player_id;
+        const std::string name = p.name, why = p.drop;
+        log().write("session_peer_removed", JsonObj().add("peer", p.link ? p.link->peer() : "").add("player_id", static_cast<int>(id)).add("why", why));
+        s.peers.erase(s.peers.begin() + static_cast<std::ptrdiff_t>(i));
+        changed = true;
+        if (was_player && s.role == Role::Host) on_player_left(id, name, why);
+    }
+    if (changed) heartbeat_targets();
+}
 
 void pump_network()
 {
-    if (!s.transport) return;
+    if (!s.transport || s.ended) return;
     net::Datagram d;
     while (s.transport->poll(d)) {
         Peer* peer = nullptr;
-        for (auto& p : s.peers) if (p.link && p.link->peer() == d.peer) peer = &p;
-        if (!peer && s.role == Role::Host) {
-            if (s.peers.size() >= 2) { log().write("net_ignored", JsonObj().add("peer", d.peer).add("why", "session full")); continue; }
-            Peer np;
-            np.link = std::make_unique<net::Link>(*s.transport, d.peer);
-            np.player_id = static_cast<uint8_t>(s.peers.size() + 1);
-            s.peers.push_back(std::move(np));
-            peer = &s.peers.back();
-            Peer* pp = peer;
-            pp->link->on_invalid = [](const std::string& why) { bump("invalid_messages"); log().write("net_invalid", JsonObj().add("why", why)); };
-            pp->link->on_sent = [](const proto::Message& m, bool) { s.recorder.write("h2c", m); log().write("net_send", JsonObj().raw("msg", proto::to_json(m))); };
-            pp->link->on_delivered = [](const proto::Message& m) { s.recorder.write("c2h", m); log().write("net_recv", JsonObj().raw("msg", proto::to_json(m))); };
-            log().write("net_peer", JsonObj().add("peer", d.peer).add("player_id", static_cast<int>(pp->player_id)));
+        for (auto& p : s.peers) if (p.link && p.link->peer() == d.peer && p.drop.empty()) peer = &p;
+        if (s.role == Role::Host) {
+            // Même adresse, nouvelle époque : le client a redémarré (nouveau processus, Steam : même compte). L'ancien
+            // joueur est parti ; le nouveau se présente comme n'importe quel arrivant (Hello, puis instantané).
+            const uint32_t ep = net::Link::packet_epoch(d.data.data(), d.data.size());
+            if (peer && ep && peer->link->remote_epoch() && ep != peer->link->remote_epoch()) {
+                peer->drop = "restarted";
+                bump("peer_restarts");
+                peer = nullptr;
+                sweep_peers();
+            }
+            if (!peer) {
+                const uint16_t pv = net::Link::packet_protocol(d.data.data(), d.data.size());
+                if (pv == 0) { log().write("net_ignored", JsonObj().add("peer", d.peer).add("why", "not an E33Coop packet")); continue; }
+                if (pv != proto::kProtocolVersion) {
+                    // Autre version du mod : on répond avec notre version (son jeu affiche l'écart), sans créer de pair.
+                    const auto pkt = net::Link::version_packet(1);
+                    s.transport->send(d.peer, pkt.data(), pkt.size());
+                    if (s.version_rejected.insert(d.peer).second) {
+                        bump("sessions_rejected");
+                        log().write("session_reject", JsonObj().add("peer", d.peer).add("reason", static_cast<int>(proto::RejectReason::ProtocolMismatch))
+                                                         .add("detail", "protocole hôte " + std::to_string(proto::kProtocolVersion) + " / client " + std::to_string(pv)));
+                    }
+                    continue;
+                }
+                Peer np;
+                np.link = std::make_unique<net::Link>(*s.transport, d.peer);
+                np.created_at = s.now;
+                wire_link(*np.link);
+                s.peers.push_back(std::move(np));
+                peer = &s.peers.back();
+                heartbeat_targets();
+                log().write("net_peer", JsonObj().add("peer", d.peer));
+            }
         }
         if (!peer) { log().write("net_ignored", JsonObj().add("peer", d.peer).add("why", "unknown peer")); continue; }
         peer->link->on_datagram(d.data.data(), d.data.size(), s.now);
     }
-    for (auto& p : s.peers) {
+    for (size_t i = 0; i < s.peers.size(); ++i) {
         proto::Message m;
-        while (p.link && p.link->pop(m)) handle(p, m);
-        if (p.link) p.link->update(s.now);
+        while (s.peers[i].link && s.peers[i].drop.empty() && s.peers[i].link->pop(m)) handle(s.peers[i], m);
+        if (s.ended) return;
+        Peer& p = s.peers[i];
+        if (!p.link) continue;
+        p.link->update(s.now);
+        // Silence : le pair est parti (jeu fermé, réseau coupé). Un pair qui n'a jamais répondu est un intrus ou une
+        // adresse erronée : retiré au bout du même délai.
+        if (p.drop.empty() && (p.link->timed_out(s.now, kLinkTimeout, kBusyMax) || (p.link->last_heard() < 0 && s.now - p.created_at > (s.role == Role::Host ? kHandshakeTimeout : kClientHandshakeTimeout)))) {
+            if (s.role == Role::Host) {
+                p.drop = "timeout";
+                bump("peer_timeouts");
+            } else {
+                end_session(p.link->last_heard() < 0 ? "host_unreachable" : "host_lost", "");
+                return;
+            }
+        }
+        if (s.role == Role::Host && !p.accepted && p.drop.empty() && s.now - p.created_at > kHandshakeTimeout) p.drop = "no hello";
     }
+    sweep_peers();
 }
 
 // Pompe le réseau en bloquant le game thread jusqu'à cond() ou expiration (utilisé dans les hooks).
@@ -346,8 +496,9 @@ bool wait_for(Cond cond, double timeout_s)
     const double base = s.now;
     while (!cond()) {
         const double elapsed = (GetTickCount64() - start) / 1000.0;
-        if (elapsed > timeout_s) return false;
+        if (elapsed > timeout_s || s.ended) return false;
         s.now = base + elapsed;
+        hb.last_tick_ms = steady_ms();
         pump_network();
         Sleep(0);   // Sleep(1) dure ~15 ms sous Windows : on cède juste la main
     }
@@ -364,6 +515,13 @@ bool handle_battle_common(Peer& p, proto::Message& m)
             log().write("net_rejected_msg", JsonObj().add("why", "action for a hero this player does not own").raw("msg", proto::to_json(m)));
             return true;
         }
+        if (b.forced.count({ac->turn, ac->actor_spot})) {
+            // Minuteur écoulé : l'hôte a déjà imposé l'action de ce tour (la commande du joueur s'est croisée avec la sienne).
+            bump("turn_timer_races");
+            log().write("coop_forced_action_conflict", JsonObj().raw("msg", proto::to_json(m)), b.turn);
+            return true;
+        }
+        if (ac->forced) b.forced.insert({ac->turn, ac->actor_spot});
         b.commands[{ac->turn, ac->actor_spot}] = *ac;
         b.command_time[{ac->turn, ac->actor_spot}] = s.now;
         // Résultats de QTE déjà connus (faux client) : rangés comme des ComboResult, avec les instants d'appui
@@ -407,42 +565,78 @@ bool handle_battle_common(Peer& p, proto::Message& m)
     return false;
 }
 
+uint8_t free_player_id()
+{
+    for (uint8_t id = 1; id <= kMaxClients; ++id) {
+        bool used = false;
+        for (auto& p : s.peers) if (p.accepted && p.drop.empty() && p.player_id == id) used = true;
+        if (!used) return id;
+    }
+    return 0xFF;
+}
+
+void send_roster()
+{
+    proto::Roster r;
+    r.players.push_back({0, s.my_name});
+    for (auto& p : s.peers) if (p.accepted && p.drop.empty()) r.players.push_back({p.player_id, p.name});
+    s.roster.clear();
+    for (auto& e : r.players) s.roster[e.player] = e.name;
+    for (auto& p : s.peers) if (p.accepted && p.drop.empty()) send_to(p, r);
+}
+
+void reject(Peer& p, proto::RejectReason reason, const std::string& detail)
+{
+    send_to(p, proto::Reject{reason, detail});
+    p.drop = "rejected";
+    p.drop_at = s.now + 2.0;   // le temps que le Reject parte (renvoyé tant qu'il n'est pas acquitté)
+    bump("sessions_rejected");
+    log().write("session_reject", JsonObj().add("peer", p.link->peer()).add("reason", static_cast<int>(reason)).add("detail", detail));
+}
+
 void handle(Peer& p, proto::Message& m)
 {
     if (s.role == Role::Host) {
         if (auto* h = std::get_if<proto::Hello>(&m)) {
-            proto::Reject rej;
+            if (p.accepted) return;   // doublon
+            proto::RejectReason reason = proto::RejectReason::Other;
             std::string diff;
-            if (h->protocol != proto::kProtocolVersion) { rej.reason = proto::RejectReason::ProtocolMismatch; diff = "protocole hôte " + std::to_string(proto::kProtocolVersion) + " / client " + std::to_string(h->protocol); }
-            else if (h->game_build != s.game_build) { rej.reason = proto::RejectReason::GameBuildMismatch; diff = "build du jeu hôte " + std::to_string(s.game_build) + " / client " + std::to_string(h->game_build); }
-            else if (h->mod_version != kModVersion) { rej.reason = proto::RejectReason::ModVersionMismatch; diff = std::string("version du mod hôte ") + kModVersion + " / client " + h->mod_version; }
+            if (h->protocol != proto::kProtocolVersion) { reason = proto::RejectReason::ProtocolMismatch; diff = "protocole hôte " + std::to_string(proto::kProtocolVersion) + " / client " + std::to_string(h->protocol); }
+            else if (h->game_build != s.game_build) { reason = proto::RejectReason::GameBuildMismatch; diff = "build du jeu hôte " + std::to_string(s.game_build) + " / client " + std::to_string(h->game_build); }
+            else if (h->mod_version != kModVersion) { reason = proto::RejectReason::ModVersionMismatch; diff = std::string("version du mod hôte ") + kModVersion + " / client " + h->mod_version; }
             else if (h->gameplay_mods != s.gameplay_mods) {
-                rej.reason = proto::RejectReason::ModListMismatch;
+                reason = proto::RejectReason::ModListMismatch;
                 diff = "mods de gameplay différents :";
                 for (auto& x : s.gameplay_mods) if (std::find(h->gameplay_mods.begin(), h->gameplay_mods.end(), x) == h->gameplay_mods.end()) diff += " hôte seul=" + x;
                 for (auto& x : h->gameplay_mods) if (std::find(s.gameplay_mods.begin(), s.gameplay_mods.end(), x) == s.gameplay_mods.end()) diff += " client seul=" + x;
             }
-            if (!diff.empty()) {
-                rej.detail = diff;
-                send_to(p, rej);
-                log().write("session_reject", JsonObj().add("peer", p.link->peer()).add("detail", diff));
-                return;
-            }
+            if (diff.empty() && free_player_id() == 0xFF) { reason = proto::RejectReason::SessionFull; diff = "partie complète (3 joueurs)"; }
+            if (!diff.empty()) { reject(p, reason, diff); return; }
             p.accepted = true;
-            p.name = h->player_name;
+            p.player_id = free_player_id();
+            p.wants_join = h->join;
+            p.name = h->player_name.empty() ? "Joueur " + std::to_string(p.player_id + 1) : h->player_name;
             send_to(p, proto::Welcome{p.player_id, s.session_id});
             explore::on_peer_accepted(p.player_id, h->join);
-            log().write("session_join", JsonObj().add("player", h->player_name).add("player_id", static_cast<int>(p.player_id)));
+            send_roster();
+            bump("sessions_accepted");
+            ui::toast("player_joined", {p.name});
+            log().write("session_join", JsonObj().add("player", p.name).add("player_id", static_cast<int>(p.player_id)).add("join", h->join));
             return;
         }
         if (!p.accepted) return;
+        if (std::get_if<proto::Bye>(&m)) {
+            if (p.drop.empty()) p.drop = "bye";
+            bump("peer_byes");
+            return;
+        }
+        if (auto* br = std::get_if<proto::BattleReady>(&m)) {
+            if (br->battle_id == s.battle.id) s.battle.ready.insert(p.player_id);
+            log().write("coop_battle_ready", JsonObj().add("player", static_cast<int>(p.player_id)).add("battle", br->battle_id));
+            return;
+        }
         if (explore::handle(p.player_id, m)) return;
         if (handle_battle_common(p, m)) return;
-        if (std::get_if<proto::Bye>(&m)) {
-            log().write("session_leave", JsonObj().add("player_id", static_cast<int>(p.player_id)));
-            p.accepted = false;
-            explore::on_peer_left(p.player_id);
-        }
         return;
     }
     // Client
@@ -455,6 +649,25 @@ void handle(Peer& p, proto::Message& m)
     if (auto* r = std::get_if<proto::Reject>(&m)) {
         s.rejected = true;
         log().write("session_rejected", JsonObj().add("reason", static_cast<int>(r->reason)).add("detail", r->detail));
+        end_session("rejected", r->reason == proto::RejectReason::SessionFull ? ui::text("reject_full") : r->detail);
+        return;
+    }
+    if (auto* bye = std::get_if<proto::Bye>(&m)) {
+        log().write("session_host_bye", JsonObj().add("reason", bye->reason));
+        end_session("host_left", bye->reason);
+        return;
+    }
+    if (auto* ro = std::get_if<proto::Roster>(&m)) {
+        s.roster.clear();
+        for (auto& e : ro->players) s.roster[e.player] = e.name;
+        return;
+    }
+    if (auto* ow = std::get_if<proto::Owners>(&m)) {
+        if (ow->battle_id == s.battle.id) {
+            for (auto& o : ow->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
+            bump("owner_updates");
+            log().write("coop_owners", JsonObj().raw("msg", proto::to_json(m)));
+        }
         return;
     }
     if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
@@ -464,6 +677,7 @@ void handle(Peer& p, proto::Message& m)
         s.battle.id = bs->battle_id;
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
         s.battle.rng_seed = bs->rng_seed;
+        s.battle.turn_timer_s = bs->turn_timer_s;
         log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
         return;
     }
@@ -769,6 +983,8 @@ void host_turn_start(UObject* actor)
         }
         b.rng_seed = s.fixed_seed ? *s.fixed_seed : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ b.id);
         bs.rng_seed = b.rng_seed;
+        b.turn_timer_s = s.turn_timer_s;
+        bs.turn_timer_s = s.turn_timer_s;
         auto ps = game::players();
         std::sort(ps.begin(), ps.end(), [](UObject* x, UObject* y) { return game::spot(x) < game::spot(y); });
         for (size_t i = 0; i < ps.size(); ++i) {
@@ -777,6 +993,11 @@ void host_turn_start(UObject* actor)
             b.owner_by_spot[spot] = owner;
             bs.owners.push_back({static_cast<uint8_t>(spot), game::char_class(ps[i]), owner});
         }
+        broadcast(bs);
+        // Démarrage coordonné : personne ne commence un combat avant les autres. Les clients de la partie lancent le même
+        // combat dès qu'ils peuvent (BattleStart) ; ce premier tour attend, jeu en pause, qu'ils y soient tous (BattleReady).
+        for (auto& p : s.peers) if (in_game(p)) b.hold = true;
+        b.hold_since = s.now;
         broadcast(bs);
         log().write("coop_battle_inventory", JsonObj().raw("inventory", game::battle_inventory_json()));
         // Diagnostic : composants de chaque héros (mécaniques propres : perfection, taches, masques… à couvrir par le hash).
@@ -791,6 +1012,7 @@ void host_turn_start(UObject* actor)
     }
     begin_turn_common();
     const proto::Unit au = actor_unit(actor);
+    turn_indicator(au);
     broadcast(proto::TurnStart{b.id, b.turn, au.kind, au.spot, game::char_class(actor)});
     const proto::StateSync st = sync::snapshot(b.id, b.turn);
     const uint64_t h = sync::hash(st, au);
@@ -824,6 +1046,10 @@ void client_turn_start(UObject* actor)
 {
     auto& b = s.battle;
     begin_turn_common();
+    if (!b.ready_sent) {   // démarrage coordonné : l'hôte attend que chacun ait commencé ce combat
+        b.ready_sent = true;
+        for (auto& p : s.peers) send_to(p, proto::BattleReady{b.id, s.my_player_id});
+    }
     // L'hôte rythme les tours : attendre son début de tour (TurnStart, StateHash, StateSync, dans cet ordre).
     if (!wait_for([&] { return b.host_sync.count(b.turn) > 0; }, 15.0)) {
         bump("turn_wait_timeouts");
@@ -831,6 +1057,7 @@ void client_turn_start(UObject* actor)
         return;
     }
     const proto::Unit au = actor_unit(actor);
+    turn_indicator(au);
     if (auto it = b.host_turns.find(b.turn); it != b.host_turns.end() && (it->second.kind != au.kind || it->second.index != au.spot)) {
         bump("actor_mismatches");
         log().write("coop_actor_mismatch", JsonObj().add("local", game::char_class(actor)).add("host", it->second.actor), b.turn);
@@ -926,7 +1153,7 @@ void restore_turn_contexts()
 
 // Entrées de combat de cette instance : aucune pendant le tour du héros d'un autre joueur (roue, gradient, ciblage,
 // QTE, visée). local_turn : la fin du blocage ouvre le tour d'un héros d'ici.
-void set_local_input(bool enabled, const char* why, bool local_turn = false)
+void set_local_input(bool enabled, const char* why, bool local_turn)
 {
     if (enabled == s.input_enabled) return;
     s.input_enabled = enabled;
@@ -941,6 +1168,66 @@ void set_local_input(bool enabled, const char* why, bool local_turn = false)
         s.removed_contexts.clear();
     }
     log().write("coop_input", JsonObj().add("enabled", enabled).add("why", why).add("subsystem", s.input_sub != nullptr), s.battle.turn);
+}
+
+// --- Indicateurs, départs, fin de session (phase 5) --------------------------------------------
+
+// « Tour de X » / « À vous de jouer » au début du tour d'un héros ; effacé pendant les tours ennemis.
+void turn_indicator(const proto::Unit& u)
+{
+    if (u.kind != proto::ActorKind::Hero) { ui::clear_status("turn"); return; }
+    const uint8_t owner = owner_of_spot(u.spot);
+    if (owner == s.my_player_id) ui::set_status("turn", "your_turn");
+    else ui::set_status("turn", "turn_of", {player_name(owner)});
+}
+
+// Hôte : un joueur est parti (Bye, silence, redémarrage). L'hôte reprend ses héros, combat en cours compris ; le joueur
+// pourra revenir par le même chemin que « rejoindre » (instantané au prochain point sûr).
+void on_player_left(uint8_t player, const std::string& name, const std::string& why)
+{
+    bump("players_left");
+    explore::on_peer_left(player);
+    auto& b = s.battle;
+    proto::Owners ow;
+    ow.battle_id = b.id;
+    int taken = 0;
+    for (auto& [spot, owner] : b.owner_by_spot) {
+        if (owner != player) continue;
+        owner = 0;
+        ++taken;
+    }
+    if (b.active && taken > 0) {
+        for (auto& [spot, owner] : b.owner_by_spot) {
+            UObject* h = game::find_unit(true, spot);
+            ow.owners.push_back({static_cast<uint8_t>(spot), h ? game::char_class(h) : std::string(), owner});
+        }
+        broadcast(ow);
+        s.takeover = true;
+        bump("heroes_taken_over", taken);
+    }
+    b.ready.erase(player);
+    send_roster();
+    ui::toast(why == "bye" ? "player_left" : "player_lost", {name});
+    log().write("session_leave", JsonObj().add("player_id", static_cast<int>(player)).add("name", name).add("why", why).add("heroes_taken", taken)
+                                       .add("battle_active", b.active));
+}
+
+// Client : la session est finie (hôte parti ou injoignable, refus). Message clair, entrées rendues, puis retour au menu
+// principal : la partie chargée est celle de l'hôte (emplacement coop), elle n'a plus de sens sans lui.
+void end_session(const std::string& key, const std::string& detail)
+{
+    if (s.ended) return;
+    s.ended = true;
+    s.end_key = key;
+    s.ended_at = s.now;
+    bump("session_ended");
+    set_local_input(true, "session end");
+    explore::on_session_end();
+    ui::clear_status("turn");
+    ui::clear_status("wait");
+    if (key == "rejected") ui::set_status("session", "rejected", {detail});
+    else ui::set_status("session", key);
+    log().write("session_end", JsonObj().add("key", key).add("detail", detail).add("text", ui::statuses().count("session") ? ui::statuses().at("session") : ""));
 }
 
 // --- Fin de combat -------------------------------------------------------------------------
@@ -986,6 +1273,8 @@ void finalize_battle(const char* why)
     b.finalized = true;
     b.active = false;
     set_local_input(true, "battle end");
+    ui::clear_status("turn");
+    if (b.hold) { b.hold = false; explore::hold_pause("battle_start", false); }
     log().write("coop_battle_finalized", JsonObj().add("battle", b.id).add("why", why).add("desyncs", counter("desyncs")));
 }
 
@@ -1060,7 +1349,8 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
             if (p.accepted && p.player_id == owner) send_to(p, proto::DefenseRequest{b.id, b.turn, static_cast<uint8_t>(spot), hit, static_cast<uint8_t>(jumpable), 3000});
     const TurnSpotSeq key{b.turn, spot, hit};
     const ULONGLONG t0 = GetTickCount64();
-    const bool got = wait_for([&] { return b.defenses.count(key) > 0; }, kDefenseTimeout);
+    // Propriétaire parti pendant l'attente (l'hôte reprend le héros) : échec par défaut, sans attendre la fin du délai.
+    const bool got = wait_for([&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner; }, kDefenseTimeout) && b.defenses.count(key) > 0;
     const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
     proto::Defense res = proto::Defense::Fail;
     if (got) res = b.defenses[key];
@@ -1146,7 +1436,8 @@ void subscribe()
         if (!w.local) {
             const TurnSpotSeq key{b.turn, w.spot, w.seq};
             const ULONGLONG t0 = GetTickCount64();
-            const bool got = wait_for([&] { return b.combos.count(key) > 0; }, kComboTimeout);
+            const uint8_t owner = owner_of_spot(w.spot);
+            const bool got = wait_for([&] { return b.combos.count(key) > 0 || owner_of_spot(w.spot) != owner; }, kComboTimeout) && b.combos.count(key) > 0;
             const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
             if (got) w.plan = b.combos[key];
             else { bump("combo_timeouts"); w.plan = proto::ComboResult{b.id, b.turn, static_cast<uint8_t>(w.spot), w.seq, false, false, proto::kNoPress}; }
@@ -1530,6 +1821,20 @@ void subscribe()
     });
 }
 
+
+// Retour au menu principal par le joueur (menu pause) : la session se termine pour lui. Hôte : tout le monde est prévenu
+// (Bye) ; client : l'hôte reprend ses héros.
+void subscribe_session()
+{
+    HookBus::get().pre(game::path::fn(game::path::CtrlWorld, L"BackToTitleMenu"), [](HookCtx&, UFunction*) {
+        if (s.role == Role::Solo || s.ended) return;
+        log().write("session_quit_to_title", JsonObj().add("role", s.role == Role::Host ? "host" : "client"));
+        shutdown(s.role == Role::Host ? "host quit to title" : "client quit to title");
+        s.ended = true;
+        s.title_requested = true;
+        s.ended_at = s.now;
+    });
+}
 } // namespace
 
 Role role() { return s.role; }
@@ -1543,6 +1848,10 @@ int connected_players()
 }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
 bool battle_finalized() { return s.battle.finalized; }
+bool holding() { return s.battle.hold; }
+bool session_ended() { return s.ended; }
+bool action_forced(int spot) { return s.battle.forced.count({s.battle.turn, spot}) > 0; }
+std::string name_of(uint8_t player) { return player_name(player); }
 void shutdown(const char* reason)
 {
     if (s.role == Role::Solo) return;
@@ -1580,6 +1889,7 @@ void init()
     else return;
 
     for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages",
+                          "session_ended", "players_left", "heroes_taken_over", "peer_timeouts", "sessions_rejected", "battle_ready_timeouts", "turn_timer_expired",
                           "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
                           "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions"})
         s.counters[c] = 0;
@@ -1593,6 +1903,10 @@ void init()
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
     if (arg(L"e33join") == L"1") s.want_join = true;
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
+    if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
+    s.my_name = ue::to_utf8(arg(L"e33name"));
+    if (s.my_name.empty()) s.my_name = s.role == Role::Host ? "Hôte" : "Joueur";
+    ui::init();
     {
         std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
         std::string part;
@@ -1624,27 +1938,34 @@ void init()
         Peer host;
         host.link = std::make_unique<net::Link>(*s.transport, s.connect_to);
         host.accepted = true;
-        host.link->on_invalid = [](const std::string& why) { bump("invalid_messages"); log().write("net_invalid", JsonObj().add("why", why)); };
-        host.link->on_sent = [](const proto::Message& m, bool) { s.recorder.write("c2h", m); log().write("net_send", JsonObj().raw("msg", proto::to_json(m))); };
-        host.link->on_delivered = [](const proto::Message& m) { s.recorder.write("h2c", m); log().write("net_recv", JsonObj().raw("msg", proto::to_json(m))); };
+        host.player_id = 0;
+        wire_link(*host.link);
+        // Hôte d'une autre version de protocole : il nous répond avec sa version, on l'affiche.
+        host.link->on_protocol_mismatch = [](uint16_t v) {
+            end_session("rejected", ui::text("reject_protocol", {std::to_string(v), std::to_string(proto::kProtocolVersion)}));
+        };
         s.peers.push_back(std::move(host));
         proto::Hello h;
         h.game_build = s.game_build;
         h.mod_version = kModVersion;
         h.gameplay_mods = s.gameplay_mods;
-        h.player_name = "client";
+        h.player_name = s.my_name;
         h.instance_id = GetTickCount64();
         h.join = s.want_join;
         send_to(s.peers.front(), h);
+        heartbeat_targets();
+        if (s.want_join) ui::set_status("session", "joining");
     }
     explore::Net net;
     net.publish = [](const proto::Message& m, bool reliable) { publish(m, nullptr, reliable); };
     net.send_to = [](uint8_t player, const proto::Message& m) { for (auto& p : s.peers) if (p.accepted && p.player_id == player) send_to(p, m); };
     net.relay = [](const proto::Message& m, uint8_t origin, bool reliable) { for (auto& p : s.peers) if (p.accepted && p.player_id != origin) send_to(p, m, reliable); };
     net.bump = [](const char* c, int n) { s.counters[c] += n; };
+    net.name_of = [](uint8_t id) { return player_name(id); };
     explore::init(s.role == Role::Host, s.want_join, net);
     subscribe();
     explore::subscribe();
+    subscribe_session();
 }
 
 // Client : lance le combat reçu de l'hôte quand le monde local est chargé et stable depuis quelques secondes.
@@ -1746,12 +2067,35 @@ void run_remote_action()
     UObject* cur = game::current_character();
     if (!cur || !game::is_player(cur)) return;
     const int spot = game::spot(cur);
-    if (controls(spot)) return;
     const std::pair<uint32_t, int> key{b.turn, spot};
-    if (b.executed.count(key)) return;
+    // Héros d'ici : le joueur agit lui-même, sauf action imposée par l'hôte (minuteur de tour écoulé).
+    if (controls(spot) && !b.forced.count(key)) return;
+    if (b.executed.count(key) || b.hold) return;
     if (replay_free_aim(key, cur)) return;   // visée libre du propriétaire d'abord (elle ne termine pas le tour)
     auto it = b.commands.find(key);
     if (it == b.commands.end()) {
+        // Minuteur de tour (option, désactivé par défaut) : l'hôte impose une attaque automatique au héros du joueur muet.
+        if (s.role == Role::Host && b.turn_timer_s > 0 && !game::pause_menu_visible() && !explore::remote_paused()) {
+            const double left = b.turn_timer_s - (s.now - b.turn_started_at);
+            ui::set_status("turn", "turn_timer", {player_name(owner_of_spot(spot)), std::to_string(static_cast<int>(std::max(0.0, std::ceil(left))))});
+            if (left <= 0) {
+                proto::ActionCommand ac;
+                ac.battle_id = b.id;
+                ac.turn = b.turn;
+                ac.actor_spot = static_cast<uint8_t>(spot);
+                ac.action_type = game::ActAttack;
+                ac.targets = {{proto::ActorKind::Enemy, proto::kAutoSpot}};
+                ac.forced = true;
+                b.forced.insert(key);
+                b.commands[key] = ac;
+                b.command_time[key] = s.now - s.replay_lag_s;   // pas de décalage : personne n'attend ce QTE
+                broadcast(ac);
+                bump("turn_timer_expired");
+                ui::toast("turn_forced", {player_name(owner_of_spot(spot))});
+                log().write("coop_turn_timer_expired", JsonObj().add("spot", spot).add("timer_s", static_cast<int>(b.turn_timer_s)), b.turn);
+                return;
+            }
+        }
         if (!b.action_wait_logged && s.now - b.turn_started_at > 30.0) {
             b.action_wait_logged = true;
             bump("action_waits_long");
@@ -1764,6 +2108,7 @@ void run_remote_action()
     if (explore::remote_paused() || game::pause_menu_visible()) return;   // jeu en pause : l'action attend la reprise
     const proto::ActionCommand cmd = it->second;
     b.executed.insert(key);
+    if (controls(spot)) set_local_input(false, "forced action");   // action imposée sur un héros d'ici : le joueur ne joue plus ce tour
     std::vector<UObject*> targets;
     bool auto_target = cmd.targets.empty();
     for (auto& t : cmd.targets) {
@@ -1802,12 +2147,55 @@ void tick(double dt)
     if (s.role == Role::Solo) return;
     s.game_thread = GetCurrentThreadId();
     s.now += dt;
+    hb.last_tick_ms = steady_ms();
+    heartbeat_start();
+    ui::tick(s.now);
+    if (s.ended) {
+        // Client : session finie. Message affiché, puis retour au menu principal (la partie chargée est celle de l'hôte).
+        if (!s.title_requested && s.now - s.ended_at > 6.0 && game::controller() && !game::main_menu()) {
+            s.title_requested = true;
+            const bool ok = game::back_to_title();
+            log().write("session_back_to_title", JsonObj().add("ok", ok));
+        }
+        if (s.title_requested && game::main_menu() && s.now - s.ended_at > 20.0) ui::clear_status("session");
+        return;
+    }
     // À-coups d'image en combat (> 50 ms) : un appui de QTE peut sembler « raté d'emblée » si le jeu saccade.
     if (s.battle.active && dt > 0.05) {
         bump("frame_hitches");
         log().write("frame_hitch", JsonObj().add("dt_ms", static_cast<int64_t>(dt * 1000.0)).add("in_combo_window", !s.battle.windows.empty()), s.battle.turn);
     }
     pump_network();
+    if (s.ended) return;
+    // Héros repris à un joueur parti : si c'est le tour de l'un d'eux, le joueur de l'hôte le joue (entrées rendues).
+    if (s.takeover && s.battle.active) {
+        s.takeover = false;
+        UObject* cur = game::current_character();
+        if (cur && game::is_player(cur) && controls(game::spot(cur)) && !s.battle.executed.count({s.battle.turn, game::spot(cur)})) {
+            set_local_input(true, "takeover", true);
+            turn_indicator(actor_unit(cur));
+            log().write("coop_takeover_turn", JsonObj().add("spot", game::spot(cur)), s.battle.turn);
+        }
+    }
+    // Démarrage coordonné : jeu en pause au premier tour tant qu'un joueur de la partie n'a pas commencé ce combat.
+    if (auto& b = s.battle; b.hold) {
+        bool all = true;
+        for (auto& p : s.peers) if (in_game(p) && !b.ready.count(p.player_id)) all = false;
+        const bool expired = s.now - b.hold_since > kReadyTimeout;
+        if (all || expired) {
+            b.hold = false;
+            explore::hold_pause("battle_start", false);
+            ui::clear_status("wait");
+            if (expired) bump("battle_ready_timeouts");
+            bump("battle_holds_released");
+            log().write("coop_battle_hold_release", JsonObj().add("waited_s", s.now - b.hold_since).add("timeout", expired), b.turn);
+        } else if (!explore::pause_held("battle_start")) {
+            explore::hold_pause("battle_start", true);
+            ui::set_status("wait", "waiting_players");
+            bump("battle_holds");
+            log().write("coop_battle_hold", JsonObj(), b.turn);
+        }
+    }
     if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
     explore::tick(s.now);

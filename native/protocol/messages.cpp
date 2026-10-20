@@ -1,6 +1,7 @@
 #include "messages.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <iterator>
 #include <type_traits>
 
@@ -66,7 +67,7 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u64(x.rng_seed);
             w.u16(static_cast<uint16_t>(x.party.size()));
             for (auto& p : x.party) w.str(p);
-            w.str(x.world_enemy); w.str(x.enemy_global_id); w.u8(x.engage);
+            w.str(x.world_enemy); w.str(x.enemy_global_id); w.u8(x.engage); w.u16(x.turn_timer_s);
         } else if constexpr (std::is_same_v<T, TurnStart>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(static_cast<uint8_t>(x.kind)); w.u8(x.index); w.str(x.actor);
         } else if constexpr (std::is_same_v<T, ActionCommand>) {
@@ -74,6 +75,7 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u16(static_cast<uint16_t>(x.targets.size()));
             for (auto& t : x.targets) w_unit(w, t);
             w_u8list(w, x.combo);
+            w.boolean(x.forced);
         } else if constexpr (std::is_same_v<T, ComboResult>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u16(x.seq); w.boolean(x.success); w.boolean(x.perfect); w.u16(x.press);
         } else if constexpr (std::is_same_v<T, DefenseRequest>) {
@@ -132,6 +134,21 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u32(x.seq);
         } else if constexpr (std::is_same_v<T, PauseState>) {
             w.u8(x.player); w.boolean(x.paused); w.boolean(x.in_battle);
+        } else if constexpr (std::is_same_v<T, Owners>) {
+            w.u32(x.battle_id);
+            w.u16(static_cast<uint16_t>(x.owners.size()));
+            for (auto& o : x.owners) { w.u8(o.spot); w.str(o.character); w.u8(o.player_id); }
+        } else if constexpr (std::is_same_v<T, BattleReady>) {
+            w.u32(x.battle_id); w.u8(x.player);
+        } else if constexpr (std::is_same_v<T, Roster>) {
+            w.u16(static_cast<uint16_t>(x.players.size()));
+            for (auto& p : x.players) { w.u8(p.player); w.str(p.name); }
+        } else if constexpr (std::is_same_v<T, WorldHash>) {
+            w.u32(x.seq); w.str(x.level);
+            w.u16(static_cast<uint16_t>(x.parts.size()));
+            for (auto& p : x.parts) { w.str(p.name); w.u64(p.value); }
+        } else if constexpr (std::is_same_v<T, ResyncRequest>) {
+            w.str(x.reason);
         } else {
             static_assert(always_false<T>, "message non géré");
         }
@@ -171,6 +188,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         const uint16_t np = r.count(8);
         for (uint16_t i = 0; i < np && r.ok(); ++i) x.party.push_back(r.str(64));
         if (r.ok() && !r.at_end()) { x.world_enemy = r.str(256); x.enemy_global_id = r.str(256); x.engage = r.u8(); }   // v5
+        if (r.ok() && !r.at_end()) x.turn_timer_s = r.u16();   // v6
         return finish(x);
     }
     case MsgType::TurnStart: {
@@ -185,6 +203,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         for (uint16_t i = 0; i < n && r.ok(); ++i) x.targets.push_back(r_unit(r));
         x.combo = r_u8list(r);
         for (auto c : x.combo) if (c > 3) r.fail();
+        if (r.ok() && !r.at_end()) x.forced = r.boolean();   // v6
         return finish(x);
     }
     case MsgType::ComboResult: {
@@ -271,6 +290,30 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
     }
     case MsgType::BarrierRelease: { BarrierRelease x; x.seq = r.u32(); return finish(x); }
     case MsgType::PauseState: { PauseState x; x.player = r.u8(); x.paused = r.boolean(); x.in_battle = r.boolean(); if (x.player > 3) r.fail(); return finish(x); }
+    case MsgType::Owners: {
+        Owners x; x.battle_id = r.u32();
+        const uint16_t n = r.count(kMaxUnits);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) {
+            SpotOwner o; o.spot = r.u8(); o.character = r.str(128); o.player_id = r.u8();
+            if (o.player_id > 3) r.fail();
+            x.owners.push_back(o);
+        }
+        return finish(x);
+    }
+    case MsgType::BattleReady: { BattleReady x; x.battle_id = r.u32(); x.player = r.u8(); if (x.player > 3) r.fail(); return finish(x); }
+    case MsgType::Roster: {
+        Roster x;
+        const uint16_t n = r.count(4);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) { RosterEntry e; e.player = r.u8(); e.name = r.str(64); if (e.player > 3) r.fail(); x.players.push_back(e); }
+        return finish(x);
+    }
+    case MsgType::WorldHash: {
+        WorldHash x; x.seq = r.u32(); x.level = r.str(256);
+        const uint16_t n = r.count(kMaxList);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) { HashPart p; p.name = r.str(64); p.value = r.u64(); x.parts.push_back(p); }
+        return finish(x);
+    }
+    case MsgType::ResyncRequest: { ResyncRequest x; x.reason = r.str(kMaxStr); return finish(x); }
     }
     err = "unknown message type " + std::to_string(static_cast<unsigned>(t));
     return std::nullopt;
@@ -312,6 +355,11 @@ const char* type_name(MsgType t)
     case MsgType::NarrativeState: return "NarrativeState";
     case MsgType::BarrierRelease: return "BarrierRelease";
     case MsgType::PauseState: return "PauseState";
+    case MsgType::Owners: return "Owners";
+    case MsgType::BattleReady: return "BattleReady";
+    case MsgType::Roster: return "Roster";
+    case MsgType::WorldHash: return "WorldHash";
+    case MsgType::ResyncRequest: return "ResyncRequest";
     }
     return "?";
 }
@@ -324,7 +372,8 @@ MsgType type_of(const Message& m)
                                         MsgType::ComboResult, MsgType::StateSync, MsgType::BattleRewards, MsgType::FreeAimEvent,
                                         MsgType::SaveOffer, MsgType::SaveChunk, MsgType::JoinWait, MsgType::JoinReady, MsgType::PilotState,
                                         MsgType::PilotRequest, MsgType::PilotChange, MsgType::WorldInteract, MsgType::DialogueChoice,
-                                        MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState};
+                                        MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState,
+                                        MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -373,14 +422,14 @@ std::string to_json(const Message& m)
             std::string party = "[";
             for (size_t i = 0; i < x.party.size(); ++i) { if (i) party += ","; party += "\"" + json_escape(x.party[i]) + "\""; }
             o.add("battle", x.battle_id).add("encounter", x.encounter).raw("owners", ow + "]").add("seed", static_cast<int64_t>(x.rng_seed)).raw("party", party + "]")
-                .add("world_enemy", x.world_enemy).add("enemy_id", x.enemy_global_id).add("engage", static_cast<int>(x.engage));
+                .add("world_enemy", x.world_enemy).add("enemy_id", x.enemy_global_id).add("engage", static_cast<int>(x.engage)).add("turn_timer_s", static_cast<int>(x.turn_timer_s));
         } else if constexpr (std::is_same_v<T, TurnStart>) {
             o.add("battle", x.battle_id).add("turn", x.turn).add("kind", static_cast<int>(x.kind)).add("index", static_cast<int>(x.index)).add("actor", x.actor);
         } else if constexpr (std::is_same_v<T, ActionCommand>) {
             std::string ts = "[";
             for (size_t i = 0; i < x.targets.size(); ++i) { if (i) ts += ","; ts += unit_json(x.targets[i]); }
             o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.actor_spot)).add("action", static_cast<int>(x.action_type))
-                .add("secondary", x.secondary).raw("targets", ts + "]").raw("combo", list(x.combo));
+                .add("secondary", x.secondary).raw("targets", ts + "]").raw("combo", list(x.combo)).add("forced", x.forced);
         } else if constexpr (std::is_same_v<T, ComboResult>) {
             o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("seq", static_cast<int>(x.seq)).add("success", x.success).add("perfect", x.perfect).add("press", static_cast<int>(x.press));
         } else if constexpr (std::is_same_v<T, DefenseRequest>) {
@@ -436,6 +485,20 @@ std::string to_json(const Message& m)
             o.add("player", static_cast<int>(x.player)).add("kind", static_cast<int>(x.kind)).add("active", x.active).add("seq", x.seq);
         } else if constexpr (std::is_same_v<T, BarrierRelease>) { o.add("seq", x.seq); }
         else if constexpr (std::is_same_v<T, PauseState>) { o.add("player", static_cast<int>(x.player)).add("paused", x.paused).add("in_battle", x.in_battle); }
+        else if constexpr (std::is_same_v<T, Owners>) {
+            std::string ow = "[";
+            for (size_t i = 0; i < x.owners.size(); ++i) { if (i) ow += ","; ow += JsonObj().add("spot", static_cast<int>(x.owners[i].spot)).add("char", x.owners[i].character).add("player", static_cast<int>(x.owners[i].player_id)).str(); }
+            o.add("battle", x.battle_id).raw("owners", ow + "]");
+        } else if constexpr (std::is_same_v<T, BattleReady>) { o.add("battle", x.battle_id).add("player", static_cast<int>(x.player)); }
+        else if constexpr (std::is_same_v<T, Roster>) {
+            std::string ps = "[";
+            for (size_t i = 0; i < x.players.size(); ++i) { if (i) ps += ","; ps += JsonObj().add("player", static_cast<int>(x.players[i].player)).add("name", x.players[i].name).str(); }
+            o.raw("players", ps + "]");
+        } else if constexpr (std::is_same_v<T, WorldHash>) {
+            std::string ps = "{";
+            for (size_t i = 0; i < x.parts.size(); ++i) { if (i) ps += ","; char b[24]; std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(x.parts[i].value)); ps += "\"" + json_escape(x.parts[i].name) + "\":\"" + b + "\""; }
+            o.add("seq", x.seq).add("level", x.level).raw("parts", ps + "}");
+        } else if constexpr (std::is_same_v<T, ResyncRequest>) { o.add("reason", x.reason); }
     }, m);
     return o.str();
 }

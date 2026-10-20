@@ -817,6 +817,22 @@ bool set_game_paused(bool paused)
 
 bool pause_menu_visible() { return ue::get_bool(controller(), STR("IsPauseMenuVisible")); }
 
+bool is_game_paused()
+{
+    UObject* gps = ue::find_object(STR("/Script/Engine.Default__GameplayStatics"));
+    ue::Call c(gps, STR("IsGamePaused"));
+    if (!c || !controller()) return false;
+    c.set_object(STR("WorldContextObject"), controller());
+    if (!c.invoke()) return false;
+    return c.out_bool(STR("ReturnValue"));
+}
+
+bool back_to_title()
+{
+    ue::Call c(controller(), STR("BackToTitleMenu"));
+    return c && c.invoke();
+}
+
 bool run_zone_action(const std::string& name_part, std::string& err)
 {
     std::vector<UObject*> zones;

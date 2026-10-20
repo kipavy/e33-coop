@@ -70,6 +70,8 @@ struct Args {
     std::string snapshot;      // hôte : instantané à envoyer quand l'enregistrement contient un SaveOffer (D12)
     std::string save_out;      // client : où écrire l'instantané reçu
     bool paced = false;        // hôte : respecter le rythme enregistré (exploration)
+    std::string end_mode = "linger";   // hôte, enregistrement fini : "linger" (rester jusqu'au départ du client), "bye", "vanish"
+    double end_after = 5;      // délai avant "bye" / "vanish" (s)
     int port = 7777;
     double timeout = 900;
 };
@@ -109,11 +111,18 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     if (!a.script.empty()) { script = load_json(a.script, err); if (!err.empty()) { log.write("error", JsonObj().add("what", err)); return 1; } }
     auto t = net::make_udp(0, err);
     if (!t) { log.write("error", JsonObj().add("what", err)); return 1; }
-    net::Link link(*t, a.connect);
     int invalid = 0;
-    link.on_invalid = [&](const std::string& why) { ++invalid; log.write("invalid", JsonObj().add("why", why)); };
-    link.on_sent = [&](const proto::Message& m, bool) { rec.write("c2h", m); log.write("send", JsonObj().raw("msg", proto::to_json(m))); };
-    link.on_delivered = [&](const proto::Message& m) { rec.write("h2c", m); log.write("recv", JsonObj().raw("msg", proto::to_json(m))); };
+    std::map<std::string, int> counts;
+    std::unique_ptr<net::Link> lp;
+    // Nouveau lien (nouvelle époque) : connexion initiale, puis reconnexion simulée (phase 5).
+    auto make_link = [&] {
+        lp = std::make_unique<net::Link>(*t, a.connect);
+        lp->on_invalid = [&](const std::string& why) { ++invalid; log.write("invalid", JsonObj().add("why", why)); };
+        lp->on_sent = [&](const proto::Message& m, bool) { rec.write("c2h", m); log.write("send", JsonObj().raw("msg", proto::to_json(m))); };
+        lp->on_delivered = [&](const proto::Message& m) { rec.write("h2c", m); log.write("recv", JsonObj().raw("msg", proto::to_json(m))); };
+        lp->on_protocol_mismatch = [&](uint16_t v) { ++counts["protocol_mismatches"]; log.write("protocol_mismatch", JsonObj().add("host_protocol", v)); };
+    };
+    make_link();
 
     proto::Hello hello;
     hello.game_build = static_cast<uint32_t>(script["game_build"].as_int(23765773));
@@ -125,8 +134,16 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     // BattleEnd mais quand l'hôte se tait (jeu fermé), puis vérifie "expect" sur les compteurs ci-dessous.
     hello.join = script["join"].as_bool(false);
     const bool session = script["session"].as_bool(false);
-    link.send(hello);
-    std::map<std::string, int> counts;
+    // "packet_protocol" : se présenter avec une autre version de protocole (paquets d'en-tête seul) : l'hôte doit
+    // répondre avec la sienne (refus clair) sans créer de joueur.
+    const int fake_proto = static_cast<int>(script["packet_protocol"].as_int(0));
+    if (!fake_proto) lp->send(hello);
+    // "disconnect" : {"at_turn":N, "mode":"bye"|"vanish", "silence_s":S, "reconnect":true, "join":true}
+    // Au début du tour N (avant de jouer), le faux client quitte (Bye) ou se tait (plus aucun paquet) ; il revient
+    // ensuite comme un nouveau processus (nouvelle époque, Hello avec "rejoindre").
+    const json::Value& dc = script["disconnect"];
+    double silent_until = -1, reconnect_at = -1;
+    bool disconnected = false;
     struct Inbound { uint32_t xfer = 0, size = 0, got = 0; uint64_t hash = 0; std::string level; std::vector<uint8_t> data; };
     std::optional<Inbound> inbound;
     bool session_errors = false;
@@ -164,21 +181,87 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     };
     while ((ended_at < 0 || now_s() < ended_at + 3.0) && now_s() < deadline) {
         net::Datagram d;
-        while (t->poll(d)) if (d.peer == a.connect) link.on_datagram(d.data.data(), d.data.size(), now_s());
+        // Déconnecté (silence simulé) : comme un processus mort, rien n'est lu ni envoyé.
+        if (disconnected) {
+            while (t->poll(d)) {}
+            if (reconnect_at > 0 && now_s() >= reconnect_at) {
+                reconnect_at = -1;
+                disconnected = false;
+                make_link();
+                proto::Hello h2 = hello;
+                h2.join = dc["join"].as_bool(true);
+                h2.instance_id = 0xFA4F;
+                lp->send(h2);
+                ++counts["reconnects"];
+                log.write("reconnect", JsonObj().add("join", h2.join));
+            } else if (reconnect_at < 0 && silent_until > 0 && now_s() >= silent_until) {
+                ended = true;                 // pas de retour prévu : fin du faux client
+                ended_at = now_s() - 3.0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        if (fake_proto) {
+            // Paquet d'en-tête seul d'une autre version, toutes les 0,5 s ; l'hôte répond avec sa version.
+            static double next_probe = 0;
+            if (now_s() >= next_probe) {
+                next_probe = now_s() + 0.5;
+                auto pkt = net::Link::version_packet(0xBEEF);
+                pkt[4] = static_cast<uint8_t>(fake_proto); pkt[5] = static_cast<uint8_t>(fake_proto >> 8);
+                t->send(a.connect, pkt.data(), pkt.size());
+                ++counts["version_probes"];
+            }
+            while (t->poll(d)) {
+                if (d.peer != a.connect) continue;
+                const uint16_t pv = net::Link::packet_protocol(d.data.data(), d.data.size());
+                ++counts[pv == proto::kProtocolVersion ? "version_replies" : "other_replies"];
+                proto::Message ignored;
+                lp->on_datagram(d.data.data(), d.data.size(), now_s());
+                while (lp->pop(ignored)) ++counts["messages_while_mismatched"];
+            }
+            if (counts["version_probes"] >= 10) { ended = true; ended_at = now_s() - 3.0; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        while (t->poll(d)) if (d.peer == a.connect) lp->on_datagram(d.data.data(), d.data.size(), now_s());
         proto::Message m;
-        while (link.pop(m)) {
+        while (lp->pop(m)) {
             if (auto* w = std::get_if<proto::Welcome>(&m)) {
                 my_id = w->player_id;
+                ++counts["welcomes"];
             } else if (auto* r = std::get_if<proto::Reject>(&m)) {
-                log.write("rejected", JsonObj().add("detail", r->detail));
-                rejected = ended = true;
+                log.write("rejected", JsonObj().add("detail", r->detail).add("reason", static_cast<int>(r->reason)));
+                ++counts["rejects"];
+                // "expect_reject" : refus attendu (test de version), avec ce texte dans le détail.
+                const std::string want = script["expect_reject"].as_string("");
+                rejected = want.empty() || r->detail.find(want) == std::string::npos;
+                ended = true;
                 ended_at = now_s() - 3.0;
+            } else if (std::get_if<proto::JoinWait>(&m)) {
+                ++counts["join_waits"];
+            } else if (std::get_if<proto::Owners>(&m)) {
+                ++counts["owner_updates"];
             } else if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
                 owners = bs->owners;
+                ++counts["battle_starts"];
+                lp->send(proto::BattleReady{bs->battle_id, my_id});   // démarrage coordonné : le faux client est « dans » le combat
                 if (!bs->world_enemy.empty()) ++counts["world_battles"];
             } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
+                if (dc.is_object() && !disconnected && counts["disconnects"] == 0 && ts->turn == static_cast<uint32_t>(dc["at_turn"].as_int(3))) {
+                    const std::string mode = dc["mode"].as_string("vanish");
+                    if (mode == "bye") {
+                        lp->send(proto::Bye{"fake client leaves"});
+                        for (int i = 0; i < 10; ++i) { lp->update(now_s() + 0.3 * i); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+                    }
+                    disconnected = true;
+                    ++counts["disconnects"];
+                    silent_until = now_s() + dc["silence_s"].as_number(25);
+                    if (dc["reconnect"].as_bool(false)) reconnect_at = silent_until;
+                    log.write("disconnect", JsonObj().add("mode", mode).add("turn", ts->turn).add("silence_s", dc["silence_s"].as_number(25)));
+                    break;
+                }
                 if (script["pause_in_battle"].is_object() && pause_off_at < 0 && ts->turn == static_cast<uint32_t>(script["pause_in_battle"]["turn"].as_int(3))) {
-                    link.send(proto::PauseState{my_id, true, true});
+                    lp->send(proto::PauseState{my_id, true, true});
                     pause_off_at = now_s() + script["pause_in_battle"]["s"].as_number(3);
                     ++counts["pauses_sent"];
                 }
@@ -208,7 +291,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                             proto::FreeAimEvent e;
                             e.battle_id = ts->battle_id; e.turn = ts->turn; e.spot = ts->index; e.kind = k; e.seq = seq; e.t_ms = t;
                             if (k == proto::FreeAimKind::Shot) { e.z = 100.0; e.target = {proto::ActorKind::Enemy, 0}; }
-                            link.send(e);
+                            lp->send(e);
                         };
                         ev(proto::FreeAimKind::Start, 0, 0);
                         for (int i = 1; i <= shots; ++i) {
@@ -233,7 +316,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     for (size_t k = 0; combo.size() > 0 && k < 16; ++k) ac.combo.push_back(combo_bits(combo[k % combo.size()].as_string("success")));
                 }
                 if (ac.combo.empty()) ac.combo.assign(16, 1);   // par défaut : QTE réussis (comme DEBUG_ComboAutoSuccessCount)
-                link.send(ac);
+                lp->send(ac);
                 ++turns_played;
             } else if (auto* dq = std::get_if<proto::DefenseRequest>(&m)) {
                 proto::DefenseResult dr;
@@ -242,9 +325,9 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 dr.spot = dq->spot;
                 dr.hit = dq->hit;
                 dr.result = defense_of(defense[static_cast<size_t>(defense_index++) % defense.size()], dq->jumpable != 0);
-                link.send(dr);
+                lp->send(dr);
             } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
-                link.send(*sh);   // le faux client n'a pas d'état propre : il renvoie le hash de l'hôte
+                lp->send(*sh);   // le faux client n'a pas d'état propre : il renvoie le hash de l'hôte
             } else if (std::get_if<proto::BattleEnd>(&m)) {
                 ++counts["battle_ends"];
                 if (!session) {
@@ -272,7 +355,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                         f.write(reinterpret_cast<const char*>(inbound->data.data()), static_cast<std::streamsize>(inbound->data.size()));
                     }
                     ++counts["snapshots"];
-                    link.send(proto::JoinReady{inbound->xfer, inbound->level});
+                    lp->send(proto::JoinReady{inbound->xfer, inbound->level});
                     joined_at = now_s();
                     inbound.reset();
                 }
@@ -289,7 +372,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++counts[ns->active ? "narratives_started" : "narratives_finished"];
                 // "narrative_echo" : le faux client « regarde » la même cinématique et la finit hold_s s après l'hôte (barrière).
                 if (script["narrative_echo"].is_object() && ns->player != my_id) {
-                    if (ns->active) { link.send(proto::NarrativeState{my_id, ns->kind, true, ++narr_seq}); narr_kind = ns->kind; ++counts["narratives_echoed"]; }
+                    if (ns->active) { lp->send(proto::NarrativeState{my_id, ns->kind, true, ++narr_seq}); narr_kind = ns->kind; ++counts["narratives_echoed"]; }
                     else narr_end_at = now_s() + script["narrative_echo"]["hold_s"].as_number(10);
                 }
             } else if (std::get_if<proto::PauseState>(&m)) {
@@ -302,16 +385,17 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 log.write("bye", JsonObj().add("reason", bye->reason));
                 if (session) { ended = true; ended_at = now_s() - 2.0; }
             } else if (auto* p = std::get_if<proto::Ping>(&m)) {
-                link.send(proto::Pong{p->t_us}, false);
+                lp->send(proto::Pong{p->t_us}, false);
             }
         }
-        if (narr_end_at > 0 && now_s() >= narr_end_at) { link.send(proto::NarrativeState{my_id, narr_kind, false, ++narr_seq}); narr_end_at = 0; ++counts["narratives_echoed"]; }
-        if (pause_off_at > 0 && now_s() >= pause_off_at) { link.send(proto::PauseState{my_id, false, true}); pause_off_at = 0; ++counts["pauses_sent"]; }
+        if (disconnected) continue;   // vient de se déconnecter : plus rien n'est envoyé
+        if (narr_end_at > 0 && now_s() >= narr_end_at) { lp->send(proto::NarrativeState{my_id, narr_kind, false, ++narr_seq}); narr_end_at = 0; ++counts["narratives_echoed"]; }
+        if (pause_off_at > 0 && now_s() >= pause_off_at) { lp->send(proto::PauseState{my_id, false, true}); pause_off_at = 0; ++counts["pauses_sent"]; }
         // "take_pilot" : après l'entrée, le faux client prend la main et marche en ligne droite depuis la dernière position
         // du pilote ({"after_s":8,"dir":[1,0],"speed":250,"s":5}), puis reste immobile.
         if (tp.is_object() && joined_at >= 0) {
             if (!pilot_requested && now_s() - joined_at > tp["after_s"].as_number(8) && last_host_state) {
-                link.send(proto::PilotRequest{my_id});
+                lp->send(proto::PilotRequest{my_id});
                 pilot_requested = true;
                 ++counts["pilot_requests"];
             }
@@ -326,17 +410,17 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 st.x = pilot_base.x + dx * sp * el;
                 st.y = pilot_base.y + dy * sp * el;
                 st.vx = moving ? dx * sp : 0; st.vy = moving ? dy * sp : 0; st.vz = 0;
-                link.send(st, false);
+                lp->send(st, false);
                 ++counts["pilot_states_sent"];
             }
         }
-        link.update(now_s());
+        lp->update(now_s());
         // L'hôte ne répond pas pendant ses chargements de niveau (30 à 60 s) : marge large en session.
-        if (link.timed_out(now_s(), session ? 150.0 : 20.0)) { log.write("error", JsonObj().add("what", "host timed out")); break; }
+        if (lp->timed_out(now_s(), session ? 150.0 : 20.0)) { log.write("error", JsonObj().add("what", "host timed out")); break; }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     // vider les acquittements
-    for (int i = 0; i < 20; ++i) { link.update(now_s() + i); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    for (int i = 0; i < 20; ++i) { lp->update(now_s() + i); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     bool expect_ok = true;
     std::string counts_json = "{";
     for (auto& [k, v] : counts) { if (counts_json.size() > 1) counts_json += ","; counts_json += "\"" + json_escape(k) + "\":" + std::to_string(v); }
@@ -346,6 +430,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
             const std::string want = v.is_string() ? v.as_string() : std::to_string(v.as_int());
             if (!satisfies(counts[k], want)) { expect_ok = false; log.write("expect_failed", JsonObj().add("name", k).add("want", want).add("got", counts[k])); }
         }
+    // Messages invalides attendus en test de version (l'hôte répond dans sa version).
+    if (fake_proto) invalid = 0;
     const bool ok = ended && !rejected && invalid == 0 && !session_errors && expect_ok;
     log.write("done", JsonObj().add("ok", ok).raw("counts", counts_json).add("turns_played", turns_played).add("defenses", defense_index).add("invalid", invalid).add("rejected", rejected));
     return ok ? 0 : 1;
@@ -401,7 +487,16 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
 
     auto key =[](uint32_t b, uint32_t tn) { return (static_cast<uint64_t>(b) << 32) | tn; };
 
-    while ((finished_at < 0 || now_s() < finished_at + 3.0) && now_s() < deadline) {
+    bool client_left = false;
+    // Fin de l'enregistrement : "linger" reste en ligne jusqu'au départ du client (Bye de fin de test), "bye" / "vanish"
+    // simulent le départ de l'hôte (message de fin, ou silence complet) end_after secondes plus tard (phase 5).
+    auto running = [&] {
+        if (now_s() >= deadline) return false;
+        if (finished_at < 0) return true;
+        if (a.end_mode == "linger") return !client_left;
+        return now_s() < finished_at + a.end_after;
+    };
+    while (running()) {
         net::Datagram d;
         while (t->poll(d)) {
             if (!link) {
@@ -427,6 +522,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     }
                 }
                 if (auto* p = std::get_if<proto::Ping>(&m)) { link->send(proto::Pong{p->t_us}, false); continue; }
+                if (std::get_if<proto::Bye>(&m)) { client_left = true; log.write("client_bye", JsonObj()); continue; }
                 client_msgs.push_back(std::move(m));
             }
             // Avancer dans l'enregistrement : envoyer les h2c ; pour un c2h, attendre un message client du même type.
@@ -478,7 +574,12 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    for (int i = 0; i < 40 && link; ++i) { link->update(now_s() + i); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    if (link && finished_at >= 0 && a.end_mode == "bye") {
+        link->send(proto::Bye{"host quit"});
+        log.write("host_bye", JsonObj());
+    }
+    if (a.end_mode != "vanish")
+        for (int i = 0; i < 40 && link; ++i) { link->update(now_s() + i); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     const bool ok = finished_at >= 0 && invalid == 0 && desyncs == 0 && mismatches == 0;
     log.write("done", JsonObj().add("ok", ok).add("replayed", static_cast<int64_t>(cursor)).add("of", static_cast<int64_t>(lines.size())).add("hashes", hashes)
                           .add("desyncs", desyncs).add("c2h_mismatches", mismatches).add("invalid", invalid));
@@ -505,6 +606,8 @@ int main(int argc, char** argv)
         else if (k == "--snapshot") a.snapshot = v;
         else if (k == "--save-out") a.save_out = v;
         else if (k == "--paced") a.paced = v == "1";
+        else if (k == "--end") a.end_mode = v;
+        else if (k == "--end-after") a.end_after = std::atof(v.c_str());
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
     JsonLog log;

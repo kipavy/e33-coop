@@ -30,6 +30,8 @@ static std::vector<proto::Message> samples()
     ss.units = {us, proto::UnitState{{proto::ActorKind::Enemy, 0}, "BP_Enemy", 5.5, 0, 0, 0, true, {}}};
     proto::BattleRewards rw; rw.battle_id = 7; rw.xp = 521235; rw.gold = 10448; rw.loot = {{"Lumicolor", 5}, {"ChromaCatalyst", 2}};
     h.join = true;
+    proto::ActionCommand forced = ac; forced.forced = true;
+    bs.turn_timer_s = 60;
     proto::BattleStart wb = bs; wb.world_enemy = "BP_EnemyWorld_SpringMeadowElementalGrunt_C_UAID_18C04D921BE3793601_2147027147";
     wb.enemy_global_id = "ObjectID_Enemy_Level_SpringMeadows_Main_V2_X"; wb.engage = 2;
     proto::SaveChunk ch; ch.xfer = 3; ch.offset = 16000; ch.data = {0x47, 0x56, 0x41, 0x53, 0, 255};
@@ -42,7 +44,9 @@ static std::vector<proto::Message> samples()
             proto::JoinReady{3, "Level_SpringMeadows_Main_V2"}, proto::PilotState{0, 12, "Level_Camp_Main", -2191.5, -1232, 192, 120, 300, -10, 0},
             proto::PilotRequest{1}, proto::PilotChange{1}, proto::WorldInteract{4, "/Game/Levels/X.X:PersistentLevel.NPC_1", false},
             proto::DialogueChoice{5, 1}, proto::MapChange{6, "Level_Camp_Main", "Level.SpawnPoint.Generic.Dynamic"},
-            proto::NarrativeState{1, proto::NarrativeKind::Cinematic, true, 7}, proto::BarrierRelease{7}, proto::PauseState{2, true, false}};
+            proto::NarrativeState{1, proto::NarrativeKind::Cinematic, true, 7}, proto::BarrierRelease{7}, proto::PauseState{2, true, false},
+            proto::Owners{7, {{0, "Verso", 0}, {1, "Maelle", 0}}}, proto::BattleReady{7, 2}, proto::Roster{{{0, "Killian"}, {1, "Ami"}}},
+            proto::WorldHash{12, "Level_Camp_Main", {{"gold", 10448}, {"items", 0x1234567890ull}}}, proto::ResyncRequest{"gold differs"}, forced};
 }
 
 static void test_roundtrip()
@@ -173,12 +177,113 @@ static void test_link_fragments()
     CHECK(invalid == 0);
 }
 
+
+// Extensions optionnelles en fin de message : les enregistrements des versions précédentes restent lisibles.
+static void test_compat()
+{
+    proto::ActionCommand ac; ac.battle_id = 1; ac.turn = 2; ac.actor_spot = 0; ac.action_type = 1; ac.combo = {1};
+    wire::Writer w; proto::encode(ac, w);
+    auto b = w.data();
+    b.pop_back();                                       // sans le champ "forced" (v5)
+    b[2] = static_cast<uint8_t>(b[2] - 1);              // longueur de la charge utile
+    wire::Reader r(b.data(), b.size()); std::string err;
+    auto m = proto::decode(r, err);
+    CHECK(m.has_value());
+    if (m) CHECK(!std::get<proto::ActionCommand>(*m).forced);
+}
+
+// Transport mémoire parfait (pour les tests de cycle de vie du lien).
+class Pipe : public net::Transport {
+public:
+    Pipe(std::deque<net::Datagram>& to, std::string self) : to_(to), self_(std::move(self)) {}
+    bool send(const std::string&, const uint8_t* d, size_t n) override { to_.push_back({self_, std::vector<uint8_t>(d, d + n)}); return true; }
+    bool poll(net::Datagram&) override { return false; }
+    std::string local_address() const override { return self_; }
+private:
+    std::deque<net::Datagram>& to_;
+    std::string self_;
+};
+
+static void pump(std::deque<net::Datagram>& q, net::Link& to, double now)
+{
+    while (!q.empty()) { auto d = q.front(); q.pop_front(); to.on_datagram(d.data.data(), d.data.size(), now); }
+}
+
+// Le pair redémarre (nouveau processus, même adresse) : détecté par l'époque, l'échange repart de zéro et le
+// premier message du nouveau pair est bien délivré (sans reset, il serait pris pour un doublon).
+static void test_link_restart()
+{
+    std::deque<net::Datagram> a_to_b, b_to_a;
+    Pipe ta(a_to_b, "A"), tb(b_to_a, "B");
+    net::Link host(tb, "A");
+    int resets = 0;
+    host.on_remote_reset = [&] { ++resets; };
+    double now = 0;
+    {
+        net::Link client(ta, "B");
+        for (uint32_t i = 0; i < 5; ++i) client.send(proto::Ping{i});
+        client.update(now); pump(a_to_b, host, now);
+        proto::Message m; int n = 0; while (host.pop(m)) ++n;
+        CHECK(n == 5);
+    }
+    net::Link client2(ta, "B");
+    client2.send(proto::Bye{"again"});
+    now += 1; client2.update(now); pump(a_to_b, host, now);
+    proto::Message m;
+    CHECK(host.pop(m) && std::holds_alternative<proto::Bye>(m));
+    CHECK(resets == 1);
+    CHECK(host.remote_epoch() == client2.epoch());
+}
+
+// Thread de jeu bloqué (chargement) : les battements « occupé » gardent le pair en vie, mais pas indéfiniment.
+static void test_link_busy()
+{
+    std::deque<net::Datagram> a_to_b, b_to_a;
+    Pipe ta(a_to_b, "A"), tb(b_to_a, "B");
+    net::Link a(ta, "B"), b(tb, "A");
+    a.send(proto::Ping{1}); a.update(0); pump(a_to_b, b, 0);
+    CHECK(!b.timed_out(10));
+    CHECK(b.timed_out(16));
+    for (int s = 1; s <= 60; ++s) { auto p = net::Link::busy_packet(a.epoch()); b.on_datagram(p.data(), p.size(), s); }
+    CHECK(!b.timed_out(60));
+    CHECK(b.busy(60));
+    CHECK(b.timed_out(80));                              // plus rien depuis 20 s
+    for (int s = 61; s <= 400; ++s) { auto p = net::Link::busy_packet(a.epoch()); b.on_datagram(p.data(), p.size(), s); }
+    CHECK(b.timed_out(400));                             // « occupé » depuis plus de 300 s : perdu
+    proto::Message m; int n = 0; while (b.pop(m)) ++n;
+    CHECK(n == 1);
+}
+
+// Pair d'une autre version de protocole : signalé une fois, aucun message interprété.
+static void test_link_version()
+{
+    std::deque<net::Datagram> a_to_b;
+    Pipe ta(a_to_b, "A");
+    net::Link b(ta, "A");
+    int mism = 0; uint16_t seen = 0;
+    b.on_protocol_mismatch = [&](uint16_t v) { ++mism; seen = v; };
+    auto p = net::Link::version_packet(1234);
+    p[4] = 5; p[5] = 0;                                  // protocole 5
+    b.on_datagram(p.data(), p.size(), 0);
+    b.on_datagram(p.data(), p.size(), 0);
+    CHECK(mism == 1);
+    CHECK(seen == 5);
+    CHECK(net::Link::packet_protocol(p.data(), p.size()) == 5);
+    CHECK(net::Link::packet_epoch(p.data(), p.size()) == 0);
+    proto::Message m;
+    CHECK(!b.pop(m));
+}
+
 int main()
 {
     test_roundtrip();
     test_invalid();
     test_link();
     test_link_fragments();
+    test_compat();
+    test_link_restart();
+    test_link_busy();
+    test_link_version();
     std::printf(g_fail ? "%d FAILURE(S)\n" : "all protocol tests passed\n", g_fail);
     return g_fail ? 1 : 0;
 }
