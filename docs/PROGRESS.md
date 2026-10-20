@@ -2,7 +2,7 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-20, 15h) — **phase 4 en cours** (branche `phase-4`)
+## État courant (2026-10-20, soir) — **phase 4 finie** (acceptée par Killian, fusionnée dans `main`) ; prochaine : phase 5
 
 | Phase | État | Branche |
 |---|---|---|
@@ -10,7 +10,7 @@
 | 1 — environnement de test autonome | **finie** | `phase-1` (fusionnée dans `main`) |
 | 2 — preuve de concept réseau | **finie** (validée en jeu le 2026-10-19) | `phase-2` (fusionnée dans `main`) |
 | 3 — synchro complète du combat | **finie** (validée en jeu le 2026-10-20) | `phase-3` (fusionnée dans `main`) |
-| 4 — session et exploration | **en cours** | `phase-4` |
+| 4 — session et exploration | **finie** (acceptée le 2026-10-20, batterie complète non repassée à sa demande) | `phase-4` (fusionnée dans `main`) |
 
 Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions gratuite. Pas encore de `LICENSE` (choix de Killian).
 
@@ -59,6 +59,7 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 - Rien.
 
 ## Historique
+- 2026-10-20 (soir) : phase 4 : rejoindre (instantané), pilote et prise de main, transitions, combat d'exploration, dialogues, barrière de cinématique, pause en combat, déplacement coupé chez le suiveur ; acceptée par Killian, fusionnée dans `main`.
 - 2026-10-18 : démarrage ; phase 0 complète ; test runner écrit.
 - 2026-10-19 (nuit) : phase 1 complète (3/3) ; phase 2 : protocole, fakepeer, module coop, premier combat hôte vs faux client sans désync. Pause.
 - 2026-10-19 (matin) : reprise. Crash client au chargement corrigé ; fermeture auto des crashs ; écarts de PV rendus visibles ; D10 ; les deux sens verts 3/3 avec 0 écart.

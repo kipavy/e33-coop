@@ -1,4 +1,5 @@
 # Validation en jeu — fin de phase 4 (session et exploration)
+n> **Acceptée le 2026-10-20 par Killian** (test 2 fait : déplacement local du suiveur corrigé, build 39442301723 ; le reste sera vu en jouant avec son ami).
 
 But : vérifier à l'écran ce que la batterie mesure déjà (scénarios p2, p3 et p4 verts) : rejoindre une partie, suivre le pilote, transitions de niveau, combat lancé depuis l'exploration, dialogues, cinématique avec barrière, pause en combat.
 
