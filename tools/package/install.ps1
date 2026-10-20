@@ -31,7 +31,14 @@ $old = @((Join-Path $win64 "dwmapi.dll"), (Join-Path $win64 "ue4ss")) | Where-Ob
 if ($old) {
     $bak = Join-Path $win64 ("e33coop-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
     New-Item -ItemType Directory $bak | Out-Null
-    foreach ($o in $old) { Move-Item $o $bak }
+    foreach ($o in $old) {
+        try { Move-Item $o $bak }
+        catch {
+            throw ("Cannot move $o (a file inside is in use). Close any text editor or Explorer window showing the " +
+                   "E33Coop logs, wait for the game and its crash reporter to fully exit, then run install.ps1 again. " +
+                   "Fichier utilise : fermez l'editeur ou la fenetre de l'Explorateur ouverte sur les journaux, puis relancez. ($($_.Exception.Message))")
+        }
+    }
     Write-Output "Previous UE4SS files moved to $bak"
 }
 Copy-Item (Join-Path $here "game\dwmapi.dll") $win64 -Force
