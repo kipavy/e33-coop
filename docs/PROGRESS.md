@@ -2,7 +2,7 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-20, nuit) — **phase 5 en cours** (branche `phase-5`)
+## État courant (2026-10-20, nuit) — **phase 5 finie** (en attente de la validation commune avec la phase 6) ; phase 6 en cours
 
 | Phase | État | Branche |
 |---|---|---|
@@ -11,8 +11,8 @@
 | 2 — preuve de concept réseau | **finie** (validée en jeu le 2026-10-19) | `phase-2` (fusionnée dans `main`) |
 | 3 — synchro complète du combat | **finie** (validée en jeu le 2026-10-20) | `phase-3` (fusionnée dans `main`) |
 | 4 — session et exploration | **finie** (acceptée le 2026-10-20) | `phase-4` (fusionnée dans `main`) |
-| 5 — robustesse | **en cours** | `phase-5` |
-| 6 — transport Steam | à faire (code du transport écrit hors dépôt, à intégrer) | `phase-6` |
+| 5 — robustesse | **finie** (scénarios verts ; validation à deux PC avec la phase 6) | `phase-5` |
+| 6 — transport Steam | **en cours** | `phase-6` |
 
 ### Phase 5 : fait (écrit, compilé ; vert en jeu là où c'est indiqué)
 - **Base** : batterie complète repassée sur le build de fin de phase 4 : 15/18. Rouges expliqués : `p3_party_client` (le jeu s'est mis en pause, perte de focus probable → le runner referme désormais tout menu pause non demandé), `p4_cinematic_host` (limite connue : le combat de boss démarre malgré la barrière), `p4_cinematic_client` (le faux hôte attendait l'écho « cinématique commencée » que le vrai client n'envoie pas → messages informatifs non bloquants).
@@ -32,12 +32,20 @@
 - `p5_version_host` : les 3 refus Hello OK (message précis) ; le client « vieux protocole » sondait trop peu longtemps (corrigé). `p5_reject_client` / `p5_protocol_client` : scénario invalide (corrigé).
 - Relance en cours sur le build 39457856628.
 
-### Phase 5 : reste à faire
-- Menus de builds (niveau, attributs, compétences, équipement, améliorations, marchands) : cartographie en jeu (`lua/E33Explore/snippets/hook_builds.lua` prêt), puis rejeu des opérations via l'hôte (D13).
-- Suiveur : bloquer ses interactions et choix locaux (`IMC_UI_Exploration`, `IMC_UI_Dialogue` à vérifier en jeu).
-- Affichage des textes à l'écran (widget du jeu à trouver).
-- Revérifier en jeu la cinématique → combat de boss avec la pause réappliquée (`p4_cinematic_*`).
-- Scénarios `p5_resync_*` (hôte puis client avec deux instantanés).
+### Phase 5 : fait ensuite (tous verts, build 39470160044)
+- Affichage des textes : cartes « toast » du jeu (une persistante pour « tour de X », « pause demandée par X », attente ; une par message), vérifié sur capture en combat.
+- Builds par état (D13, D14) : `p5_builds_host` / `p5_builds_client` (état de Verso appliqué chez le client avec la même empreinte ; proposition du client pour son personnage acceptée, pour celui de l'hôte refusée et annulée ; réattribution F6 diffusée).
+- Ressources communes : `p5_economy_host` / `p5_economy_client` (dépense de l'hôte appliquée chez le client, dépense du client acceptée, dépense impossible refusée -> resynchro).
+- Resynchro d'exploration : `p5_resync_host` / `p5_resync_client` (or faussé, deux écarts, nouvel instantané, empreinte identique ensuite).
+- Suiveur : interactions et réponses au clavier / à la manette bloquées (`follower_actions_blocked` dans `p4_session_client`) ; un clic de souris sur une réponse reste possible.
+- Cinématique -> combat de boss : la pause réappliquée tient le combat jusqu'à la fin de la cinématique de l'autre joueur (`p4_cinematic_host`).
+- Minuteur de tour : ne compte que le temps de jeu (pas l'attente du démarrage coordonné).
+- Batterie : 31 scénarios (`battery.ps1`), à repasser en entier avant la validation commune.
+
+### Limites connues (phase 5)
+- Une dépense faite dans les 2 s d'un événement rejoué (coffre, combat) est absorbée dans la référence : le hash d'exploration la détecte et la resynchro reprend l'état de l'hôte (dépense perdue).
+- Réattribution des personnages : touche F6 de l'hôte (hors combat), pas de vrai menu.
+- Suiveur : un clic de souris sur une réponse de dialogue n'est pas bloqué.
 
 ## Historique des phases précédentes
 
