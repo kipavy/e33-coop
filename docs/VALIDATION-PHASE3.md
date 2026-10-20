@@ -1,5 +1,7 @@
 # Validation en jeu — fin de phase 3
 
+> **Validée le 2026-10-20 par Killian** (3e passage) : plus aucun contrôle pendant le tour de Verso ; QTE de Maelle mesuré avec `tools/dev/qte-diag.ps1`, sans écart net avec le jeu sans mod. Phase 3 fusionnée dans `main`.
+
 But : vérifier à l'écran ce que la batterie automatique mesure déjà (12 scénarios verts). Un joueur voit les héros des autres agir comme eux : mêmes actions, mêmes QTE, mêmes tirs en visée libre, mêmes parades, avec environ 1 s de décalage. Ses propres QTE et parades restent instantanés.
 
 Limite : un seul PC et un seul compte Steam, donc l'autre joueur est toujours le faux pair (`fakepeer`).
