@@ -1,0 +1,11 @@
+{
+  "player_name": "Ami",
+  "game_build": 23765773,
+  "mod_version": "0.5.0",
+  "gameplay_mods": [],
+  "join": true,
+  "session": true,
+  "resync_after_hashes": 2,
+  "defense": ["fail"],
+  "expect": { "snapshots": "2", "world_hashes": ">=3", "resyncs_sent": "1" }
+}

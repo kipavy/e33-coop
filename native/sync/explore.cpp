@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <map>
 #include <optional>
 #include <set>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "../common/jsonlog.hpp"
 #include "../hooks/game.hpp"
 #include "../hooks/hookbus.hpp"
+#include "../hooks/reflect.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
 #include "../ui/ui.hpp"
@@ -22,6 +24,7 @@
 #define NOMINMAX
 #define NOGDI
 #include <Windows.h>
+#include <shellapi.h>
 
 using RC::Unreal::UObject;
 using RC::Unreal::UFunction;
@@ -117,6 +120,17 @@ struct S {
     bool pause_applied = false;
     double last_chunk_at = -1;                    // client : réception de l'instantané en cours
     bool ended = false;
+    // Hash d'état d'exploration
+    double last_event_at = 0;
+    double next_world_check = 0;
+    uint64_t last_world_sent = 0;
+    double last_world_sent_at = -1000;
+    uint32_t world_seq = 0;
+    std::optional<proto::WorldHash> pending_world;   // client : dernière empreinte de l'hôte, à comparer au calme
+    double pending_world_at = 0;
+    int world_mismatch_streak = 0;
+    int perturb_gold = 0;                         // -e33perturbworld=N (test)
+    double cj_joined_at = 0;
 } s;
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
@@ -124,6 +138,7 @@ void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
 // Les événements d'exploration ne concernent que les joueurs entrés dans la partie (hôte : au moins un client
 // entré ; client : instantané chargé, ou session sans « rejoindre » des tests de combat).
 bool sharing();
+void touch();   // événement d'exploration : la partie n'est pas « calme » (hash d'état)
 
 bool world_ready()
 {
@@ -162,6 +177,8 @@ void send_snapshot(uint8_t player)
     if (!launch_args().run_dir.empty()) {
         std::ofstream f(std::filesystem::path(launch_args().run_dir) / L"snapshot.sav", std::ios::binary);
         f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        std::ofstream g(std::filesystem::path(launch_args().run_dir) / (L"snapshot-" + std::to_wstring(xfer) + L".sav"), std::ios::binary);
+        g.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     }
     s.peers[player].state = JoinState::Sent;
     s.peers[player].since = s.now;
@@ -221,6 +238,9 @@ void client_join_tick()
         s.world_stable = world_ready() ? s.world_stable + kPollPeriod : 0;
         if (s.world_stable < 3.0) return;
         s.cj = S::ClientJoin::Joined;
+        s.cj_joined_at = s.now;
+        s.world_mismatch_streak = 0;
+        s.last_event_at = s.now;
         const std::string level = game::current_level();
         s.net.publish(proto::JoinReady{s.joined_xfer, level}, true);
         bump("joins_completed");
@@ -373,7 +393,7 @@ void replay_tick()
             s.replaying = true;
             const bool ok = game::interact(target, wi.instant);
             s.replaying = false;
-            bump(ok ? "interactions_replayed" : "interaction_errors");
+            bump(ok ? "interactions_replayed" : "interaction_errors"); touch();
             log().write("coop_interaction_replayed", JsonObj().add("actor", wi.actor).add("ok", ok));
         }
     }
@@ -383,7 +403,7 @@ void replay_tick()
             s.replaying = true;
             const bool ok = game::choose_dialogue(dc.index);
             s.replaying = false;
-            bump(ok ? "choices_replayed" : "choice_errors");
+            bump(ok ? "choices_replayed" : "choice_errors"); touch();
             log().write("coop_choice_replayed", JsonObj().add("index", dc.index).add("ok", ok).add("waited_s", s.now - at));
             s.choices.pop_front();
         } else if (s.now - at > 120) {
@@ -396,6 +416,7 @@ void replay_tick()
 
 void on_map_change(const proto::MapChange& mc)
 {
+    touch();
     std::string dest, tag;
     if (game::map_change_in_progress() && game::map_destination(dest, tag) && dest == mc.level) {
         log().write("coop_map_change_already", JsonObj().add("level", mc.level));
@@ -565,12 +586,134 @@ void poll_tick()
 
 bool sharing() { return s.host ? joined_players() > 0 : (!s.want_join || s.cj == S::ClientJoin::Joined); }
 
+// --- Hash d'état d'exploration (phase 5) -----------------------------------------------------------
+// L'hôte résume son état d'exploration (or, inventaire, objets du monde utilisés, ennemis vaincus, drapeaux de
+// progression…) quand la partie est calme (point sûr, aucune interaction depuis quelques secondes). Chaque client
+// compare au même point calme ; deux écarts de suite -> nouvel instantané au prochain point sûr (ResyncRequest).
+struct WorldPart { const char* name; const wchar_t* field; };
+constexpr WorldPart kWorldParts[] = {
+    {"gold", L"Gold"}, {"inventory", L"Inventory"}, {"interacted", L"InteractedObjects"}, {"battled", L"BattledEnemies"},
+    {"flags", L"NamedIDsStates"}, {"gpe", L"GPE_States"}, {"cinematics", L"InteractedCinematics"}, {"dialogs", L"InteractedDialogs"},
+};
+
+std::vector<proto::HashPart> world_parts(std::map<std::string, reflect::Leaves>* leaves = nullptr)
+{
+    std::vector<proto::HashPart> out;
+    UObject* gi = game::gi();
+    if (!gi) return out;
+    for (const auto& p : kWorldParts) {
+        reflect::Leaves l = reflect::field(gi, p.field);
+        out.push_back({p.name, reflect::hash(l)});
+        if (leaves) (*leaves)[p.name] = std::move(l);
+    }
+    return out;
+}
+
+void touch() { s.last_event_at = s.now; }
+
+bool quiet(double secs)
+{
+    return safe_point() && s.interactions.empty() && s.choices.empty() && !s.choice_pending && s.now - s.last_event_at >= secs;
+}
+
+void world_hash_tick()
+{
+    if (game::in_battle() || game::map_change_in_progress() || s.local_narr) touch();
+    if (s.now < s.next_world_check) return;
+    s.next_world_check = s.now + (s.host ? 5.0 : 1.0);   // hôte : lecture de tout l'état, pas à chaque seconde
+    if (s.host) {
+        if (!sharing() || !quiet(8.0)) return;
+        std::map<std::string, reflect::Leaves> leaves;
+        auto parts = world_parts(&leaves);
+        if (parts.empty()) return;
+        uint64_t all = 0;
+        for (auto& p : parts) all = all * 31 + p.value;
+        if (all == s.last_world_sent && s.now - s.last_world_sent_at < 60.0) return;
+        s.last_world_sent = all;
+        s.last_world_sent_at = s.now;
+        proto::WorldHash wh{++s.world_seq, game::current_level(), parts};
+        s.net.publish(wh, true);
+        bump("world_hashes_sent");
+        std::string sizes = "{";
+        for (auto& [k, l] : leaves) { if (sizes.size() > 1) sizes += ","; sizes += "\"" + k + "\":" + std::to_string(l.size()); }
+        log().write("coop_world_hash", JsonObj().raw("msg", proto::to_json(wh)).raw("leaves", sizes + "}"));
+        return;
+    }
+    // Client : comparer la dernière empreinte de l'hôte une fois calme ici aussi.
+    if (!s.pending_world) return;
+    if (s.cj != S::ClientJoin::Joined && s.want_join) { s.pending_world.reset(); return; }
+    if (s.now - s.pending_world_at > 45.0) {
+        bump("world_hash_skipped");
+        log().write("coop_world_hash_skipped", JsonObj().add("seq", s.pending_world->seq).add("why", "never quiet"));
+        s.pending_world.reset();
+        return;
+    }
+    if (!quiet(3.0)) return;
+    const proto::WorldHash host = *s.pending_world;
+    s.pending_world.reset();
+    if (host.level != game::current_level()) { log().write("coop_world_hash_skipped", JsonObj().add("seq", host.seq).add("why", "level")); return; }
+    std::map<std::string, reflect::Leaves> leaves;
+    const auto mine = world_parts(&leaves);
+    std::string differ;
+    for (auto& hp : host.parts)
+        for (auto& mp : mine)
+            if (mp.name == hp.name && mp.value != hp.value) { if (!differ.empty()) differ += ","; differ += mp.name; }
+    bump("world_hashes_compared");
+    if (differ.empty()) {
+        s.world_mismatch_streak = 0;
+        log().write("coop_world_hash_ok", JsonObj().add("seq", host.seq));
+        return;
+    }
+    ++s.world_mismatch_streak;
+    bump("world_hash_diffs");
+    std::string sizes = "{";
+    for (auto& [k, l] : leaves) { if (sizes.size() > 1) sizes += ","; sizes += "\"" + k + "\":" + std::to_string(l.size()); }
+    // Détail local des parties en écart (l'hôte journalise sa taille de chaque partie à l'envoi).
+    std::string detail = "{";
+    for (auto& [k, l] : leaves) {
+        if (differ.find(k) == std::string::npos) continue;
+        if (detail.size() > 1) detail += ",";
+        std::string first = "[";
+        for (size_t i = 0; i < l.size() && i < 12; ++i) { if (first.size() > 1) first += ","; first += JsonObj().add("p", l[i].first).add("v", l[i].second).str(); }
+        detail += "\"" + k + "\":" + first + "]";
+    }
+    log().write("coop_world_hash_diff", JsonObj().add("seq", host.seq).add("parts", differ).add("streak", s.world_mismatch_streak)
+                                           .raw("leaves", sizes + "}").raw("mine", detail + "}"));
+    if (s.world_mismatch_streak >= 2) {
+        s.world_mismatch_streak = 0;
+        bump("world_resyncs");
+        ui::set_status("session", "resyncing");
+        s.net.publish(proto::ResyncRequest{"world state differs: " + differ}, true);
+        log().write("coop_world_resync", JsonObj().add("parts", differ));
+    }
+}
+
+// Test de resynchro (-e33perturbworld=N) : une fois entré, le client fausse son or de N (l'écart doit être détecté,
+// puis réparé par un nouvel instantané).
+void perturb_world_tick()
+{
+    if (s.perturb_gold == 0 || s.cj != S::ClientJoin::Joined || s.now - s.cj_joined_at < 2.0) return;
+    if (auto* gold = ue::value_ptr<int32_t>(game::gi(), STR("Gold"))) {
+        *gold += s.perturb_gold;
+        bump("world_perturbations");
+        log().write("coop_world_perturb", JsonObj().add("gold_delta", s.perturb_gold).add("gold", *gold));
+    }
+    s.perturb_gold = 0;
+}
+
 } // namespace
 
 // --- API --------------------------------------------------------------------------------------------
 
 void init(bool host, bool want_join, const Net& net)
 {
+    {
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        for (int i = 0; argv && i < argc; ++i)
+            if (_wcsnicmp(argv[i], L"-e33perturbworld=", 17) == 0) s.perturb_gold = _wtoi(argv[i] + 17);
+        if (argv) LocalFree(argv);
+    }
     s.host = host;
     s.active = true;
     s.want_join = !host && want_join;
@@ -656,6 +799,10 @@ bool handle(uint8_t from, const proto::Message& m)
         ui::set_status("session", w->reason == "battle" ? "waiting_battle_end" : "joining");
         return true;
     }
+    if (auto* wh = std::get_if<proto::WorldHash>(&m)) {
+        if (!s.host) { s.pending_world = *wh; s.pending_world_at = s.now; }
+        return true;
+    }
     if (std::get_if<proto::ResyncRequest>(&m)) {
         if (!s.host) return true;
         // Le client recharge un instantané : il ne participe plus jusqu'à son JoinReady.
@@ -705,11 +852,13 @@ bool handle(uint8_t from, const proto::Message& m)
     if (auto* wi = std::get_if<proto::WorldInteract>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
         s.interactions.push_back(*wi);
+        touch();
         return true;
     }
     if (auto* dc = std::get_if<proto::DialogueChoice>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
         s.choices.emplace_back(*dc, s.now);
+        touch();
         return true;
     }
     if (auto* mc = std::get_if<proto::MapChange>(&m)) {
@@ -745,6 +894,8 @@ void tick(double now)
     else follow_tick();
     replay_tick();
     poll_tick();
+    world_hash_tick();
+    if (!s.host) perturb_world_tick();
 }
 
 void subscribe()
@@ -777,7 +928,7 @@ void subscribe()
                 return;
             }
             s.net.publish(proto::WorldInteract{++s.seq, path, instant}, true);
-            bump("interactions_published");
+            bump("interactions_published"); touch();
             log().write("coop_interaction", JsonObj().add("actor", path).add("instant", instant));
         });
     }
@@ -792,7 +943,7 @@ void subscribe()
         }
         if (index < 0) return;
         s.net.publish(proto::DialogueChoice{++s.seq, index}, true);
-        bump("choices_published");
+        bump("choices_published"); touch();
         log().write("coop_choice", JsonObj().add("index", index));
     });
     // Question de dialogue : CurrentChoices reste vide pendant la question (vu le 2026-10-20), on suit StartChoice.
@@ -814,7 +965,7 @@ void subscribe()
         std::string level, tag;
         if (!game::map_destination(level, tag)) return;
         s.net.publish(proto::MapChange{++s.seq, level, tag}, true);
-        bump("map_changes_published");
+        bump("map_changes_published"); touch();
         log().write("coop_map_change", JsonObj().add("level", level).add("spawn", tag));
     });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Enemy_World_Base_Seamless.BP_jRPG_Enemy_World_Base_Seamless_C:StartBattle", [](HookCtx& ctx, UFunction* f) {

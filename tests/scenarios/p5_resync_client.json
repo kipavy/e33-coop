@@ -1,0 +1,15 @@
+{
+  "name": "p5_resync_client",
+  "description": "Phase 5 : resynchro d'exploration vue du client. Le vrai jeu client rejoint le faux hôte (rejeu de p5_resync_host), puis fausse son or (-e33perturbworld=1000) : les deux empreintes suivantes de l'hôte diffèrent sur « gold », le client demande un nouvel instantané, le recharge et retrouve exactement l'état de l'hôte (empreinte suivante identique).",
+  "join": true,
+  "timeout_s": 700,
+  "explore": [
+    { "do": "wait", "until": "world_resyncs", "is": "1", "timeout": 400 },
+    { "do": "wait", "until": "joins_completed", "is": "2", "timeout": 200 },
+    { "do": "wait", "until": "world_hashes_compared", "is": ">=3", "timeout": 200 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33perturbworld=1000"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p5_resync_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p5_resync_snapshot.sav", "--paced", "1", "--timeout", "700"] },
+  "expect": { "world_perturbations": "1", "world_hash_diffs": "2", "world_resyncs": "1", "snapshots_received": "2", "joins_completed": "2", "world_hashes_compared": ">=3", "snapshot_hash_errors": "0" }
+}

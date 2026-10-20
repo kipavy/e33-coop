@@ -75,6 +75,7 @@ struct Args {
     std::string reject;        // hôte : refuse le client (Reject, version du mod) avec ce détail
     int version_reply = 0;     // hôte : répond à tout avec des paquets d'une autre version de protocole
     int stop_after_turn = 0;   // hôte : arrête le rejeu avant le tour suivant (départ de l'hôte en plein combat)
+    bool resync_snapshot = false;   // hôte : renvoie l'instantané (--snapshot) à chaque ResyncRequest du client
     int port = 7777;
     double timeout = 900;
 };
@@ -245,6 +246,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ended_at = now_s() - 3.0;
             } else if (auto* fa = std::get_if<proto::ActionCommand>(&m); fa && fa->forced) {
                 ++counts["forced_actions"];
+            } else if (std::get_if<proto::WorldHash>(&m)) {
+                ++counts["world_hashes"];
             } else if (std::get_if<proto::JoinWait>(&m)) {
                 ++counts["join_waits"];
             } else if (std::get_if<proto::Owners>(&m)) {
@@ -405,6 +408,13 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
         }
         if (disconnected) continue;   // vient de se déconnecter : plus rien n'est envoyé
         if (ready_at >= 0 && now_s() >= ready_at) { lp->send(proto::BattleReady{ready_battle, my_id}); ready_at = -1; ++counts["ready_sent"]; }
+        // "resync_after_s" : une fois entré, demande un nouvel instantané (désync d'exploration simulée).
+        if (joined_at >= 0 && counts["resyncs_sent"] == 0 &&
+            ((script["resync_after_s"].is_number() && now_s() - joined_at > script["resync_after_s"].as_number(10)) ||
+             (script["resync_after_hashes"].is_number() && counts["world_hashes"] >= script["resync_after_hashes"].as_int(2)))) {
+            lp->send(proto::ResyncRequest{"fake client test"});
+            ++counts["resyncs_sent"];
+        }
         if (narr_end_at > 0 && now_s() >= narr_end_at) { lp->send(proto::NarrativeState{my_id, narr_kind, false, ++narr_seq}); narr_end_at = 0; ++counts["narratives_echoed"]; }
         if (pause_off_at > 0 && now_s() >= pause_off_at) { lp->send(proto::PauseState{my_id, false, true}); pause_off_at = 0; ++counts["pauses_sent"]; }
         // "take_pilot" : après l'entrée, le faux client prend la main et marche en ligne droite depuis la dernière position
@@ -504,6 +514,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
     auto key =[](uint32_t b, uint32_t tn) { return (static_cast<uint64_t>(b) << 32) | tn; };
 
     bool client_left = false;
+    int resyncs = 0;
     // Fin de l'enregistrement : "linger" reste en ligne jusqu'au départ du client (Bye de fin de test), "bye" / "vanish"
     // simulent le départ de l'hôte (message de fin, ou silence complet) end_after secondes plus tard (phase 5).
     auto running = [&] {
@@ -546,6 +557,21 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                 }
                 if (auto* p = std::get_if<proto::Ping>(&m)) { link->send(proto::Pong{p->t_us}, false); continue; }
                 if (std::get_if<proto::Bye>(&m)) { client_left = true; log.write("client_bye", JsonObj()); continue; }
+                if (a.resync_snapshot && std::get_if<proto::ResyncRequest>(&m)) {
+                    std::ifstream sf(a.snapshot, std::ios::binary);
+                    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>());
+                    const uint32_t xfer = 1000 + static_cast<uint32_t>(++resyncs);
+                    link->send(proto::SaveOffer{xfer, static_cast<uint32_t>(bytes.size()), fnv64(bytes), "resync"});
+                    for (uint32_t off = 0; off < bytes.size(); off += proto::kMaxChunk) {
+                        proto::SaveChunk c;
+                        c.xfer = xfer;
+                        c.offset = off;
+                        c.data.assign(bytes.begin() + off, bytes.begin() + off + std::min<size_t>(proto::kMaxChunk, bytes.size() - off));
+                        link->send(c);
+                    }
+                    log.write("resync_snapshot_sent", JsonObj().add("size", static_cast<int64_t>(bytes.size())));
+                    continue;
+                }
                 if (!a.reject.empty() && std::get_if<proto::Hello>(&m)) {
                     link->send(proto::Reject{proto::RejectReason::ModVersionMismatch, a.reject});
                     log.write("rejecting", JsonObj().add("detail", a.reject));
@@ -566,10 +592,16 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     if (a.paced && now_s() - pace_now < l.t - pace_rec) break;
                     if (auto* sh = std::get_if<proto::StateHash>(&l.msg)) host_hash[key(sh->battle_id, sh->turn)] = sh->hash;
                     link->send(l.msg);
-                    // Instantané : les octets ne sont pas dans l'enregistrement, ils viennent du fichier local (même hash).
+                    // Instantané : les octets ne sont pas dans l'enregistrement, ils viennent du fichier local (même hash) :
+                    // --snapshot, ou <nom>_<xfer>.sav quand la session en contient plusieurs (resynchro).
                     if (auto* so = std::get_if<proto::SaveOffer>(&l.msg)) {
-                        std::ifstream sf(a.snapshot, std::ios::binary);
-                        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>());
+                        auto read_file = [](const std::string& p) { std::ifstream sf(p, std::ios::binary); return std::vector<uint8_t>((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>()); };
+                        std::vector<uint8_t> bytes = read_file(a.snapshot);
+                        if (bytes.size() != so->size || fnv64(bytes) != so->hash) {
+                            std::string alt = a.snapshot;
+                            if (alt.size() > 4 && alt.substr(alt.size() - 4) == ".sav") alt = alt.substr(0, alt.size() - 4);
+                            bytes = read_file(alt + "_" + std::to_string(so->xfer) + ".sav");
+                        }
                         if (bytes.size() != so->size || fnv64(bytes) != so->hash) {
                             log.write("error", JsonObj().add("what", "snapshot file does not match the recorded SaveOffer").add("file", a.snapshot)
                                                    .add("size", static_cast<int64_t>(bytes.size())).add("want_size", so->size));
@@ -644,6 +676,7 @@ int main(int argc, char** argv)
         else if (k == "--reject") a.reject = v;
         else if (k == "--version-reply") a.version_reply = std::atoi(v.c_str());
         else if (k == "--stop-after-turn") a.stop_after_turn = std::atoi(v.c_str());
+        else if (k == "--resync-snapshot") a.resync_snapshot = v == "1";
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
     JsonLog log;

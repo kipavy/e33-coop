@@ -1,0 +1,16 @@
+{
+  "name": "p5_resync_host",
+  "description": "Phase 5 : hash d'état d'exploration et resynchro. L'hôte entre dans la partie avec un faux client, puis reste calme : il envoie l'empreinte de son état (or, inventaire, objets utilisés, ennemis vaincus, drapeaux…), puis la renvoie au bout d'une minute. Après deux empreintes, le faux client signale un écart (ResyncRequest) : l'hôte lui renvoie un instantané au point sûr et il rentre dans la partie. Produit l'enregistrement et les deux instantanés rejoués par p5_resync_client.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "until": "snapshots_sent", "is": ">=2", "timeout": 200 },
+    { "do": "wait", "until": "joined_players", "is": ">=2", "timeout": 120 },
+    { "do": "wait", "until": "world_hashes_sent", "is": ">=3", "timeout": 120 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_resync.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "snapshots_sent": "2", "resyncs_requested": "1", "world_hashes_sent": ">=3", "snapshot_errors": "0" }
+}
