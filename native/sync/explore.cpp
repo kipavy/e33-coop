@@ -105,6 +105,7 @@ struct S {
     // Combat d'exploration
     std::string last_enemy;
     int last_engage = 0;
+    double last_enemy_at = -1;
 } s;
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
@@ -424,6 +425,7 @@ void poll_tick()
         if (hold) { bump("barrier_timeouts"); s.remote_narr.clear(); }
         game::set_game_paused(false);
         s.barrier_paused = false;
+        bump("barrier_releases");
         log().write("coop_barrier_release", JsonObj().add("waited_s", s.now - s.barrier_since).add("timeout", hold));
     }
     // Menu pause local
@@ -464,7 +466,7 @@ void init(bool host, bool want_join, const Net& net)
     for (const char* c : {"snapshots_sent", "snapshots_received", "joins_completed", "joined_players", "pilot_changes", "follower_teleports",
                           "interactions_published", "interactions_replayed", "interactions_missing", "choices_published", "choices_replayed",
                           "map_changes_published", "map_changes_followed", "narratives_started", "narratives_finished", "barrier_waits",
-                          "barrier_timeouts", "snapshot_errors", "snapshot_hash_errors", "snapshot_chunk_errors", "join_errors",
+                          "barrier_timeouts", "barrier_releases", "snapshot_errors", "snapshot_hash_errors", "snapshot_chunk_errors", "join_errors",
                           "interaction_errors", "choice_errors", "choice_timeouts", "map_change_errors", "local_actions_on_follower"})
         bump(c, 0);
 }
@@ -641,6 +643,7 @@ void subscribe()
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Enemy_World_Base_Seamless.BP_jRPG_Enemy_World_Base_Seamless_C:StartBattle", [](HookCtx& ctx, UFunction* f) {
         s.last_enemy = ue::short_name(ctx.Context);
         s.last_engage = static_cast<int>(ue::read_param_int(ctx, f, STR("EngagementType")).value_or(0));
+        s.last_enemy_at = s.now;
         log().write("coop_world_battle", JsonObj().add("enemy", s.last_enemy).add("engage", s.last_engage));
     });
 }
@@ -666,7 +669,14 @@ bool narrative_active() { return s.local_narr; }
 bool choice_pending() { return s.choice_pending; }
 bool remote_paused() { return s.remote_paused_game; }
 double follow_error() { return s.follow_error; }
-const std::string& last_world_enemy() { return s.last_enemy; }
+std::string take_world_enemy()
+{
+    // Seulement un ennemi du monde qui vient de lancer ce combat (pas un combat scripté : boss, séquence).
+    std::string e = s.now - s.last_enemy_at < 20.0 ? s.last_enemy : std::string();
+    s.last_enemy.clear();
+    s.last_enemy_at = -1;
+    return e;
+}
 int last_world_engage() { return s.last_engage; }
 
 } // namespace e33::explore

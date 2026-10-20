@@ -817,4 +817,33 @@ bool set_game_paused(bool paused)
 
 bool pause_menu_visible() { return ue::get_bool(controller(), STR("IsPauseMenuVisible")); }
 
+bool run_zone_action(const std::string& name_part, std::string& err)
+{
+    std::vector<UObject*> zones;
+    UObjectGlobals::FindAllOf(STR("BP_GameActionTriggerZone_C"), zones);
+    UObject* zone = nullptr;
+    for (UObject* z : zones) if (ue::short_name(z).find(name_part) != std::string::npos) { zone = z; break; }
+    if (!zone) { err = "zone not found: " + name_part; return false; }
+    auto* wp = CastField<FStructProperty>(ue::prop(zone, STR("GameActionOnOverlap")));
+    if (!wp) { err = "GameActionOnOverlap not found"; return false; }
+    void* w = wp->ContainerPtrToValuePtr<void>(zone);
+    UObject* action = nullptr;
+    for (const wchar_t* m : {STR("GameActionReference"), STR("GameActionInline")})
+        if (FProperty* p = ue::struct_member(wp->GetStruct(), m))
+            if (!action) action = *static_cast<UObject**>(p->ContainerPtrToValuePtr<void>(w));
+    if (!action) { err = "zone has no overlap action"; return false; }
+    UObject* executor = ue::get_object(controller(), STR("BP_GameActionExecutorComponent"));
+    ue::Call c(executor, STR("ExecuteGameAction"));
+    if (!c) { err = "ExecuteGameAction not found"; return false; }
+    c.set_object(STR("GameAction"), action).invoke();
+    log().write("zone_action", JsonObj().add("zone", ue::short_name(zone)).add("action", ue::full_name(action)));
+    return true;
+}
+
+bool skip_cinematic()
+{
+    ue::Call c(ue::get_object(controller(), STR("BP_CinematicSystem")), STR("SkipCinematic"));
+    return c && c.invoke();
+}
+
 } // namespace e33::game

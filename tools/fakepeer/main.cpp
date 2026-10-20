@@ -136,6 +136,9 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     double joined_at = -1, pilot_t0 = -1, next_pilot_send = 0;
     bool pilot_requested = false;
     double pause_off_at = -1;
+    double narr_end_at = -1;
+    uint32_t narr_seq = 0;
+    proto::NarrativeKind narr_kind = proto::NarrativeKind::Cinematic;
     uint32_t pilot_seq = 0;
 
     std::vector<std::string> defense;
@@ -284,6 +287,11 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++counts["choices"];
             } else if (auto* ns = std::get_if<proto::NarrativeState>(&m)) {
                 ++counts[ns->active ? "narratives_started" : "narratives_finished"];
+                // "narrative_echo" : le faux client « regarde » la même cinématique et la finit hold_s s après l'hôte (barrière).
+                if (script["narrative_echo"].is_object() && ns->player != my_id) {
+                    if (ns->active) { link.send(proto::NarrativeState{my_id, ns->kind, true, ++narr_seq}); narr_kind = ns->kind; ++counts["narratives_echoed"]; }
+                    else narr_end_at = now_s() + script["narrative_echo"]["hold_s"].as_number(10);
+                }
             } else if (std::get_if<proto::PauseState>(&m)) {
                 ++counts["pauses"];
             } else if (auto* pc = std::get_if<proto::PilotChange>(&m)) {
@@ -297,6 +305,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 link.send(proto::Pong{p->t_us}, false);
             }
         }
+        if (narr_end_at > 0 && now_s() >= narr_end_at) { link.send(proto::NarrativeState{my_id, narr_kind, false, ++narr_seq}); narr_end_at = 0; ++counts["narratives_echoed"]; }
         if (pause_off_at > 0 && now_s() >= pause_off_at) { link.send(proto::PauseState{my_id, false, true}); pause_off_at = 0; ++counts["pauses_sent"]; }
         // "take_pilot" : après l'entrée, le faux client prend la main et marche en ligne droite depuis la dernière position
         // du pilote ({"after_s":8,"dir":[1,0],"speed":250,"s":5}), puis reste immobile.

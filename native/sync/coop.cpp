@@ -762,7 +762,7 @@ void host_turn_start(UObject* actor)
                 bs.encounter = enc;
                 bs.enemy_global_id = gid;
                 bs.engage = static_cast<uint8_t>(engage);
-                bs.world_enemy = explore::last_world_enemy();
+                bs.world_enemy = explore::take_world_enemy();
                 bs.party.clear();
                 bump("world_battles");
             }

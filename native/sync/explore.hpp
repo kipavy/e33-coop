@@ -37,7 +37,7 @@ bool choice_pending();        // question de dialogue posée ici, sans réponse
 bool remote_paused();         // jeu mis en pause ici par la pause d'un autre joueur (combat)
 double follow_error();        // suiveur : dernier écart au pilote (u), -1 si inconnu
 // Dernier ennemi du monde qui a lancé un combat ici (nom d'acteur, engagement), pour BattleStart.
-const std::string& last_world_enemy();
+std::string take_world_enemy();   // vide si le combat n'a pas été lancé par un ennemi du monde à l'instant
 int last_world_engage();
 
 } // namespace e33::explore

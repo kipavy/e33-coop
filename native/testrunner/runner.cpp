@@ -84,6 +84,7 @@ struct Scenario {
     json::Value setup;                    // {"<Héros>": {"hp": n, "shield": n, "dead": true}} : appliqué au tour 1, à l'identique sur chaque instance
     bool join = false;                    // client : rejoindre la partie de l'hôte (instantané) au lieu de charger "save"
     int pause_at_turn = 0;                // ouvre le menu pause au début de ce tour (3 s), puis le referme (phase 4)
+    bool end_on_battle = false;           // exploration : le test se termine (vert) quand un combat commence
     std::vector<json::Value> explore;     // étapes d'exploration (phase 4) : voir run_explore_step
 };
 
@@ -194,6 +195,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.setup = v["setup"];
     s.join = v["join"].as_bool(false);
     s.pause_at_turn = static_cast<int>(v["pause_at_turn"].as_int(0));
+    s.end_on_battle = v["end_on_battle"].as_bool(false);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
     if (s.save.empty() && !s.join) { err = "scenario needs save (or join)"; return false; }
     if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
@@ -570,6 +572,7 @@ void subscribe()
         const bool waiting = g.phase == Phase::WaitWorld || g.phase == Phase::Trigger || g.phase == Phase::WaitBattle || g.phase == Phase::Explore;
         if (g.phase != Phase::Battle && !waiting) return;
         if (g.phase == Phase::Explore) {   // combat d'exploration (lancé ici ou par un autre joueur) : on le joue puis on reprend
+            if (g.sc.end_on_battle) { finish(true, "battle started"); return; }
             g.battle_from_explore = true;
             g.turn = 0;
             g.action_index.clear();
@@ -740,6 +743,8 @@ void subscribe()
 //   {"do":"world_battle"}                  pilote : combat avec l'ennemi du monde le plus proche (actions du scénario)
 //   {"do":"battle"}                        attend un combat lancé par un autre joueur, puis le joue
 //   {"do":"wait_follow","max":250}        suiveur : à moins de max (u) du pilote pendant 2 s
+//   {"do":"zone_action","zone":"<nom>"}  action « au passage » d'une zone de déclenchement (cinématique, combat…)
+//   {"do":"skip_cinematic","after_s":5}   passe la cinématique en cours (après after_s s dans l'étape)
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -851,6 +856,16 @@ void run_explore_step(float dt)
             if (g.step_t - g.follow_since >= 2.0) next_step("close");
         } else {
             g.follow_since = -1;
+        }
+    } else if (what == "zone_action") {
+        if (!game::run_zone_action(st["zone"].as_string(), err)) { fail("zone_action: " + err); return; }
+        ++g.metrics["zone_actions"];
+        next_step("done");
+    } else if (what == "skip_cinematic") {
+        if (game::playing_cinematic() && g.step_t >= st["after_s"].as_number(0)) {
+            if (!game::skip_cinematic()) { fail("skip_cinematic failed"); return; }
+            ++g.metrics["cinematics_skipped"];
+            next_step("skipped");
         }
     } else if (what == "request_pilot") {
         explore::request_pilot();
