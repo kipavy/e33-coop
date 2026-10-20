@@ -128,6 +128,7 @@ struct State {
     double follow_since = -1;
     double pause_until = -1;
     double seq_since = -1;
+    double next_skip = 0;
     int battles = 0;
     std::vector<std::string> errors;
 };
@@ -746,6 +747,7 @@ void subscribe()
 //   {"do":"wait_follow","max":250}        suiveur : à moins de max (u) du pilote pendant 2 s
 //   {"do":"zone_action","zone":"<nom>"}  action « au passage » d'une zone de déclenchement (cinématique, combat…)
 //   {"do":"skip_cinematic","after_s":5}   passe la cinématique en cours (après after_s s dans l'étape)
+//   {"do":"wait_key"}                     validation en jeu : attend la touche F9
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -865,13 +867,22 @@ void run_explore_step(float dt)
     } else if (what == "skip_cinematic") {
         // Seulement une fois la séquence commencée (OnSequenceStarted, ~4 s après le déclenchement) : passée plus tôt,
         // la cinématique ne se terminait jamais (2026-10-20).
-        if (first) g.seq_since = -1;
+        if (first) { g.seq_since = -1; g.next_skip = 0; }
         if (explore::sequence_playing() && g.seq_since < 0) g.seq_since = g.step_t;
-        if (g.seq_since >= 0 && g.step_t - g.seq_since >= st["after_s"].as_number(0)) {
-            if (!game::skip_cinematic()) { fail("skip_cinematic failed"); return; }
+        // Le jeu ignore un skip juste après le début de la séquence (vu le 2026-10-20) : on réessaie toutes les 2 s.
+        if (g.seq_since >= 0 && !explore::sequence_playing() && !game::playing_cinematic()) {
             ++g.metrics["cinematics_skipped"];
             next_step("skipped");
+        } else if (g.seq_since >= 0 && g.step_t - g.seq_since >= st["after_s"].as_number(0) && g.step_t >= g.next_skip) {
+            g.next_skip = g.step_t + 2.0;
+            if (!game::skip_cinematic()) { fail("skip_cinematic failed"); return; }
+            ++g.metrics["skip_attempts"];
+            log().write("tr_skip_cinematic", JsonObj().add("t", g.step_t));
         }
+    } else if (what == "wait_key") {   // validation en jeu : le joueur termine le test (F9, fenêtre du jeu au premier plan)
+        DWORD pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        if (pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F9) & 0x8000)) next_step("key");
     } else if (what == "request_pilot") {
         explore::request_pilot();
         next_step("requested");

@@ -1,0 +1,17 @@
+{
+  "name": "p4_manual_host",
+  "description": "Validation en jeu (phase 4) : Killian est l'hôte et le pilote, le faux client rejoint la partie et le suit. Exploration libre : combat avec un ennemi du monde (au contact), menu pause en combat, changement de niveau (drapeau d'expédition, camp), dialogue avec un compagnon. F9 termine le test.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 2400,
+  "max_turns": 200,
+  "manual": true,
+  "sound": true,
+  "defense": ["manual"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait_key", "timeout": 2300 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_follow.json", "--timeout", "2400"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "world_battles": ">=1", "pauses_local": ">=2", "map_changes_published": ">=1", "interactions_published": ">=1" }
+}
