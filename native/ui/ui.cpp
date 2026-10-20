@@ -2,6 +2,7 @@
 
 #include <deque>
 
+#include "../common/cmdline.hpp"
 #include "../common/jsonlog.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
@@ -66,19 +67,7 @@ std::deque<Toast> g_pending;
 int g_toasts = 0;
 std::map<std::string, int> g_counts;
 
-std::wstring arg(const wchar_t* key)
-{
-    int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::wstring out;
-    const std::wstring k = std::wstring(L"-") + key + L"=";
-    for (int i = 0; argv && i < argc; ++i) {
-        std::wstring a = argv[i];
-        if (a.size() > k.size() && _wcsnicmp(a.c_str(), k.c_str(), k.size()) == 0) out = a.substr(k.size());
-    }
-    if (argv) LocalFree(argv);
-    return out;
-}
+std::wstring arg(const wchar_t* key) { return cmdline::arg(key); }   // en test : options du scénario seulement
 
 } // namespace
 

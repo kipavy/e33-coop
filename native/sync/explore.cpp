@@ -14,6 +14,7 @@
 #include <set>
 #include <vector>
 
+#include "../common/cmdline.hpp"
 #include "../common/jsonlog.hpp"
 #include "../hooks/game.hpp"
 #include "../hooks/hookbus.hpp"
@@ -725,11 +726,7 @@ void perturb_world_tick()
 void init(bool host, bool want_join, const Net& net)
 {
     {
-        int argc = 0;
-        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-        for (int i = 0; argv && i < argc; ++i)
-            if (_wcsnicmp(argv[i], L"-e33perturbworld=", 17) == 0) s.perturb_gold = _wtoi(argv[i] + 17);
-        if (argv) LocalFree(argv);
+        if (const std::wstring v = cmdline::arg(L"e33perturbworld"); !v.empty()) s.perturb_gold = _wtoi(v.c_str());
     }
     s.host = host;
     s.active = true;

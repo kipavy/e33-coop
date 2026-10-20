@@ -9,6 +9,8 @@
 #include <Windows.h>
 #include <shellapi.h>
 
+#include "../common/cmdline.hpp"
+
 namespace e33 {
 
 JsonLog& log()
@@ -19,30 +21,13 @@ JsonLog& log()
 
 namespace {
 
-std::wstring arg_value(const std::wstring& arg, const wchar_t* key)
-{
-    const std::wstring k = std::wstring(L"-") + key + L"=";
-    if (arg.size() < k.size()) return {};
-    for (size_t i = 0; i < k.size(); ++i)
-        if (towlower(arg[i]) != towlower(k[i])) return {};
-    std::wstring v = arg.substr(k.size());
-    if (v.size() >= 2 && v.front() == L'"' && v.back() == L'"') v = v.substr(1, v.size() - 2);
-    return v;
-}
-
 LaunchArgs parse()
 {
     LaunchArgs a;
-    int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    for (int i = 0; argv && i < argc; ++i) {
-        const std::wstring s = argv[i];
-        if (auto v = arg_value(s, L"e33run"); !v.empty()) a.run_dir = v;
-        if (auto v = arg_value(s, L"e33test"); !v.empty()) a.test = v;
-        if (auto v = arg_value(s, L"e33role"); !v.empty()) a.role = v;
-        if (auto v = arg_value(s, L"e33inst"); !v.empty()) a.instance = v;
-    }
-    if (argv) LocalFree(argv);
+    a.run_dir = cmdline::arg(L"e33run");
+    a.test = cmdline::arg(L"e33test");
+    a.role = cmdline::arg(L"e33role");
+    a.instance = cmdline::arg(L"e33inst");
     if (a.role.empty()) a.role = L"solo";
     if (a.instance.empty()) a.instance = a.role;
     if (a.run_dir.empty()) {

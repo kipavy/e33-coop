@@ -19,6 +19,7 @@
 #include <tuple>
 #include <vector>
 
+#include "../common/cmdline.hpp"
 #include "../common/jsonlog.hpp"
 #include "../hooks/game.hpp"
 #include "../hooks/hookbus.hpp"
@@ -242,19 +243,7 @@ void bump(const char* name, int n = 1) { s.counters[name] += n; }
 
 // --- Utilitaires ------------------------------------------------------------------------
 
-std::wstring arg(const wchar_t* key)
-{
-    int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::wstring out;
-    const std::wstring k = std::wstring(L"-") + key + L"=";
-    for (int i = 0; argv && i < argc; ++i) {
-        std::wstring a = argv[i];
-        if (a.size() > k.size() && _wcsnicmp(a.c_str(), k.c_str(), k.size()) == 0) out = a.substr(k.size());
-    }
-    if (argv) LocalFree(argv);
-    return out;
-}
+std::wstring arg(const wchar_t* key) { return cmdline::arg(key); }   // en test : options du scénario seulement
 
 std::filesystem::path game_root()
 {
