@@ -25,5 +25,6 @@ void toast(const std::string& key, const std::vector<std::string>& args = {}, do
 void tick(double now);       // game thread : affichage
 const std::map<std::string, std::string>& statuses();   // textes affichés (slot -> texte)
 int toasts_shown();
+int count(const std::string& key);   // nombre d'affichages de ce texte (indicateur ou message), pour les tests
 
 } // namespace e33::ui

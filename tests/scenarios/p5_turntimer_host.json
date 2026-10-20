@@ -1,0 +1,13 @@
+{
+  "name": "p5_turntimer_host",
+  "description": "Phase 5 : démarrage coordonné et minuteur de tour (option). Le faux client n'entre dans le combat que 6 s après son début : l'hôte garde son premier tour en pause jusque-là. Minuteur de 8 s (-e33turntimer=8) : le faux client laisse passer son premier tour, l'hôte impose une attaque automatique à son héros et la diffuse. Indicateurs « tour de X » et compte à rebours.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "timeout_s": 700,
+  "wait_players": 1,
+  "max_turns": 60,
+  "defense": ["fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=0:1", "-e33seed=16250036901998647475", "-e33turntimer=8", "-e33lang=fr"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_timer.json", "--timeout", "700"] },
+  "expect": { "battle_end": "any", "turn_timer_expired": "1", "battle_holds": "1", "battle_ready_timeouts": "0", "ui:turn_timer": ">=3", "ui:turn_of": ">=1", "ui:turn_forced": "1", "desyncs": "0" }
+}

@@ -1,7 +1,7 @@
 {
   "player_name": "FakeClient",
   "game_build": 23765773,
-  "mod_version": "0.4.0",
+  "mod_version": "0.5.0",
   "gameplay_mods": [],
   "actions": [
     { "hero": "Verso", "type": "skill", "skill": "Combo1", "combo": ["perfect", "success", "fail"] },

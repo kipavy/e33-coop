@@ -1,0 +1,10 @@
+{
+  "player_name": "Ami2",
+  "game_build": 23765773,
+  "mod_version": "0.5.0",
+  "gameplay_mods": [],
+  "actions": [{ "hero": "Lune", "type": "attack" }],
+  "defense": ["fail"],
+  "disconnect": { "at_turn": 8, "mode": "bye", "silence_s": 3 },
+  "expect": { "disconnects": "1" }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "p5_protocol_client",
+  "description": "Phase 5 : hôte d'une autre version de protocole (mod plus récent ou plus ancien). Le vrai jeu client reçoit des paquets d'une autre version : il n'en interprète aucun, affiche les deux versions et termine la session.",
+  "join": true,
+  "timeout_s": 300,
+  "end_on_session_end": true,
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33lang=en"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--version-reply", "7", "--end", "vanish", "--end-after", "10", "--timeout", "300"] },
+  "expect": { "session_ended": "1", "ui:rejected": "1", "back_to_title": "1" }
+}

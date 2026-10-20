@@ -1,0 +1,13 @@
+{
+  "name": "p5_hostbye_client",
+  "description": "Phase 5 : l'hôte quitte la partie en plein combat. Le faux hôte rejoue p2_host_session jusqu'au tour 3, puis envoie Bye : le client affiche « L'hôte a quitté la partie », rend ses entrées et revient au menu principal.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "timeout_s": 600,
+  "max_turns": 60,
+  "end_on_session_end": true,
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33lang=fr"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--stop-after-turn", "3", "--end", "bye", "--end-after", "2", "--timeout", "600"] },
+  "expect": { "session_ended": "1", "ui:host_left": "1", "back_to_title": "1" }
+}

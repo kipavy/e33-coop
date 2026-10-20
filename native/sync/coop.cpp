@@ -427,7 +427,11 @@ void pump_network()
     net::Datagram d;
     while (s.transport->poll(d)) {
         Peer* peer = nullptr;
-        for (auto& p : s.peers) if (p.link && p.link->peer() == d.peer && p.drop.empty()) peer = &p;
+        for (auto& p : s.peers) if (p.link && p.link->peer() == d.peer) peer = &p;
+        if (peer && !peer->drop.empty()) {   // en cours de retrait (refus) : il finit d'acquitter, rien de plus
+            peer->link->on_datagram(d.data.data(), d.data.size(), s.now);
+            continue;
+        }
         if (s.role == Role::Host) {
             // Même adresse, nouvelle époque : le client a redémarré (nouveau processus, Steam : même compte). L'ancien
             // joueur est parti ; le nouveau se présente comme n'importe quel arrivant (Hello, puis instantané).

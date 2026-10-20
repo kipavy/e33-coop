@@ -1,0 +1,29 @@
+{
+  "name": "p5_dropout_host",
+  "description": "Phase 5 : départs en plein combat, 3 joueurs. Hôte réel (Maelle) + 2 faux clients. Le client de Verso se tait d'un coup au début du tour de Verso (jeu fermé, réseau coupé) : au bout de 15 s l'hôte le déclare parti, reprend Verso et joue ce tour lui-même. Le client de Lune quitte proprement (Bye) au tour 8 : l'hôte reprend Lune. Le premier revient 25 s plus tard (nouveau processus, « rejoindre ») : il attend la fin du combat, reçoit l'instantané et rentre dans la partie.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 900,
+  "max_turns": 80,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Maelle", "type": "item", "item": "Consumable_Energy_Level2", "target": "auto", "else": { "type": "skip" } },
+    { "hero": "Maelle", "type": "skip" },
+    { "hero": "Verso", "type": "attack" },
+    { "hero": "Lune", "type": "attack" }
+  ],
+  "defense": ["parry", "fail"],
+  "explore": [
+    { "do": "trigger", "players": 2, "timeout": 600 },
+    { "do": "wait_join", "players": 1, "timeout": 400 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1,Lune:2,Maelle:0", "-e33seed=2", "-e33name=Killian"],
+  "fakepeers": [
+    { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_dropout_vanish.json", "--record", "{run}/recording-fakeclient1.jsonl", "--timeout", "900"] },
+    { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_dropout_bye.json", "--record", "{run}/recording-fakeclient2.jsonl", "--timeout", "900"] }
+  ],
+  "expect": { "players_left": "2", "peer_timeouts": "1", "peer_byes": "1", "heroes_taken_over": ">=2", "takeover_turns": ">=1",
+              "snapshots_sent": "1", "joined_players": "1", "desyncs": "0", "ui:player_lost": "1", "ui:player_left": "1", "ui:turn_of": ">=1" }
+}

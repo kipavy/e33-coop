@@ -667,6 +667,14 @@ bool handle(uint8_t from, const proto::Message& m)
     if (auto* r = std::get_if<proto::JoinReady>(&m)) {
         if (!s.host) return true;
         auto& pj = s.peers[from];
+        if (game::in_battle()) {
+            // Instantané pris avant ce combat, que le client n'a pas joué : il en recevra un nouveau à la fin (sinon il
+            // manquerait les effets du combat : ennemi vaincu, butin, expérience).
+            pj = PeerJoin{JoinState::Pending, s.now, false};
+            bump("snapshots_outdated");
+            log().write("coop_join_outdated", JsonObj().add("player", static_cast<int>(from)).add("why", "battle started meanwhile"));
+            return true;
+        }
         if (pj.state != JoinState::Joined) { pj.state = JoinState::Joined; bump("joined_players"); }
         log().write("coop_peer_joined", JsonObj().add("player", static_cast<int>(from)).add("xfer", r->xfer).add("level", r->level));
         // Le nouveau venu apprend qui pilote.

@@ -52,6 +52,7 @@ std::map<std::string, std::string> g_status;
 struct Toast { std::string text; double seconds; };
 std::deque<Toast> g_pending;
 int g_toasts = 0;
+std::map<std::string, int> g_counts;
 
 std::wstring arg(const wchar_t* key)
 {
@@ -99,6 +100,7 @@ void set_status(const std::string& slot, const std::string& key, const std::vect
     auto it = g_status.find(slot);
     if (it != g_status.end() && it->second == t) return;
     g_status[slot] = t;
+    ++g_counts[key];
     log().write("ui_status", JsonObj().add("slot", slot).add("key", key).add("text", t));
     overlay::set_line(slot, t);
 }
@@ -114,6 +116,7 @@ void toast(const std::string& key, const std::vector<std::string>& args, double 
 {
     const std::string t = text(key, args);
     ++g_toasts;
+    ++g_counts[key];
     log().write("ui_toast", JsonObj().add("key", key).add("text", t).add("s", seconds));
     overlay::toast(t, seconds);
 }
@@ -122,5 +125,6 @@ void tick(double now) { overlay::tick(now); }
 
 const std::map<std::string, std::string>& statuses() { return g_status; }
 int toasts_shown() { return g_toasts; }
+int count(const std::string& key) { auto it = g_counts.find(key); return it == g_counts.end() ? 0 : it->second; }
 
 } // namespace e33::ui

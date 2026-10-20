@@ -1,0 +1,11 @@
+{
+  "player_name": "Lent",
+  "game_build": 23765773,
+  "mod_version": "0.5.0",
+  "gameplay_mods": [],
+  "ready_delay_s": 6,
+  "stall": 1,
+  "actions": [{ "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "expect": { "forced_actions": ">=1", "ready_sent": "1", "turns_stalled": "1" }
+}

@@ -19,6 +19,7 @@
 #include "../hooks/ue.hpp"
 #include "../sync/coop.hpp"
 #include "../sync/explore.hpp"
+#include "../ui/ui.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -240,6 +241,7 @@ struct Check { std::string name, expected, actual; bool ok; };
 
 int metric(const std::string& name)
 {
+    if (name.rfind("ui:", 0) == 0) return ui::count(name.substr(3));   // textes affichés (phase 5)
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
 }

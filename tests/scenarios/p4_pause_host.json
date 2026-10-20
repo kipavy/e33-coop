@@ -15,5 +15,5 @@
   ],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_pause.json", "--timeout", "600"] },
-  "expect": { "snapshots_sent": "1", "world_battles": ">=1", "pauses_opened": "1", "pauses_local": "1", "remote_pauses_applied": "1", "remote_pauses_released": "1" }
+  "expect": { "snapshots_sent": "1", "world_battles": ">=1", "pauses_opened": "1", "pauses_local": "1", "remote_pauses_applied": "1", "remote_pauses_released": "1", "ui:paused_by": ">=1" }
 }

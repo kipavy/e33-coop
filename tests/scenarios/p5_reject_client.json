@@ -1,0 +1,10 @@
+{
+  "name": "p5_reject_client",
+  "description": "Phase 5 : refus de version vu du client. Le vrai jeu client veut rejoindre un faux hôte qui le refuse (versions du mod différentes) : message clair à l'écran (texte traduit, avec ce qui diffère), session terminée, retour au menu principal.",
+  "join": true,
+  "timeout_s": 300,
+  "end_on_session_end": true,
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33lang=fr"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--reject", "version du mod hôte 0.5.1 / client 0.5.0", "--timeout", "300"] },
+  "expect": { "session_ended": "1", "ui:rejected": "1", "back_to_title": "1", "joins_completed": "0" }
+}

@@ -1,0 +1,5 @@
+{
+  "player_name": "VieuxProtocole",
+  "packet_protocol": 5,
+  "expect": { "version_replies": ">=1", "welcomes": "0", "messages_while_mismatched": "0" }
+}

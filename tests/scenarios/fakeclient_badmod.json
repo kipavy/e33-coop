@@ -1,0 +1,8 @@
+{
+  "player_name": "VieuxMod",
+  "game_build": 23765773,
+  "mod_version": "0.4.9",
+  "gameplay_mods": [],
+  "expect_reject": "version du mod hôte 0.5.0 / client 0.4.9",
+  "expect": { "rejects": "1", "welcomes": "0" }
+}
