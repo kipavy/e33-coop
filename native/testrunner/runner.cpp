@@ -643,14 +643,16 @@ void subscribe()
     });
 
     // QTE offensifs d'un héros d'ici avec un plan : vrai appui (OnComboPressed) à un instant choisi de la fenêtre.
-    // Fenêtre parfaite = dernier quart (GAME-INTERNALS §8.1) : « perfect » à 88 %, « success » à 30 %, « fail » sans appui.
+    // Fenêtre parfaite = dernier quart (GAME-INTERNALS §8.1) : « perfect » à 85 %, « success » à 30 %, « fail » sans appui.
+    // L appui part à l image suivante (jusqu à +30 ‰ à 60 i/s) ; au-delà de ~900 ‰, Combo1 porte un coup de plus
+    // que l enregistrement (fait à ~880 ‰) : p3_actions_client échouait 3 fois sur 3 le 2026-10-20 avec des appuis à 910 ‰.
     bus.post(fn(game::path::Timeline, L"OnSkillComboWindowStartReached"), [](HookCtx& ctx, RC::Unreal::UFunction*) {
         if (g.phase != Phase::Battle || g.combo_plan.empty()) return;
         UObject* hero = ue::get_object(ctx.Context, STR("BattleCharacter"));
         if (!hero || !game::is_player(hero) || !coop::controls_spot(game::spot(hero))) return;
         const std::string want = g.combo_plan[static_cast<size_t>(g.combo_window++) % g.combo_plan.size()];
         const double dur = ue::get_double(ctx.Context, STR("CurrentWindowEndRealTime")) - ue::get_double(ctx.Context, STR("CurrentWindowStartRealTime"));
-        const double frac = want == "perfect" ? 0.88 : want == "success" ? 0.30 : -1;
+        const double frac = want == "perfect" ? 0.85 : want == "success" ? 0.30 : -1;
         if (frac >= 0 && dur > 0) g.presses.push_back(Clock::now() + std::chrono::microseconds(static_cast<int64_t>(dur * frac * 1e6)));
         log().write("tr_combo_window", JsonObj().add("window", g.combo_window).add("want", want).add("duration", dur), g.turn);
     });

@@ -2,7 +2,7 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-20, 10h35) — **phase 3 : 2e validation en jeu à faire** (branche `phase-3`)
+## État courant (2026-10-20, 10h35) — **phase 3 : 3e validation en jeu à faire** (branche `phase-3`)
 
 | Phase | État | Branche |
 |---|---|---|
@@ -26,8 +26,10 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 
 - Ajouts de fin d'après-midi : visée libre rejouée (point visé imposé via `ComputeFreeAim3rdPersonTargetLocation`, ~1 s de décalage, choix approuvé par Killian), réanimation (héros morts dans `DeadPlayerCharacters`), réglage initial de scénario (`setup`), passer le tour, fin de combat non bloquante, test à 3 joueurs (`fakepeers`), mode manuel du runner, `battery.ps1`, `.tools/run.sh` / `.tools/pair.sh`.
 
-- **Retours de la 1re validation (2026-10-19 soir)** : visée libre d'un héros distant, les commandes locales de visée/tir sont verrouillées (`DisableFreeAimControls`, compteur `free_aim_controls_locked`) ; QTE de Maelle « raté » = verdict du jeu (fenêtres qui se chevauchent, appui 64 ms après la 1re) ; métrique `frame_hitches` (images > 50 ms en combat).
+- **Retours de la 1re validation (2026-10-19 soir)** : visée libre d'un héros distant, les commandes locales de visée/tir sont verrouillées (`DisableFreeAimControls`, compteur `free_aim_controls_locked`) ; QTE de Maelle « raté » : attribué à tort au joueur, voir 2e validation ; métrique `frame_hitches` (images > 50 ms en combat).
 - **Gel au démarrage corrigé** : le mod reste inerte 10 s après `on_unreal_init` (aucune recherche de fonctions, réseau ni runner). Sonde client : 3 gels / 8 avant, 0 / 16 après. Le lanceur détecte aussi le gel (fenêtre bloquée sans hook de jeu après 45 s) et relance jusqu'à 3 fois (statut `startup_freeze`).
+
+- **Retours de la 2e validation (2026-10-20)** : RT ouvrait le menu gradient de Verso chez l'hôte. `SetBattleInputEnabled(false)` ne coupe pas la roue : pendant le tour d'un héros distant, le mod retire à chaque image les contextes `IMC_Battle_PlayerTurn` / `MainWheel` / `Targeting` / `QTE` / `FreeAim` (compteur `input_contexts_removed`) et rend tour/roue/ciblage si le jeu les a remis juste avant le début d'un tour d'ici (`input_contexts_restored`). QTE de Maelle raté : non reproduit au clavier avec appuis réels (même latence 52 ms avec et sans mod) ; journal `coop_combo_pressed` / `coop_combo_try` ajouté pour l'essai manette.
 
 - **Mécaniques propres dans l'état contrôlé** (perfection de Verso, posture de Maelle, taches de Lune : champs entiers/booléens/énumérations et tableaux des composants `*Mechanic*` / `StainHolder`) : envoyées dans `StateSync`, hashées, comparées et réparées. Enregistrements régénérés : 0 écart brut sur tous les rejeux.
 
@@ -35,7 +37,7 @@ Repo **public** depuis le 2026-10-18 (basculé par Killian) : CI GitHub Actions 
 - Batterie **12/12 verte** (build 39316121262, 2026-10-20 matin, aucune relance) : p2 ×2, p3_actions ×2, p3_party ×2, p3_freeaim ×2, p3_defeat ×2, p3_resync_client, p3_three_host.
 
 ### En cours
-- 2e validation en jeu par Killian (`docs/VALIDATION-PHASE3.md`, tests 1 et 2, paquet `.tools/artifacts/39316121262/e33coop-mod`).
+- 3e validation en jeu par Killian (`docs/VALIDATION-PHASE3.md`, tests 1 et 2, paquet `.tools/artifacts/39401401406/e33coop-mod`).
 
 ### Pièges récents
 - Gel sur l'écran d'avertissement au démarrage (fenêtre bloquée, CPU ~0, thread principal en attente dans le moteur, `main.dll` sur aucune pile). Mesures 2026-10-19 : UE4SS seul 0/9, mod solo 1/8, mod client sans hôte 1/8, mod client + hôte 3/8. Cause : l'activité du mod dans ses premières secondes. Corrigé par le délai de 10 s (0/16) ; le lanceur relance en cas de récidive.
