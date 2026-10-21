@@ -1202,19 +1202,42 @@ proto::StateSync shift_host_state(const proto::StateSync& host, const proto::Sta
         h.shield += c->shield - a->shield;
         h.break_bar += c->break_bar - a->break_bar;
         if (c->dead != a->dead) h.dead = c->dead;
-        auto same_buffs = [](const proto::UnitState& x, const proto::UnitState& y) {
-            if (x.buffs.size() != y.buffs.size()) return false;
-            for (size_t i = 0; i < x.buffs.size(); ++i)
-                if (x.buffs[i].cls != y.buffs[i].cls || x.buffs[i].stacks != y.buffs[i].stacks || x.buffs[i].turns != y.buffs[i].turns) return false;
-            return true;
-        };
-        if (!same_buffs(*a, *c)) h.buffs = c->buffs;   // changés ici pendant l'attente : on ne les écrase pas
-        auto same_mech = [](const proto::UnitState& x, const proto::UnitState& y) {
-            if (x.mech.size() != y.mech.size()) return false;
-            for (size_t i = 0; i < x.mech.size(); ++i) if (x.mech[i].name != y.mech[i].name || x.mech[i].value != y.mech[i].value) return false;
-            return true;
-        };
-        if (!same_mech(*a, *c)) h.mech = c->mech;
+        // Bonus : ce qui a changé ici pendant l'attente (tours décomptés, cumuls, ajouts, retraits) est reporté sur ceux de
+        // l'hôte. (Avant : bonus laissés tels quels dès qu'ils avaient bougé -> écart jamais corrigé, Verso mort ici
+        // seulement au tour 21 de p3_party_client, 2026-10-21.) Bonus de même classe appariés dans l'ordre.
+        {
+            auto nth = [](const std::vector<proto::BuffState>& v, const std::string& cls, int k) -> const proto::BuffState* {
+                for (auto& x : v) if (x.cls == cls && k-- == 0) return &x;
+                return nullptr;
+            };
+            std::vector<proto::BuffState> merged;
+            std::map<std::string, int> seen_h;
+            for (const auto& hb : h.buffs) {
+                const int k = seen_h[hb.cls]++;
+                const proto::BuffState* sa = nth(a->buffs, hb.cls, k);
+                const proto::BuffState* sc = nth(c->buffs, hb.cls, k);
+                if (sa && !sc) continue;   // retiré ici pendant l'attente
+                proto::BuffState m = hb;
+                if (sa && sc) { m.stacks += sc->stacks - sa->stacks; m.turns += sc->turns - sa->turns; }
+                merged.push_back(m);
+            }
+            std::map<std::string, int> count_a, count_c, count_h;
+            for (auto& x : a->buffs) ++count_a[x.cls];
+            for (auto& x : h.buffs) ++count_h[x.cls];
+            for (auto& x : c->buffs) {   // ajoutés ici pendant l'attente
+                const int k = count_c[x.cls]++;
+                if (k >= count_a[x.cls] && k >= count_h[x.cls]) merged.push_back(x);
+            }
+            h.buffs = std::move(merged);
+        }
+        // Mécanique propre : écarts d'ici reportés champ par champ.
+        for (auto& f : h.mech) {
+            const proto::MechField* fa = nullptr;
+            const proto::MechField* fc = nullptr;
+            for (auto& x : a->mech) if (x.name == f.name) { fa = &x; break; }
+            for (auto& x : c->mech) if (x.name == f.name) { fc = &x; break; }
+            if (fa && fc) f.value += fc->value - fa->value;
+        }
     }
     out.gradient_charges += now.gradient_charges - start.gradient_charges;
     out.gradient_progress += now.gradient_progress - start.gradient_progress;

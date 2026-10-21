@@ -185,6 +185,10 @@ if (Test-Path (Join-Path $run "crash-dialog.txt")) { $report += "- **Crash** : "
 if ($dumpInfo) { $report += "- Dump : " + ($dumpInfo[0..1] -join " ; ") }
 $shots = Get-ChildItem (Join-Path $run "shots") -File -ErrorAction SilentlyContinue
 if ($shots) { $report += ""; $report += "Captures : " + (($shots | ForEach-Object Name) -join ", ") }
+# Fin du run : saves perso remises en écriture (reset-env les passe en lecture seule pendant le test ; sinon la vraie
+# partie de Killian ne pouvait plus sauvegarder après les tests, vu le 2026-10-21).
+Get-ChildItem (Join-Path $env:LOCALAPPDATA "Sandfall\Saved\SaveGames") -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d{17}$' } |
+    ForEach-Object { Get-ChildItem $_.FullName -File -Recurse | Where-Object IsReadOnly | ForEach-Object { $_.IsReadOnly = $false } }
 Set-Content (Join-Path $run "report.md") $report -Encoding utf8
 $report | ForEach-Object { Write-Output $_ }
 Write-Output "Dossier du run : $run"

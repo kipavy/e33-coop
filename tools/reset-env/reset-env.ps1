@@ -62,6 +62,13 @@ if (Test-Path $coopSaves) { Get-ChildItem $coopSaves -File | Remove-Item -Force 
 # 4. Mods
 $win64 = Join-Path $GameDir "Sandfall\Binaries\Win64"
 $ue = Join-Path $win64 "ue4ss"
+# Journaux des vraies parties (ue4ss\Mods\E33Coop\logs) mis de côté avant de retirer le mod (effacés par les tests le 2026-10-21).
+$gameLogs = Join-Path $ue "Mods\E33Coop\logs"
+if ((Test-Path $gameLogs) -and (Get-ChildItem $gameLogs -ErrorAction SilentlyContinue)) {
+    $dst = Join-Path $backupRoot ("game-logs-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    Copy-Item $gameLogs $dst -Recurse
+    Log "journaux de partie copiés dans $dst"
+}
 if (Test-Path (Join-Path $ue "Mods")) {
     # retirer nos mods et tout mod inconnu ; garder les mods livrés avec UE4SS
     $keep = @("BPML_GenericFunctions", "BPModLoaderMod", "CheatManagerEnablerMod", "ConsoleCommandsMod", "ConsoleEnablerMod",
