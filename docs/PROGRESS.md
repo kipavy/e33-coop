@@ -64,6 +64,7 @@
 - **Batterie complète : 36/36 verts** (build 39515111132), dont les 4 nouveaux p6. Paquet joueur refait sur ce build.
 - Connu : la jauge de masque de Monoco démarre parfois différemment chez le client (6 contre 5) ; réparée au tour 1 (`raw_hash_diffs` toléré à 2 dans les p6).
 - À valider à deux PC : le transport Steam lui-même, et l'attaque surprise en vrai (le test ne simule pas un ennemi qui fonce sur le pion suiveur ; la correction rend les ennemis passifs chez le client).
+- **Nouvelle partie ensemble** (demande de Killian, 2026-10-21 soir, build 39668659884) : l'hôte lance une nouvelle partie pendant qu'un client attend au menu → `JoinWait "new_game"` → le client lance la sienne (autosave coupée, aucune sauvegarde écrite, vérifié), chacun voit l'intro, la barrière attend le plus lent, puis l'instantané part au premier point sûr (jamais pendant l'intro du client). `OnInitialCinematicCompleted` ne se déclenche pas : fin d'intro = 5 s de calme après la première cinématique du prologue (~240 s). `p6_newgame_host` et `p6_newgame_client` verts. Vérification des tests p4/p5/p6 voisins (règle « point sûr » touchée) annulée à la demande de Killian : à repasser.
 - Reste : un écart déjà commencé (tour lancé avant que le mod soit prêt) n'est toujours que journalisé ; le pion suiveur peut encore engager un combat lui-même (l'ordre est corrigé, pas l'engagement).
 
 ### Limites connues (phase 5)
