@@ -219,6 +219,20 @@ bool load_save_slot(const std::wstring& slot, std::string& err)
     return true;
 }
 
+bool start_new_game(bool no_autosave, std::string& err)
+{
+    UObject* sm = save_manager();
+    if (!sm) { err = "no save manager"; return false; }
+    // Client (et tests) : la partie locale n'est qu'un support pour l'intro, l'instantané de l'hôte la remplace ensuite.
+    // Aucune sauvegarde ne doit atterrir dans les emplacements du joueur.
+    if (no_autosave) ue::set_bool(sm, STR("EnableAutoSave"), false);
+    ue::Call c(sm, STR("StartNewGame"));
+    if (!c) { err = "StartNewGame not found"; return false; }
+    c.set_bool(STR("FromMainMenu"), true).set_fname(STR("OverrideStartLevelDataID"), STR("None")).invoke();
+    log().write("new_game_requested", JsonObj().add("no_autosave", no_autosave));
+    return true;
+}
+
 bool trigger_battle(const std::wstring& encounter, const std::vector<std::wstring>& party, std::string& err)
 {
     UObject* ctrl = controller();

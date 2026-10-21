@@ -1,0 +1,18 @@
+{
+  "name": "p6_newgame_host",
+  "description": "Nouvelle partie ensemble (demande de Killian, 2026-10-21) : vrai jeu hôte au menu principal, le faux client se connecte et attend ; l'hôte lance une nouvelle partie (aucune sauvegarde écrite) ; le client est prévenu (JoinWait « new_game ») ; à la fin de l'intro, au premier point sûr, l'instantané part. Produit l'enregistrement rejoué par p6_newgame_client.",
+  "new_game": true,
+  "wait_players": 1,
+  "timeout_s": 1500,
+  "shots_every_s": 15,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "until": "snapshots_sent", "is": ">=1", "timeout": 1200 },
+    { "do": "wait", "until": "joined_players", "is": ">=1", "timeout": 120 },
+    { "do": "wait", "s": 10 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_newgame.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "1500"] },
+  "expect": { "new_games_started": "1", "new_games_announced": "1", "snapshots_sent": "1", "joined_players": "1", "snapshot_errors": "0" }
+}

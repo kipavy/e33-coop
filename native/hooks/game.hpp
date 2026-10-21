@@ -56,6 +56,8 @@ std::string hardcoded_name(UObject* character);   // nom interne du héros (ex. 
 
 // Charge une save depuis un slot relatif à Saved\SaveGames (ex. "e33coop-test/TEST_A"), autosave coupée.
 bool load_save_slot(const std::wstring& slot, std::string& err);
+// Nouvelle partie (SaveManager.StartNewGame depuis le menu principal) ; no_autosave : aucune sauvegarde écrite.
+bool start_new_game(bool no_autosave, std::string& err);
 // Déclenche un combat (recette E33 Versus) sur l'arène la plus proche ; party non vide = équipe imposée.
 bool trigger_battle(const std::wstring& encounter, const std::vector<std::wstring>& party, std::string& err);
 // Dernière rencontre / équipe déclenchées par trigger_battle (vide sinon).

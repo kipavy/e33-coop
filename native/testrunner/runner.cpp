@@ -85,6 +85,8 @@ struct Scenario {
     json::Value expect;
     json::Value setup;                    // {"<Héros>": {"hp": n, "shield": n, "dead": true}} : appliqué au tour 1, à l'identique sur chaque instance
     bool join = false;                    // client : rejoindre la partie de l'hôte (instantané) au lieu de charger "save"
+    bool new_game = false;                // hôte : nouvelle partie (une fois "wait_players" clients connectés) au lieu de charger "save"
+    double join_timeout_s = 400;          // client : délai maximal pour recevoir et charger l'instantané
     int pause_at_turn = 0;                // ouvre le menu pause au début de ce tour (3 s), puis le referme (phase 4)
     bool end_on_battle = false;           // exploration : le test se termine (vert) quand un combat commence
     bool end_on_session_end = false;      // client : le test se termine quand la session est finie et le menu principal atteint (phase 5)
@@ -203,11 +205,13 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.expect = v["expect"];
     s.setup = v["setup"];
     s.join = v["join"].as_bool(false);
+    s.new_game = v["new_game"].as_bool(false);
+    s.join_timeout_s = v["join_timeout_s"].as_number(400);
     s.pause_at_turn = static_cast<int>(v["pause_at_turn"].as_int(0));
     s.end_on_battle = v["end_on_battle"].as_bool(false);
     s.end_on_session_end = v["end_on_session_end"].as_bool(false);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
-    if (s.save.empty() && !s.join) { err = "scenario needs save (or join)"; return false; }
+    if (s.save.empty() && !s.join && !s.new_game) { err = "scenario needs save (or join, or new_game)"; return false; }
     if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
     return true;
 }
@@ -991,7 +995,14 @@ void tick(float dt)
     case Phase::LoadSave:
         if (g.sc.join) {   // client qui rejoint : le module coop charge l'instantané de l'hôte
             if (explore::joined()) set_phase(Phase::WaitWorld);
-            else if (g.phase_t > 400.0) fail("join: snapshot not loaded");
+            else if (g.phase_t > g.sc.join_timeout_s) fail("join: snapshot not loaded");
+            break;
+        }
+        if (g.sc.new_game) {   // nouvelle partie ensemble : l'hôte attend ses clients au menu, puis lance la partie
+            if (coop::connected_players() < g.sc.wait_players) break;
+            if (!game::start_new_game(true, err)) { fail("start_new_game: " + err); return; }
+            ++g.metrics["new_games_started"];
+            set_phase(Phase::WaitWorld);
             break;
         }
         if (!game::load_save_slot(g.sc.save, err)) { fail("load_save: " + err); return; }

@@ -42,6 +42,7 @@ constexpr double kPilotPeriod = 0.05;                               // PilotStat
 constexpr double kPollPeriod = 0.2;                                 // dialogues, cinématiques, menu pause
 constexpr double kTeleportDistance = 800;                           // écart au-delà duquel le suiveur est téléporté
 constexpr double kBarrierTimeout = 600;   // les cinématiques durent jusqu'à ~5 min (intro de Renoir : 295 s)
+constexpr double kIntroMax = 900;         // nouvelle partie : intro comptée comme cinématique au plus 15 min (filet si sa fin n'est pas vue)
 
 uint64_t fnv64(const std::vector<uint8_t>& b)
 {
@@ -113,6 +114,9 @@ struct S {
     bool local_pause = false;
     std::map<uint8_t, bool> remote_pause;
     bool remote_paused_game = false;
+    // Nouvelle partie ensemble : intro (vidéo d'ouverture) en cours ici, comptée comme une cinématique pour la barrière
+    bool intro = false;
+    double intro_since = -1;
     // Combat d'exploration
     std::string last_enemy;
     int last_engage = 0;
@@ -150,7 +154,7 @@ bool world_ready()
 
 bool safe_point()
 {
-    return world_ready() && !game::in_dialogue() && !game::playing_cinematic();
+    return world_ready() && !game::in_dialogue() && !game::playing_cinematic() && !s.intro;
 }
 
 // --- Rejoindre : hôte -------------------------------------------------------------------------
@@ -194,7 +198,8 @@ void host_join_tick()
 {
     for (auto& [player, pj] : s.peers) {
         if (pj.state != JoinState::Pending && pj.state != JoinState::Waiting) continue;
-        if (safe_point()) { send_snapshot(player); continue; }
+        // Client encore dans l'intro de sa nouvelle partie : on attend sa fin (l'instantané la couperait).
+        if (safe_point() && !s.remote_narr[player]) { send_snapshot(player); continue; }
         if (!pj.wait_sent) {
             const char* why = game::in_battle() ? "battle" : game::map_change_in_progress() ? "loading" : "narrative";
             s.net.send_to(player, proto::JoinWait{why});
@@ -206,6 +211,36 @@ void host_join_tick()
 }
 
 // --- Rejoindre : client -----------------------------------------------------------------------
+
+// --- Nouvelle partie ensemble ----------------------------------------------------------------------
+// L'hôte lance une nouvelle partie pendant qu'un client attend au menu principal : le client lance la sienne au même
+// moment (sans aucune sauvegarde), chacun voit l'intro chez lui, la barrière attend le plus lent, puis l'instantané
+// de l'hôte remplace la partie locale du client au premier point sûr (même endroit, même moment de l'histoire).
+
+void start_intro()
+{
+    s.intro = true;
+    s.intro_since = s.now;
+}
+
+void follow_new_game()
+{
+    if (s.cj != S::ClientJoin::None || !game::main_menu()) {
+        bump("new_games_ignored");
+        log().write("coop_new_game_ignored", JsonObj().add("main_menu", game::main_menu()).add("join_state", static_cast<int>(s.cj)));
+        return;
+    }
+    std::string err;
+    if (!game::start_new_game(true, err)) {
+        bump("new_game_errors");
+        log().write("coop_error", JsonObj().add("what", "start_new_game: " + err));
+        return;
+    }
+    start_intro();
+    bump("new_games_followed");
+    ui::set_status("session", "new_game_follow");
+    log().write("coop_new_game_followed", JsonObj());
+}
 
 void client_join_tick()
 {
@@ -549,7 +584,8 @@ void poll_tick()
     if (!game::controller()) return;
     movement_lock_tick();
     // Narration locale
-    const bool cine = game::playing_cinematic();
+    if (s.intro && s.now - s.intro_since > kIntroMax) { s.intro = false; log().write("coop_intro_timeout", JsonObj()); }
+    const bool cine = game::playing_cinematic() || s.intro;
     const bool dlg = !cine && game::in_dialogue();
     const bool narr = cine || dlg;
     if (narr != s.local_narr) {
@@ -811,6 +847,7 @@ bool handle(uint8_t from, const proto::Message& m)
         bump("join_waits");
         // Écran d'attente : l'hôte est en combat (ou en cinématique, en chargement) ; entrée dès son prochain point sûr.
         ui::set_status("session", w->reason == "battle" ? "waiting_battle_end" : "joining");
+        if (w->reason == "new_game" && !s.host) follow_new_game();
         return true;
     }
     if (auto* wh = std::get_if<proto::WorldHash>(&m)) {
@@ -974,6 +1011,29 @@ void subscribe()
         log().write("coop_sequence_finished", JsonObj());
     });
     bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:EndDialogue", [](HookCtx&, UFunction*) { s.choice_pending = false; });
+    // Nouvelle partie ensemble : l'hôte lance une nouvelle partie -> les clients qui attendent au menu suivent.
+    bus.pre(L"/Game/Gameplay/Save/BP_SaveManager.BP_SaveManager_C:StartNewGame", [](HookCtx&, UFunction*) {
+        if (!s.active || s.ended) return;
+        start_intro();
+        if (!s.host) return;   // client : c'est la nôtre (follow_new_game)
+        int n = 0;
+        for (auto& [player, pj] : s.peers) {
+            if (pj.state != JoinState::Pending && pj.state != JoinState::Waiting) continue;
+            s.net.send_to(player, proto::JoinWait{"new_game"});
+            pj.state = JoinState::Waiting;
+            pj.wait_sent = true;
+            ++n;
+        }
+        bump("new_games_announced");
+        if (n > 0) ui::toast("new_game_shared", {std::to_string(n)});
+        log().write("coop_new_game", JsonObj().add("players_following", n));
+    });
+    bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:OnInitialCinematicCompleted", [](HookCtx&, UFunction*) {
+        if (!s.intro) return;
+        s.intro = false;
+        bump("intros_finished");
+        log().write("coop_intro_finished", JsonObj().add("after_s", s.now - s.intro_since));
+    });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:ChangeMap", [](HookCtx&, UFunction*) {
         if (s.replaying || !s.active || !is_pilot() || !sharing()) return;   // pas pendant le chargement de l'instantané
         std::string level, tag;
