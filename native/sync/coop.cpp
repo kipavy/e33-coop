@@ -128,6 +128,7 @@ struct Battle {
     uint32_t dep_turn = 0;
     double dep_since = 0;
     UObject* dep_actor = nullptr;
+    proto::StateSync dep_start;                            // état local photographié au début du tour (comparé à l'hôte plus tard)
     bool strict = false;                                   // écart d'acteur vu dans ce combat : on revient à l'attente bloquante
     bool finalized = false;
     bool left = false;                                     // fuite : le dernier tour n'est pas comparable (l'hôte a pu en commencer un de plus)
@@ -1173,6 +1174,7 @@ void client_turn_start(UObject* actor)
             b.dep_turn = b.turn;
             b.dep_since = s.now;
             b.dep_actor = actor;
+            b.dep_start = sync::snapshot(b.id, b.turn);
             bump("turn_deps_registered");
             log().write("coop_turn_dep", JsonObj().add("turn", b.turn).add("listening", ue::get_bool(deps, STR("IsListening")))
                                          .add("triggered", ue::get_bool(deps, STR("HasTriggered"))).add("has_dep", ue::get_bool(deps, STR("HasDependency"))), b.turn);
@@ -1182,9 +1184,47 @@ void client_turn_start(UObject* actor)
     client_turn_finish(actor);
 }
 
+// Tour vérifié en différé : ce qui a changé ici depuis le début du tour (effets de début de tour appliqués pendant
+// l'attente) est reporté sur l'état de l'hôte, pour ne corriger que l'écart réel et ne pas annuler ces effets.
+proto::StateSync shift_host_state(const proto::StateSync& host, const proto::StateSync& start, const proto::StateSync& now)
+{
+    proto::StateSync out = host;
+    auto find = [](const proto::StateSync& st, const proto::Unit& u) -> const proto::UnitState* {
+        for (auto& x : st.units) if (x.unit.kind == u.kind && x.unit.spot == u.spot) return &x;
+        return nullptr;
+    };
+    for (auto& h : out.units) {
+        const proto::UnitState* a = find(start, h.unit);
+        const proto::UnitState* c = find(now, h.unit);
+        if (!a || !c) continue;
+        h.hp += c->hp - a->hp;
+        h.ap += c->ap - a->ap;
+        h.shield += c->shield - a->shield;
+        h.break_bar += c->break_bar - a->break_bar;
+        if (c->dead != a->dead) h.dead = c->dead;
+        auto same_buffs = [](const proto::UnitState& x, const proto::UnitState& y) {
+            if (x.buffs.size() != y.buffs.size()) return false;
+            for (size_t i = 0; i < x.buffs.size(); ++i)
+                if (x.buffs[i].cls != y.buffs[i].cls || x.buffs[i].stacks != y.buffs[i].stacks || x.buffs[i].turns != y.buffs[i].turns) return false;
+            return true;
+        };
+        if (!same_buffs(*a, *c)) h.buffs = c->buffs;   // changés ici pendant l'attente : on ne les écrase pas
+        auto same_mech = [](const proto::UnitState& x, const proto::UnitState& y) {
+            if (x.mech.size() != y.mech.size()) return false;
+            for (size_t i = 0; i < x.mech.size(); ++i) if (x.mech[i].name != y.mech[i].name || x.mech[i].value != y.mech[i].value) return false;
+            return true;
+        };
+        if (!same_mech(*a, *c)) h.mech = c->mech;
+    }
+    out.gradient_charges += now.gradient_charges - start.gradient_charges;
+    out.gradient_progress += now.gradient_progress - start.gradient_progress;
+    return out;
+}
+
 void client_turn_finish(UObject* actor)
 {
     auto& b = s.battle;
+    const bool deferred = !b.dep_start.units.empty() && b.dep_start.turn == b.turn;
     // L'hôte rythme les tours : attendre son début de tour (TurnStart, StateHash, StateSync, dans cet ordre).
     if (!wait_for([&] { return b.host_sync.count(b.turn) > 0; }, 15.0)) {
         if (s.ended) return;   // l'hôte est parti pendant l'attente : ce n'est pas un tour manqué
@@ -1202,20 +1242,27 @@ void client_turn_finish(UObject* actor)
     // Les tirages de l'hôte pour le tour précédent sont arrivés avant son TurnStart (lien ordonné).
     if (b.turn > 1) compare_draws(b.turn - 1);
     const proto::StateSync& host = b.host_sync[b.turn];
-    const proto::StateSync mine = sync::snapshot(b.id, b.turn);
+    // Comparaison au même instant que l'hôte (début du tour) : photo prise alors si la vérification est différée.
+    const proto::StateSync mine = deferred ? b.dep_start : sync::snapshot(b.id, b.turn);
     uint64_t h = sync::hash(mine, au);
     const uint64_t host_hash = sync::hash(host, au);
     if (h != host_hash) {
         // La simulation locale a divergé : log détaillé, puis resynchronisation depuis l'état de l'hôte.
         bump("raw_hash_diffs");
-        const sync::RepairStats r = sync::repair(mine, host);
+        const proto::StateSync now = deferred ? sync::snapshot(b.id, b.turn) : mine;
+        const proto::StateSync target = deferred ? shift_host_state(host, mine, now) : host;
+        const sync::RepairStats r = sync::repair(now, target);
         bump("repairs");
         bump("repair_failures", r.failed);
         const proto::StateSync after = sync::snapshot(b.id, b.turn);
-        h = sync::hash(after, au);
-        log().write("coop_resync", JsonObj().raw("diff", sync::diff(mine, host)).raw("repaired", sync::repair_json(r))
-                                       .add("fixed", h == host_hash).raw("remaining", h == host_hash ? "[]" : sync::diff(after, host)), b.turn);
+        // Différé : réussi si l'état actuel égale l'état de l'hôte décalé des effets d'ici ; on annonce alors le hash de
+        // l'hôte (même début de tour des deux côtés).
+        const bool fixed = sync::hash(after, au) == sync::hash(target, au);
+        h = deferred ? (fixed ? host_hash : sync::hash(after, au)) : sync::hash(after, au);
+        log().write("coop_resync", JsonObj().raw("diff", sync::diff(mine, host)).raw("repaired", sync::repair_json(r)).add("deferred", deferred)
+                                       .add("fixed", fixed).raw("remaining", fixed ? "[]" : sync::diff(after, target)), b.turn);
     }
+    b.dep_start = {};
     b.local_hash[b.turn] = h;
     for (auto& p : s.peers) send_to(p, proto::StateHash{b.id, b.turn, h});
     check_hash(b.turn);
