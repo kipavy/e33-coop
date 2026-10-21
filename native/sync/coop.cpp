@@ -127,6 +127,7 @@ struct Battle {
     bool dep_active = false;
     uint32_t dep_turn = 0;
     double dep_since = 0;
+    UObject* dep_actor = nullptr;
     bool strict = false;                                   // écart d'acteur vu dans ce combat : on revient à l'attente bloquante
     bool finalized = false;
     bool left = false;                                     // fuite : le dernier tour n'est pas comparable (l'hôte a pu en commencer un de plus)
@@ -1151,6 +1152,8 @@ void perturb_state()
     log().write("coop_perturb", JsonObj().add("what", "enemy hp -1, hero ap +1"), s.battle.turn);
 }
 
+void client_turn_finish(UObject* actor);
+
 void client_turn_start(UObject* actor)
 {
     auto& b = s.battle;
@@ -1159,6 +1162,29 @@ void client_turn_start(UObject* actor)
         b.ready_sent = true;
         for (auto& p : s.peers) send_to(p, proto::BattleReady{b.id, s.my_player_id});
     }
+    // Essai -e33turndep=1 : état de l'hôte pas encore là -> dépendance de début de tour (le jeu attend en animant)
+    // au lieu de figer le thread de jeu ; client_turn_finish est appelé par le tick à l'arrivée de l'état.
+    if (s.turn_dep && !b.strict && b.turn > 1 && !b.host_sync.count(b.turn) && b.host_end < 0) {
+        UObject* deps = ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies"));
+        ue::Call reg(deps, STR("Register Dependency"));
+        if (deps && reg) {
+            reg.set_object(STR("Dependency"), game::save_manager()).invoke();
+            b.dep_active = true;
+            b.dep_turn = b.turn;
+            b.dep_since = s.now;
+            b.dep_actor = actor;
+            bump("turn_deps_registered");
+            log().write("coop_turn_dep", JsonObj().add("turn", b.turn).add("listening", ue::get_bool(deps, STR("IsListening")))
+                                         .add("triggered", ue::get_bool(deps, STR("HasTriggered"))).add("has_dep", ue::get_bool(deps, STR("HasDependency"))), b.turn);
+            return;
+        }
+    }
+    client_turn_finish(actor);
+}
+
+void client_turn_finish(UObject* actor)
+{
+    auto& b = s.battle;
     // L'hôte rythme les tours : attendre son début de tour (TurnStart, StateHash, StateSync, dans cet ordre).
     if (!wait_for([&] { return b.host_sync.count(b.turn) > 0; }, 15.0)) {
         if (s.ended) return;   // l'hôte est parti pendant l'attente : ce n'est pas un tour manqué
@@ -1569,19 +1595,9 @@ void subscribe()
         const uint32_t next = first ? 1 : b.turn + 1;
         // Essai (-e33turndep=1) : TurnStart de l'hôte pas encore là -> au lieu de figer le jeu, on enregistre une
         // dépendance de début de tour ; le jeu attend en continuant d'animer, et le tick la résout à l'arrivée.
-        if (!first && s.turn_dep && !b.strict && !b.host_turns.count(next) && b.host_end < 0 && !b.dep_active) {
-            UObject* deps = ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies"));
-            ue::Call reg(deps, STR("Register Dependency"));
-            if (deps && reg) {
-                reg.set_object(STR("Dependency"), game::save_manager()).invoke();
-                b.dep_active = true;
-                b.dep_turn = next;
-                b.dep_since = s.now;
-                bump("turn_deps_registered");
-                log().write("coop_turn_dep", JsonObj().add("turn", next).add("listening", ue::get_bool(deps, STR("IsListening")))
-                                             .add("triggered", ue::get_bool(deps, STR("HasTriggered"))).add("has_dep", ue::get_bool(deps, STR("HasDependency"))), next);
-                return;   // acteur vérifié (et forcé si besoin) au début du tour, sans attente
-            }
+        if (!first && s.turn_dep && !b.strict && !b.host_turns.count(next) && b.host_end < 0) {
+            bump("actor_checks_deferred");   // vérifié au début du tour (OnTurnStart), sans figer le jeu ici
+            return;
         }
         if (!wait_for([&] {
                 if (first) return (s.pending_start || b.active) && b.host_turns.count(1) > 0;
@@ -2678,7 +2694,7 @@ void tick(double dt)
     }
     // Essai -e33turndep=1 : dépendance de début de tour résolue dès que le TurnStart et l'état de l'hôte sont là.
     if (auto& b = s.battle; b.dep_active) {
-        const bool ready = (b.host_turns.count(b.dep_turn) && b.host_sync.count(b.dep_turn)) || b.host_end >= 0 || !b.active;
+        const bool ready = b.host_sync.count(b.dep_turn) || b.host_end >= 0 || !b.active;
         const bool expired = s.now - b.dep_since > 15.0;
         if (ready || expired) {
             b.dep_active = false;
@@ -2686,9 +2702,11 @@ void tick(double dt)
             ue::Call solve(deps, STR("SolveDependency"));
             if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
             ue::Call recheck(deps, STR("CheckDependencies"));
+            // Vérification du tour (acteur, état) maintenant que l'hôte est là ; le jeu reprend ensuite.
+            if (ready && b.active && b.turn == b.dep_turn && b.dep_actor) client_turn_finish(b.dep_actor);
             if (recheck) recheck.invoke();
-            // Le tour a-t-il attendu ? (OnTurnStart pas encore vu = b.turn encore au tour précédent)
-            const bool held = b.turn < b.dep_turn;
+            // Le jeu a-t-il vraiment attendu ? (le personnage du tour n'a pas encore commencé son action)
+            const bool held = !ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack")) && b.commands.count({b.dep_turn, game::spot(b.dep_actor)}) == 0;
             bump(held ? "turn_deps_held" : "turn_deps_late");
             if (expired) bump("turn_dep_timeouts");
             log().write("coop_turn_dep_solved", JsonObj().add("turn", b.dep_turn).add("waited_s", s.now - b.dep_since).add("held", held)

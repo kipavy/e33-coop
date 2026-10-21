@@ -15,7 +15,7 @@
   ],
   "defense": ["parry", "fail"],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33turndep=1"],
-  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_actions_host.jsonl", "--timeout", "600"] },
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_actions_host.jsonl", "--paced", "1", "--timeout", "600"] },
   "expect": { "battle_end": "any", "turn_deps_registered": ">=1", "turn_deps_late": "0", "actor_mismatches": "0", "remote_actions": ">=2", "combos_replayed": ">=2", "combo_presses": ">=1", "rewards_checked": "any", "draw_count_diffs": "any", "raw_hash_diffs": "<=1" },
   "note": "Combo1 de Verso donne 9 ou 10 coups selon le run, même en solo (rythme du jeu, pas les appuis) : coup en plus toléré (draw_count_diffs), corrigé par l état complet (raw_hash_diffs <= 1, desyncs 0)."
 }
