@@ -2685,8 +2685,8 @@ void tick(double dt)
             UObject* deps = ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies"));
             ue::Call solve(deps, STR("SolveDependency"));
             if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
-            ue::Call check(deps, STR("CheckDependencies"));
-            if (check) check.invoke();
+            ue::Call recheck(deps, STR("CheckDependencies"));
+            if (recheck) recheck.invoke();
             // Le tour a-t-il attendu ? (OnTurnStart pas encore vu = b.turn encore au tour précédent)
             const bool held = b.turn < b.dep_turn;
             bump(held ? "turn_deps_held" : "turn_deps_late");
