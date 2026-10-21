@@ -2,7 +2,7 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-20, nuit) — **phase 5 finie** (en attente de la validation commune avec la phase 6) ; phase 6 en cours
+## État courant (2026-10-21, nuit) — phases 5-6 : batterie 36/36 verte ; prochain essai à deux PC avec le paquet du build 39515111132
 
 | Phase | État | Branche |
 |---|---|---|
@@ -59,6 +59,11 @@
 - 3e essai : équipe changée chez l'hôte (Maelle, Verso, Monoco), le client combat toujours avec Verso seul (les combats de la carte partaient avec `party` vide). Corrigé (build 39506053677) : `BattleStart.party` rempli, et chez le client un pré-hook sur `StartBattle` de l'ennemi impose l'équipe (`CharactersManager.SetParty`, `coop_party_applied`) et l'engagement de l'hôte (`coop_engage_forced`), y compris quand le pion suiveur touche l'ennemi en premier (si le `BattleStart` est déjà arrivé). Touches du mod affichées dans le menu pause (demande de Killian).
 - Journal client du 2e essai : rattrapage du premier tour validé en jeu (combat 2 : `coop_turn_start_catchup`, `hash_ok`). Mais le `StartBattle` du pion suiveur arrive ~0,4 s **après** que le mod a marqué le combat lancé, et aux combats 2-3 ~3 s **avant** le `BattleStart` (envoyé au premier tour de l'hôte). Build 39506682501 : le pré-hook garde le dernier `BattleStart`, et l'hôte envoie un avis précoce (`BattleStart` avec `battle_id` 0) depuis son `StartBattle`.
 - 4e essai (00h36) : l'ennemi du client repère le pion suiveur et lance le combat 3,5 s **avant** l'attaque surprise de l'hôte (avis précoce reçu après) ; premier tour non forcé car le combat n'était pas encore « actif ». Build 39510485783 : chez le client, ennemis de la carte sans détection, poursuite ni combat au contact (`passive_world_enemies`, toutes les 2 s) ; acteur forcé aussi au premier tour d'un combat annoncé ; F5 choisit un personnage, F6 le donne au joueur suivant, répartition affichée chez tous (`owners_summary`).
+- **Reproduction sur un PC (2026-10-21, nuit)** : un seul jeu par compte Steam, donc vrai jeu + faux pair. Runner : étape `set_party`, visée libre `"cancel": "key"` (`TryCancelFreeAim`). Scénarios `p6_world_host/client` (équipe changée après l'instantané, attaque surprise sur un ennemi de la carte, visée quittée par la touche) et `p6_world2_host/client` (deux combats de la carte dans la session, « passer » rejoué, réattribution F6 entre les deux). Le test a trouvé : bandeau « Équipe : » vide à l'arrivée du client (corrigé).
+- **Piège des tests** : lancés par Steam, ils recevaient les options de lancement de Killian (`-e33role=host -e33transport=steam`) ; un test UDP est parti en Steam. En mode test, les options `-e33…` viennent maintenant du seul `launch_args` du scénario (`native/common/cmdline.hpp`). C'est probablement aussi la cause des 3 rouges non analysés de la batterie précédente.
+- **Batterie complète : 36/36 verts** (build 39515111132), dont les 4 nouveaux p6. Paquet joueur refait sur ce build.
+- Connu : la jauge de masque de Monoco démarre parfois différemment chez le client (6 contre 5) ; réparée au tour 1 (`raw_hash_diffs` toléré à 2 dans les p6).
+- À valider à deux PC : le transport Steam lui-même, et l'attaque surprise en vrai (le test ne simule pas un ennemi qui fonce sur le pion suiveur ; la correction rend les ennemis passifs chez le client).
 - Reste : un écart déjà commencé (tour lancé avant que le mod soit prêt) n'est toujours que journalisé ; le pion suiveur peut encore engager un combat lui-même (l'ordre est corrigé, pas l'engagement).
 
 ### Limites connues (phase 5)
