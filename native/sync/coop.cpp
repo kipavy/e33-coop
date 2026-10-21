@@ -122,6 +122,12 @@ struct Battle {
     uint32_t turn = 0;
     bool active = false;
     bool ending = false;                                   // fin de combat commencée (tirages des récompenses encore remplacés)
+    // Attente « propre » du TurnStart de l'hôte (-e33turndep=1, essai) : dépendance de début de tour du jeu au lieu de
+    // bloquer le thread de jeu (mini-freezes ~1 s à la fin des compétences du client, 2026-10-21).
+    bool dep_active = false;
+    uint32_t dep_turn = 0;
+    double dep_since = 0;
+    bool strict = false;                                   // écart d'acteur vu dans ce combat : on revient à l'attente bloquante
     bool finalized = false;
     bool left = false;                                     // fuite : le dernier tour n'est pas comparable (l'hôte a pu en commencer un de plus)
     std::map<int, uint8_t> owner_by_spot;                  // emplacement de héros -> player_id
@@ -204,6 +210,7 @@ struct State {
     std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
     bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
+    bool turn_dep = false;                                 // -e33turndep=1 : attente du TurnStart par dépendance de début de tour (essai)
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     bool input_enabled = true;
     UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
@@ -1163,6 +1170,7 @@ void client_turn_start(UObject* actor)
     turn_indicator(au);
     if (auto it = b.host_turns.find(b.turn); it != b.host_turns.end() && (it->second.kind != au.kind || it->second.index != au.spot)) {
         bump("actor_mismatches");
+        s.battle.strict = true;   // essai -e33turndep : on revient à l'attente bloquante pour la suite du combat
         log().write("coop_actor_mismatch", JsonObj().add("local", game::char_class(actor)).add("host", it->second.actor), b.turn);
     }
     // Les tirages de l'hôte pour le tour précédent sont arrivés avant son TurnStart (lien ordonné).
@@ -1559,6 +1567,22 @@ void subscribe()
         if (first && !s.pending_start && !(s.early_start && s.now - s.early_start_at < 30.0)) return;
         auto& b = s.battle;
         const uint32_t next = first ? 1 : b.turn + 1;
+        // Essai (-e33turndep=1) : TurnStart de l'hôte pas encore là -> au lieu de figer le jeu, on enregistre une
+        // dépendance de début de tour ; le jeu attend en continuant d'animer, et le tick la résout à l'arrivée.
+        if (!first && s.turn_dep && !b.strict && !b.host_turns.count(next) && b.host_end < 0 && !b.dep_active) {
+            UObject* deps = ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies"));
+            ue::Call reg(deps, STR("Register Dependency"));
+            if (deps && reg) {
+                reg.set_object(STR("Dependency"), game::save_manager()).invoke();
+                b.dep_active = true;
+                b.dep_turn = next;
+                b.dep_since = s.now;
+                bump("turn_deps_registered");
+                log().write("coop_turn_dep", JsonObj().add("turn", next).add("listening", ue::get_bool(deps, STR("IsListening")))
+                                             .add("triggered", ue::get_bool(deps, STR("HasTriggered"))).add("has_dep", ue::get_bool(deps, STR("HasDependency"))), next);
+                return;   // acteur vérifié (et forcé si besoin) au début du tour, sans attente
+            }
+        }
         if (!wait_for([&] {
                 if (first) return (s.pending_start || b.active) && b.host_turns.count(1) > 0;
                 return b.host_turns.count(next) > 0 || b.host_end >= 0;
@@ -2253,6 +2277,7 @@ void init()
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
     if (arg(L"e33join") == L"1") s.want_join = true;
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
+    s.turn_dep = arg(L"e33turndep") == L"1";
     if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
@@ -2650,6 +2675,25 @@ void tick(double dt)
         e.t_ms = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count());
         e.x = s.fa_own.point[0]; e.y = s.fa_own.point[1]; e.z = s.fa_own.point[2];
         publish(e, nullptr, false);
+    }
+    // Essai -e33turndep=1 : dépendance de début de tour résolue dès que le TurnStart et l'état de l'hôte sont là.
+    if (auto& b = s.battle; b.dep_active) {
+        const bool ready = (b.host_turns.count(b.dep_turn) && b.host_sync.count(b.dep_turn)) || b.host_end >= 0 || !b.active;
+        const bool expired = s.now - b.dep_since > 15.0;
+        if (ready || expired) {
+            b.dep_active = false;
+            UObject* deps = ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies"));
+            ue::Call solve(deps, STR("SolveDependency"));
+            if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
+            ue::Call check(deps, STR("CheckDependencies"));
+            if (check) check.invoke();
+            // Le tour a-t-il attendu ? (OnTurnStart pas encore vu = b.turn encore au tour précédent)
+            const bool held = b.turn < b.dep_turn;
+            bump(held ? "turn_deps_held" : "turn_deps_late");
+            if (expired) bump("turn_dep_timeouts");
+            log().write("coop_turn_dep_solved", JsonObj().add("turn", b.dep_turn).add("waited_s", s.now - b.dep_since).add("held", held)
+                                                    .add("timeout", expired && !ready), b.dep_turn);
+        }
     }
     // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
     if (auto& b = s.battle; b.end_flow_at >= 0 && !b.finalized && (s.role == Role::Host || b.host_end >= 0 || s.now - b.end_flow_at > 8.0))

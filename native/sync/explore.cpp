@@ -94,6 +94,11 @@ struct S {
     std::optional<proto::PilotState> last_pilot;  // suiveur
     double last_pilot_at = 0;
     double follow_error = -1;
+    // Suivi lissé (2026-10-21 : arrêts-redémarrages visibles quand l'hôte court, positions Steam irrégulières)
+    bool follow_moving = false;
+    bool follow_have_target = false;
+    double follow_target[3]{};
+    double follow_last_t = -1;
     double level_mismatch_since = -1;
     bool f8_down = false;
     // Interactions, dialogues, transitions (rejoués chez les suiveurs)
@@ -374,7 +379,14 @@ void follow_tick()
     game::PawnState me;
     if (!game::pawn_state(pawn, me)) return;
     const double age = std::min(0.25, std::max(0.0, s.now - s.last_pilot_at));
-    const double tx = p.x + p.vx * age, ty = p.y + p.vy * age, tz = p.z + p.vz * age;
+    const double raw[3] = {p.x + p.vx * age, p.y + p.vy * age, p.z + p.vz * age};
+    // Cible lissée (~0,12 s) : les positions reçues par Steam arrivent par à-coups ; un saut net (> 3 m) est pris tel quel.
+    const double dt = s.follow_last_t < 0 ? 0.0 : std::clamp(s.now - s.follow_last_t, 0.0, 0.25);
+    s.follow_last_t = s.now;
+    const double jump = std::hypot(raw[0] - s.follow_target[0], raw[1] - s.follow_target[1]);
+    if (!s.follow_have_target || jump > 300) { for (int i = 0; i < 3; ++i) s.follow_target[i] = raw[i]; s.follow_have_target = true; }
+    else { const double k = 1.0 - std::exp(-dt / 0.12); for (int i = 0; i < 3; ++i) s.follow_target[i] += (raw[i] - s.follow_target[i]) * k; }
+    const double tx = s.follow_target[0], ty = s.follow_target[1], tz = s.follow_target[2];
     const double dx = tx - me.pos[0], dy = ty - me.pos[1], dz = tz - me.pos[2];
     const double d = std::sqrt(dx * dx + dy * dy);
     s.follow_error = std::sqrt(d * d + dz * dz);
@@ -385,10 +397,24 @@ void follow_tick()
         log().write("coop_follower_teleport", JsonObj().add("distance", d).add("dz", dz));
         return;
     }
-    if (d > 60) {
-        const double scale = std::clamp(d / 250.0, 0.3, 1.0);
-        game::move_pawn(pawn, dx / d, dy / d, scale);
+    // Arrêt seulement quand le pilote s'arrête vraiment et qu'on est arrivé ; reprise dès qu'il bouge ou s'éloigne
+    // (avant : un seul seuil à 60 u, donc arrêt-redémarrage plusieurs fois par seconde quand il court).
+    const double sp = std::hypot(p.vx, p.vy);
+    if (!s.follow_moving && (d > 120 || sp > 80)) { s.follow_moving = true; bump("follow_starts"); }
+    else if (s.follow_moving && d < 40 && sp < 30) s.follow_moving = false;
+    if (!s.follow_moving || d < 1) return;
+    // Direction : vers la cible, mêlée à la direction du pilote quand on est tout près (pas de demi-tours sur place).
+    double ux = dx / d, uy = dy / d;
+    if (sp > 30) {
+        const double w = std::clamp(1.0 - d / 150.0, 0.0, 1.0);
+        ux = ux * (1 - w) + (p.vx / sp) * w;
+        uy = uy * (1 - w) + (p.vy / sp) * w;
+        const double n = std::hypot(ux, uy);
+        if (n > 1e-3) { ux /= n; uy /= n; }
     }
+    // Vitesse : celle du pilote (course comprise) plus un rattrapage proportionnel à l'écart.
+    const double scale = std::clamp(sp / 500.0 + d / 300.0, 0.25, 1.0);
+    game::move_pawn(pawn, ux, uy, scale);
 }
 
 void set_pilot(uint8_t p, const char* why)
