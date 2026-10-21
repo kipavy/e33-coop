@@ -129,6 +129,8 @@ struct Battle {
     double dep_since = 0;
     UObject* dep_actor = nullptr;
     proto::StateSync dep_start;                            // état local photographié au début du tour (comparé à l'hôte plus tard)
+    bool dep_finish_pending = false;                       // vérification du tour en attente de l'état de l'hôte
+    uint32_t sct_seq = 0, ots_seq = 0, listen_seq = 0;     // StartCharacterTurn vus ; dernier suivi d'un OnTurnStart ; d'une écoute
     bool strict = false;                                   // écart d'acteur vu dans ce combat : on revient à l'attente bloquante
     bool finalized = false;
     bool left = false;                                     // fuite : le dernier tour n'est pas comparable (l'hôte a pu en commencer un de plus)
@@ -1155,31 +1157,52 @@ void perturb_state()
 
 void client_turn_finish(UObject* actor);
 
+// --- Essai -e33turndep=1 : attente du début de tour de l'hôte sans figer le jeu ------------------------------------
+// Le jeu attend, au début de chaque tour, que les « dépendances » de BM.TurnStartNotifyDependencies soient résolues,
+// en continuant d'animer. Le mod s'y inscrit au moment où le jeu commence à écouter (StartListenToDependencies) :
+// plus tôt, le compteur est remis à zéro ; plus tard, l'écoute a déjà conclu et la résolution relance la suite du tour
+// une deuxième fois (l'ennemi décidait deux fois de son action, vu le 2026-10-22).
+UObject* turn_deps() { return ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies")); }
+
+void dep_solve(const char* why)
+{
+    auto& b = s.battle;
+    if (!b.dep_active) return;
+    b.dep_active = false;
+    ue::Call solve(turn_deps(), STR("SolveDependency"));
+    if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
+    log().write("coop_turn_dep_solved", JsonObj().add("turn", b.dep_turn).add("waited_s", s.now - b.dep_since).add("why", why), b.dep_turn);
+}
+
 void client_turn_start(UObject* actor)
 {
     auto& b = s.battle;
+    // Tour qui commence : turn + 1. Une dépendance posée pour un autre tour (le tour a avancé sans elle : action lancée
+    // directement par le testeur) est retirée, sinon elle bloquerait les tours suivants.
+    if (b.dep_active && b.dep_turn != b.turn + 1) { bump("turn_deps_superseded"); dep_solve("superseded"); }
+    if (b.dep_finish_pending) { b.dep_finish_pending = false; b.dep_start = {}; }
+    b.ots_seq = b.sct_seq;
     begin_turn_common();
     if (!b.ready_sent) {   // démarrage coordonné : l'hôte attend que chacun ait commencé ce combat
         b.ready_sent = true;
         for (auto& p : s.peers) send_to(p, proto::BattleReady{b.id, s.my_player_id});
     }
-    // Essai -e33turndep=1 : état de l'hôte pas encore là -> dépendance de début de tour (le jeu attend en animant)
-    // au lieu de figer le thread de jeu ; client_turn_finish est appelé par le tick à l'arrivée de l'état.
+    // État de l'hôte pas encore là : vérification différée (le tick l'appelle à l'arrivée), pendant que la dépendance
+    // retient le tour. Si le jeu écoutait déjà sans nous pour ce tour, trop tard : attente bloquante comme avant.
     if (s.turn_dep && !b.strict && b.turn > 1 && !b.host_sync.count(b.turn) && b.host_end < 0) {
-        UObject* deps = ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies"));
-        ue::Call reg(deps, STR("Register Dependency"));
-        if (deps && reg) {
-            reg.set_object(STR("Dependency"), game::save_manager()).invoke();
-            b.dep_active = true;
+        const bool registered = b.dep_active && b.dep_turn == b.turn;
+        const bool listened_without_us = !registered && b.listen_seq == b.sct_seq;
+        if (!listened_without_us) {
             b.dep_turn = b.turn;
-            b.dep_since = s.now;
             b.dep_actor = actor;
             b.dep_start = sync::snapshot(b.id, b.turn);
-            bump("turn_deps_registered");
-            log().write("coop_turn_dep", JsonObj().add("turn", b.turn).add("listening", ue::get_bool(deps, STR("IsListening")))
-                                         .add("triggered", ue::get_bool(deps, STR("HasTriggered"))).add("has_dep", ue::get_bool(deps, STR("HasDependency"))), b.turn);
+            b.dep_finish_pending = true;
+            if (!registered) b.dep_since = s.now;
+            bump("turn_checks_deferred");
+            log().write("coop_turn_deferred", JsonObj().add("turn", b.turn).add("registered", registered), b.turn);
             return;
         }
+        bump("turn_deps_too_late");
     }
     client_turn_finish(actor);
 }
@@ -1655,6 +1678,7 @@ void subscribe()
     // donc le TurnStart de l'hôte et on remplace le paramètre Character avant que le tour ne commence.
     bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn"), [](HookCtx& ctx, UFunction* f) {
         if (s.role != Role::Client || s.battle.ending) return;
+        ++s.battle.sct_seq;
         if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
         // Premier tour d'un combat engagé ici avant que le mod le lance (pion suiveur) : le combat n'est pas encore
         // « actif », mais l'hôte l'a annoncé (avis précoce ou BattleStart). Vu le 2026-10-21 : sans ça, le client
@@ -1693,6 +1717,26 @@ void subscribe()
         *slot = host_actor;
         bump("actors_forced");
         log().write("coop_actor_forced", JsonObj().add("local", local ? game::char_class(local) : "").add("host", it->second.actor), next);
+    });
+
+    // Essai -e33turndep=1 : le jeu commence à attendre les dépendances du début de tour -> inscription du mod si l'état
+    // de l'hôte pour ce tour n'est pas encore arrivé (résolue par le tick à son arrivée).
+    bus.pre(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:StartListenToDependencies", [](HookCtx& ctx, UFunction*) {
+        if (s.role != Role::Client || !s.turn_dep || !s.battle.active || s.battle.strict || s.battle.ending) return;
+        if (ctx.Context != turn_deps() || ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
+        auto& b = s.battle;
+        b.listen_seq = b.sct_seq;
+        // Le OnTurnStart de ce tour est-il déjà passé ? (l'ordre varie selon les tours)
+        const uint32_t turn = b.ots_seq == b.sct_seq ? b.turn : b.turn + 1;
+        if (turn <= 1 || b.dep_active || b.host_sync.count(turn) || b.host_end >= 0) return;
+        ue::Call reg(ctx.Context, STR("Register Dependency"));
+        if (!reg) return;
+        reg.set_object(STR("Dependency"), game::save_manager()).invoke();
+        b.dep_active = true;
+        b.dep_turn = turn;
+        if (!b.dep_finish_pending) b.dep_since = s.now;
+        bump("turn_deps_registered");
+        log().write("coop_turn_dep", JsonObj().add("turn", turn).add("after_turn_start", b.ots_seq == b.sct_seq), turn);
     });
 
     // Début de tour : hôte -> TurnStart + StateHash + StateSync ; client -> contrôle et resynchro éventuelle.
@@ -2762,25 +2806,22 @@ void tick(double dt)
         e.x = s.fa_own.point[0]; e.y = s.fa_own.point[1]; e.z = s.fa_own.point[2];
         publish(e, nullptr, false);
     }
-    // Essai -e33turndep=1 : dépendance de début de tour résolue dès que le TurnStart et l'état de l'hôte sont là.
-    if (auto& b = s.battle; b.dep_active) {
+    // Essai -e33turndep=1 : vérification différée faite et dépendance résolue dès que l'état de l'hôte est là.
+    if (auto& b = s.battle; b.dep_active || b.dep_finish_pending) {
         const bool ready = b.host_sync.count(b.dep_turn) || b.host_end >= 0 || !b.active;
         const bool expired = s.now - b.dep_since > 15.0;
         if (ready || expired) {
-            b.dep_active = false;
-            UObject* deps = ue::get_object(game::battle_manager(), STR("TurnStartNotifyDependencies"));
-            ue::Call solve(deps, STR("SolveDependency"));
-            if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
-            ue::Call recheck(deps, STR("CheckDependencies"));
-            // Vérification du tour (acteur, état) maintenant que l'hôte est là ; le jeu reprend ensuite.
-            if (ready && b.active && b.turn == b.dep_turn && b.dep_actor) client_turn_finish(b.dep_actor);
-            if (recheck) recheck.invoke();
-            // Le jeu a-t-il vraiment attendu ? (le personnage du tour n'a pas encore commencé son action)
-            const bool held = !ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack")) && b.commands.count({b.dep_turn, game::spot(b.dep_actor)}) == 0;
-            bump(held ? "turn_deps_held" : "turn_deps_late");
-            if (expired) bump("turn_dep_timeouts");
-            log().write("coop_turn_dep_solved", JsonObj().add("turn", b.dep_turn).add("waited_s", s.now - b.dep_since).add("held", held)
-                                                    .add("timeout", expired && !ready), b.dep_turn);
+            // D'abord la vérification (acteur, état, réparation), puis le jeu reprend le tour.
+            if (b.dep_finish_pending && ready && b.active && b.turn == b.dep_turn && b.dep_actor) client_turn_finish(b.dep_actor);
+            b.dep_finish_pending = false;
+            b.dep_start = {};
+            if (expired && !ready) { bump("turn_dep_timeouts"); log().write("coop_turn_dep_timeout", JsonObj().add("turn", b.dep_turn), b.dep_turn); }
+            if (b.dep_active) {
+                bump("turn_deps_held");
+                dep_solve(ready ? "host_state" : "timeout");
+                ue::Call recheck(turn_deps(), STR("CheckDependencies"));
+                if (recheck) recheck.invoke();
+            }
         }
     }
     // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
