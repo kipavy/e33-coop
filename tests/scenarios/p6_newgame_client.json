@@ -1,0 +1,17 @@
+{
+  "name": "p6_newgame_client",
+  "description": "Nouvelle partie ensemble (demande de Killian, 2026-10-21) : vrai jeu client connecté au menu principal, face au faux hôte qui rejoue p6_newgame_host. Prévenu (JoinWait « new_game »), le client lance sa propre nouvelle partie sans aucune sauvegarde, regarde l'intro, puis charge l'instantané de l'hôte (même endroit du prologue).",
+  "join": true,
+  "join_timeout_s": 1200,
+  "timeout_s": 1500,
+  "shots_every_s": 15,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "s": 10 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p6_newgame_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p6_newgame_snapshot.sav", "--paced", "1", "--timeout", "1500"] },
+  "expect": { "new_games_followed": "1", "new_game_errors": "0", "new_games_ignored": "0", "snapshots_received": "1", "joins_completed": "1",
+              "snapshot_hash_errors": "0", "join_errors": "0" }
+}
