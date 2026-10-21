@@ -117,6 +117,8 @@ struct S {
     // Nouvelle partie ensemble : intro (vidéo d'ouverture) en cours ici, comptée comme une cinématique pour la barrière
     bool intro = false;
     double intro_since = -1;
+    int intro_sequences_done = 0;                 // cinématiques du prologue terminées depuis le début de l'intro
+    double intro_calm_since = -1;                 // pion jouable, sans cinématique, depuis
     // Combat d'exploration
     std::string last_enemy;
     int last_engage = 0;
@@ -221,6 +223,8 @@ void start_intro()
 {
     s.intro = true;
     s.intro_since = s.now;
+    s.intro_sequences_done = 0;
+    s.intro_calm_since = -1;
 }
 
 void follow_new_game()
@@ -585,6 +589,19 @@ void poll_tick()
     movement_lock_tick();
     // Narration locale
     if (s.intro && s.now - s.intro_since > kIntroMax) { s.intro = false; log().write("coop_intro_timeout", JsonObj()); }
+    // Fin de l'intro : le signal du jeu (OnInitialCinematicCompleted) n'arrive pas (vu le 2026-10-21). Elle finit donc
+    // quand le pion est jouable, sans cinématique, 5 s après la fin d'au moins une cinématique du prologue (la vidéo
+    // d'ouverture n'est pas une cinématique du jeu : le monde paraît « calme » pendant qu'elle passe).
+    if (s.intro) {
+        const bool calm = world_ready() && !game::playing_cinematic() && !s.sequence_playing && !game::in_dialogue();
+        if (!calm || s.intro_sequences_done == 0) s.intro_calm_since = -1;
+        else if (s.intro_calm_since < 0) s.intro_calm_since = s.now;
+        else if (s.now - s.intro_calm_since >= 5.0) {
+            s.intro = false;
+            bump("intros_finished");
+            log().write("coop_intro_finished", JsonObj().add("after_s", s.now - s.intro_since).add("sequences", s.intro_sequences_done));
+        }
+    }
     const bool cine = game::playing_cinematic() || s.intro;
     const bool dlg = !cine && game::in_dialogue();
     const bool narr = cine || dlg;
@@ -1008,6 +1025,7 @@ void subscribe()
     });
     bus.post(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:OnSequenceFinished", [](HookCtx&, UFunction*) {
         s.sequence_playing = false;
+        if (s.intro) ++s.intro_sequences_done;
         log().write("coop_sequence_finished", JsonObj());
     });
     bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:EndDialogue", [](HookCtx&, UFunction*) { s.choice_pending = false; });
