@@ -51,6 +51,10 @@ namespace {
 constexpr const char* kModVersion = "0.5.0";
 constexpr double kDefenseTimeout = 3.0;
 constexpr double kComboTimeout = 3.0;
+// Parade en duo : PA gagnés par héros qui a paré, et raison passée à GainAP (EAPChangeReason, libellés non dumpés :
+// valeur 0 choisie sans certitude, journalisée avec les PA avant/après).
+constexpr int kDuoParryAP = 1;
+constexpr int kDuoParryReason = 0;
 
 constexpr double kLinkTimeout = 15.0;      // silence total -> pair perdu
 constexpr double kBusyMax = 300.0;         // pair seulement « occupé » (chargement interminable) -> perdu
@@ -153,6 +157,9 @@ struct Battle {
     std::map<int, uint16_t> hit_seq;                       // emplacement -> n° de coup reçu dans le tour
     std::map<UObject*, LocalHit> local_hits;               // composant de stats -> coup en cours (héros d'ici)
     std::map<UObject*, int> imposed_check;                 // composant de stats -> défense imposée (vérification du verdict)
+    // Parade en duo : défense retenue ici pour chaque coup reçu par un héros pendant le tour (résultat du propriétaire)
+    bool duo_parry = false;                                // réglage de l'hôte pour ce combat (BattleStart)
+    std::vector<std::pair<int, proto::Defense>> turn_defenses;   // (emplacement, défense)
     // État
     std::map<uint32_t, uint64_t> local_hash;
     std::map<uint32_t, uint64_t> remote_hash;
@@ -233,6 +240,7 @@ struct State {
     double hello_at = 0;
     bool takeover = false;                                 // hôte : héros repris, entrées locales à rendre
     uint16_t turn_timer_s = 0;                             // hôte : -e33turntimer=N (0 = aucun, par défaut)
+    bool duo_parry = true;                                 // hôte : -e33duoparry=0 coupe le bonus « parade en duo »
     std::set<std::string> version_rejected;                // adresses d'un autre protocole déjà refusées
     std::map<std::pair<std::string, uint32_t>, double> tombstones;   // hôte : (adresse, époque) d'un pair retiré -> fin d'oubli
     // Steam (phase 6)
@@ -790,6 +798,7 @@ void handle(Peer& p, proto::Message& m)
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
         s.battle.rng_seed = bs->rng_seed;
         s.battle.turn_timer_s = bs->turn_timer_s;
+        s.battle.duo_parry = bs->duo_parry != 0;   // réglage de l'hôte, jamais le nôtre : même calcul partout
         log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
         return;
     }
@@ -1098,6 +1107,8 @@ void host_turn_start(UObject* actor)
         bs.rng_seed = b.rng_seed;
         b.turn_timer_s = s.turn_timer_s;
         bs.turn_timer_s = s.turn_timer_s;
+        b.duo_parry = s.duo_parry;
+        bs.duo_parry = s.duo_parry ? 1 : 0;
         auto ps = game::players();
         std::sort(ps.begin(), ps.end(), [](UObject* x, UObject* y) { return game::spot(x) < game::spot(y); });
         for (size_t i = 0; i < ps.size(); ++i) {
@@ -1589,14 +1600,70 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     else bump("defense_timeouts");
     impose_defense(hero, res, jumpable);
     b.imposed_check[stats_comp] = static_cast<int>(res);
+    b.turn_defenses.push_back({spot, res});
     bump("defenses_imposed");
     log().write("coop_defense_imposed", JsonObj().add("spot", spot).add("hit", static_cast<int>(hit)).add("owner", static_cast<int>(owner)).add("jumpable", jumpable)
                                          .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms), b.turn);
 }
 
+// Parade en duo : pendant le tour qui finit, des héros d'au moins deux joueurs ont été touchés (attaque de groupe ou
+// coups enchaînés sur plusieurs héros) et tous les coups ont été parés -> +kDuoParryAP à chacun de ces héros.
+// Calculé sur chaque instance avec les mêmes données (résultat du propriétaire de chaque défense, propriétaires du
+// combat), au même point du jeu (début du tour suivant, avant la photo d'état) : aucun message, aucun écart de hash.
+void duo_parry_check()
+{
+    auto& b = s.battle;
+    std::vector<std::pair<int, proto::Defense>> hits;
+    hits.swap(b.turn_defenses);
+    if (!b.duo_parry || hits.empty()) return;
+    std::map<int, bool> parried;   // emplacement -> tous ses coups parés
+    std::set<uint8_t> owners;
+    for (const auto& [spot, d] : hits) {
+        const bool ok = d == proto::Defense::Parry || d == proto::Defense::GradientParry;
+        auto [it, fresh] = parried.emplace(spot, ok);
+        if (!fresh) it->second = it->second && ok;
+        owners.insert(owner_of_spot(spot));
+    }
+    if (owners.size() < 2) return;
+    for (const auto& [spot, ok] : parried) {
+        if (ok) continue;
+        bump("duo_parries_missed");
+        log().write("coop_duo_parry_missed", JsonObj().add("spot", spot).add("hits", static_cast<int64_t>(hits.size())), b.turn);
+        return;
+    }
+    std::string names, detail = "[";
+    int gained = 0;
+    for (const auto& [spot, ok] : parried) {
+        UObject* hero = game::find_unit(true, spot);
+        if (!hero || game::is_dead_fast(hero)) continue;
+        UObject* st = game::stats(hero);
+        const double before = ue::get_double(st, STR("CurrentAP"));
+        // GainAP du jeu : plafonné aux PA max (SetAP), effet visuel de gain de PA ; SetAP à défaut.
+        ue::Call gain(st, STR("GainAP"));
+        if (gain) gain.set_int(STR("Amount"), kDuoParryAP).set_int(STR("ChangeReason"), kDuoParryReason).invoke();
+        else {
+            ue::Call set(st, STR("SetAP"));
+            if (set) set.set_int(STR("NewAP"), std::llround(before) + kDuoParryAP).set_int(STR("ChangeReason"), kDuoParryReason).invoke();
+        }
+        const double after = ue::get_double(st, STR("CurrentAP"));
+        gained += static_cast<int>(std::llround(after - before));
+        const std::string name = game::hardcoded_name(hero);
+        names += (names.empty() ? "" : ", ") + name;
+        if (detail.size() > 1) detail += ",";
+        detail += JsonObj().add("hero", name).add("spot", spot).add("ap_before", before).add("ap_after", after).add("via_gain", static_cast<bool>(gain)).str();
+    }
+    if (names.empty()) return;
+    bump("duo_parries");
+    bump("duo_parry_ap", gained);
+    ui::toast("duo_parry", {names, std::to_string(kDuoParryAP)}, 4.0);
+    log().write("coop_duo_parry", JsonObj().add("players", static_cast<int64_t>(owners.size())).add("hits", static_cast<int64_t>(hits.size()))
+                                    .raw("heroes", detail + "]"), b.turn);
+}
+
 // Début de tour d'un personnage (OnTurnStart, ou rattrapage quand le combat local a démarré avant le BattleStart).
 void on_turn_start(UObject* actor)
 {
+    if (s.role != Role::Solo && s.battle.active) duo_parry_check();
     if (s.role == Role::Host) host_turn_start(actor);
     else if (s.role == Role::Client && s.battle.active) client_turn_start(actor);
     // Tour du héros d'un autre joueur : pas de choix d'action ici (son action arrive par le réseau).
@@ -2031,6 +2098,7 @@ void subscribe()
             UObject* hero = ue::component_owner(ctx.Context);
             const proto::Defense res = local_result(lh, parried, dodged, ue::get_bool(hero, STR("IsGradientParrying")));
             bump("defenses_published");
+            b.turn_defenses.push_back({lh.spot, res});
             log().write("coop_defense_local", JsonObj().add("spot", lh.spot).add("hit", static_cast<int>(lh.hit)).add("result", static_cast<int>(res)), b.turn);
             publish(proto::DefenseResult{b.id, b.turn, static_cast<uint8_t>(lh.spot), lh.hit, res});
             return;
@@ -2411,6 +2479,7 @@ void init()
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     s.turn_dep = arg(L"e33turndep") == L"1";
     if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
+    s.duo_parry = arg(L"e33duoparry") != L"0";
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
     if (s.my_name.empty()) s.my_name = s.role == Role::Host ? "Hôte" : "Joueur";
@@ -2446,7 +2515,7 @@ void init()
     std::string mods = "[";
     for (auto& m : s.gameplay_mods) { if (mods.size() > 1) mods += ","; mods += "\"" + json_escape(m) + "\""; }
     log().write("coop_init", JsonObj().add("role", s.role == Role::Host ? "host" : "client").add("local", s.transport ? s.transport->local_address() : std::string("steam (pending)"))
-                                 .add("game_build", s.game_build).add("mod_version", kModVersion).raw("gameplay_mods", mods + "]"));
+                                 .add("game_build", s.game_build).add("mod_version", kModVersion).add("duo_parry", s.duo_parry).raw("gameplay_mods", mods + "]"));
 
     if (s.role == Role::Client && !s.steam) connect_to_host(ue::to_utf8(arg(L"e33connect")));
     explore::Net net;

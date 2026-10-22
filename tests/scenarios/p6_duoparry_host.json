@@ -1,0 +1,20 @@
+{
+  "name": "p6_duoparry_host",
+  "description": "Parade en duo : hôte réel (Maelle, Lune) + faux client (Verso). Tout le monde pare tout ; une attaque qui touche des héros des deux joueurs, toute parée, doit donner +1 PA à chacun (GainAP), un toast « Parade en duo ! » et aucun écart. L'enregistrement du faux client (recording-fakeclient.jsonl) devient tests/recordings/p6_duoparry_host.jsonl, rejoué par p6_duoparry_client.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Eveque*1",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 900,
+  "wait_players": 1,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Maelle", "type": "attack" },
+    { "hero": "Lune", "type": "attack" }
+  ],
+  "defense": ["parry"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1,Maelle:0,Lune:0", "-e33seed=2"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_duoparry.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": { "battle_end": "any", "remote_actions": ">=1", "duo_parries": ">=1", "duo_parry_ap": ">=1", "ui:duo_parry": ">=1" },
+  "note": "Rencontre choisie sans certitude d'une attaque de groupe (aucun coup sur plusieurs héros dans un même tour dans les runs du Lancelier Alpha). Si duo_parries reste à 0 : vérifier dans le journal hôte s'il y a des coop_defense_* sur plusieurs emplacements dans un même tour, sinon changer de rencontre."
+}
