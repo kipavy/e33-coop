@@ -2530,7 +2530,7 @@ void init()
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
     if (arg(L"e33join") == L"1" || remote_default) s.want_join = true;
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
-    s.turn_dep = arg(L"e33turndep") == L"1";
+    s.turn_dep = arg(L"e33turndep") != L"0";   // attente sans figer le jeu, par défaut depuis le 2026-10-22 (-e33turndep=0 : attente bloquante)
     if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
     s.duo_parry = arg(L"e33duoparry") != L"0";
     s.my_name = ue::to_utf8(arg(L"e33name"));
