@@ -140,6 +140,44 @@ inline std::string vdf_value(std::string_view text, std::string_view key)
     return {};
 }
 
+// Dossier Win64 du jeu (…\Sandfall\Binaries\Win64) : bibliothèques Steam (racine + libraryfolders.vdf), celle qui a
+// appmanifest_1903340.acf (dossier "installdir", sinon « Expedition 33 »). read(chemin) : contenu, vide si absent ;
+// exists(chemin) : fichier présent. Chemins Windows ('\'), UTF-8. Vide si introuvable.
+template <class Read, class Exists>
+inline std::string find_game_win64(std::string steam_root, Read read, Exists exists)
+{
+    auto norm = [](std::string p) {
+        for (char& c : p) if (c == '/') c = '\\';
+        while (p.size() > 3 && p.back() == '\\') p.pop_back();
+        return p;
+    };
+    if (steam_root.empty()) return {};
+    steam_root = norm(steam_root);
+    std::vector<std::string> libs{steam_root};
+    for (const char* vdf : {"\\steamapps\\libraryfolders.vdf", "\\config\\libraryfolders.vdf"})
+        for (auto& p : vdf_library_paths(read(steam_root + vdf))) {
+            const std::string n = norm(p);
+            bool dup = false;
+            for (auto& l : libs) if (to_lower(l) == to_lower(n)) dup = true;
+            if (!dup) libs.push_back(n);
+        }
+    const std::string exe = "\\Sandfall\\Binaries\\Win64\\SandFall-Win64-Shipping.exe";
+    // D'abord la bibliothèque qui déclare le jeu (manifeste), puis le dossier par défaut dans chacune.
+    for (auto& l : libs) {
+        const std::string acf = read(l + "\\steamapps\\appmanifest_1903340.acf");
+        if (acf.empty()) continue;
+        std::string dir = vdf_value(acf, "installdir");
+        if (dir.empty()) dir = "Expedition 33";
+        const std::string game = l + "\\steamapps\\common\\" + dir;
+        if (exists(game + exe)) return game + "\\Sandfall\\Binaries\\Win64";
+    }
+    for (auto& l : libs) {
+        const std::string game = l + "\\steamapps\\common\\Expedition 33";
+        if (exists(game + exe)) return game + "\\Sandfall\\Binaries\\Win64";
+    }
+    return {};
+}
+
 // --- settings.ini du mod (ue4ss/Mods/E33Coop/settings.ini) ---------------------------------------------------------
 // Une option par ligne "clé = valeur", '#' ou ';' : commentaire. Les options de lancement -e33… restent prioritaires.
 struct SettingDef { const char* key; const char* arg; const char* def; const char* values; };

@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <functional>
+#include <iterator>
 #include <string>
 
 #include "minijson.hpp"
