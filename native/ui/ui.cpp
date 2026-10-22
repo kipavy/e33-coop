@@ -34,7 +34,7 @@ constexpr Entry kTexts[] = {
     {"your_turn", "À vous de jouer", "Your turn"},
     {"turn_timer", "Tour de {0} : {1} s", "{0}'s turn: {1} s"},
     {"duo_parry", "Parade en duo ! +{1} PA ({0})", "Duo parry! +{1} AP ({0})"},
-    {"turn_forced","Temps écoulé : {0} attaque automatiquement", "Time is up: {0} attacks automatically"},
+    {"turn_forced", "Temps écoulé : {0} attaque automatiquement", "Time is up: {0} attacks automatically"},
     {"paused_by", "Pause demandée par {0}", "Paused by {0}"},
     {"waiting_players", "En attente des autres joueurs…", "Waiting for the other players…"},
     {"waiting_battle_end", "En attente de la fin du combat de l'hôte…", "Waiting for the host's battle to end…"},

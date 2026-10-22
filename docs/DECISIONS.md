@@ -203,3 +203,14 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 8. **Textes** : cartes « toast » du jeu (`WBP_ToastCard`), une persistante pour les indicateurs, une par message ; table FR/EN dans `native/ui`.
 
 **Remise en cause si** : un achat coïncide souvent avec un événement rejoué (la variation est alors absorbée et la resynchro reprend l'état de l'hôte) ; ou si `LoadCharacterState` ne reproduit plus l'empreinte de l'émetteur (compteur `build_hash_mismatches`).
+
+---
+
+## D15 — Bonus « parade en duo » (2026-10-22, demande validée par Killian)
+
+**Décision** :
+- Pendant un tour, si des héros d'**au moins deux joueurs** sont touchés (attaque de groupe, ou coups enchaînés sur plusieurs héros) et que **tous** les coups reçus sont parés (parade ou parade gradient), chacun de ces héros gagne **+1 PA** (`Stats.GainAP(1, raison 0)`, plafonné par le jeu aux PA max) ; toast « Parade en duo ! +1 PA (héros) » chez tout le monde.
+- **Calcul local et identique partout** plutôt qu'un message de l'hôte : chaque instance connaît le résultat retenu pour chaque coup (le sien publié, ou celui du propriétaire imposé, D11) et les propriétaires du combat. Le bonus est appliqué au début du tour suivant (`OnTurnStart`, avant la photo d'état et le hash), donc au même point du jeu chez l'hôte et chez les clients : pas d'écart de hash, pas de réparation. Un délai de défense dépassé (échec imposé d'un côté seulement) reste rattrapé par `StateSync`.
+- Option de l'hôte, active par défaut, `-e33duoparry=0` pour la couper ; envoyée dans `BattleStart.duo_parry` (champ final facultatif : absent = coupé, donc les anciens enregistrements rejouent sans bonus). Les clients suivent toujours le réglage de l'hôte.
+
+**Remise en cause si** : la raison 0 de `GainAP` déclenche un effet indésirable (pictos liés à une raison précise) ; ou si `duo_parry_ap` montre un gain différent de 1 (journal `coop_duo_parry` : PA avant/après).
