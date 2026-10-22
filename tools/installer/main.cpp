@@ -138,7 +138,7 @@ fs::path self_path()
     return buf;
 }
 
-bool game_running()
+bool process_running(const wchar_t* exe)
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
@@ -146,10 +146,12 @@ bool game_running()
     pe.dwSize = sizeof pe;
     bool found = false;
     for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
-        if (_wcsicmp(pe.szExeFile, kGameExe) == 0) found = true;
+        if (_wcsicmp(pe.szExeFile, exe) == 0) found = true;
     CloseHandle(snap);
     return found;
 }
+
+bool game_running() { return process_running(kGameExe); }
 
 // --- Jeu -------------------------------------------------------------------------------------------------------------
 std::wstring reg_steam_path()
@@ -557,6 +559,14 @@ fs::path pick_game_folder()
 
 void relaunch_game()
 {
+    // Steam doit voir le jeu fermé (lanceur compris, Apps\1903340\Running à 0 ; lecture seule), sinon « jeu déjà en cours ».
+    for (int i = 0; i < 90; ++i) {
+        DWORD running = 0, size = sizeof running;
+        const bool reg = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam\\Apps\\1903340", L"Running", RRF_RT_REG_DWORD, nullptr, &running, &size) == ERROR_SUCCESS;
+        if (!game_running() && !process_running(L"Expedition33_Steam.exe") && (!reg || running == 0)) break;
+        Sleep(1000);
+    }
+    Sleep(5000);
     logline("relaunch steam://rungameid/1903340");
     ShellExecuteW(nullptr, L"open", L"steam://rungameid/1903340", nullptr, nullptr, SW_SHOWNORMAL);
 }

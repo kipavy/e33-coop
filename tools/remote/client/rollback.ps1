@@ -38,4 +38,16 @@ if (Test-Path $newList) {
 }
 Move-Item $lastFile (Join-Path $bak "restored.txt") -Force
 Log "restored backup $stamp"
-if ($Relaunch) { Start-Sleep -Seconds 3; Start-Process "steam://rungameid/1903340"; Log "relaunched" }
+if ($Relaunch) {
+    # Steam doit voir le jeu ferme (lanceur compris, Apps\1903340\Running a 0, lecture seule), sinon « jeu deja en cours ».
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline) {
+        $p = Get-Process "SandFall-Win64-Shipping", "Expedition33_Steam" -ErrorAction SilentlyContinue
+        $r = (Get-ItemProperty "HKCU:\Software\Valve\Steam\Apps\1903340" -ErrorAction SilentlyContinue).Running
+        if (-not $p -and -not $r) { break }
+        Start-Sleep -Seconds 1
+    }
+    Start-Sleep -Seconds 5
+    Start-Process "steam://rungameid/1903340"
+    Log "relaunched"
+}
