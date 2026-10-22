@@ -2150,6 +2150,8 @@ void subscribe()
         } else {
             auto& b = s.battle;
             wait_for([&] { return b.host_rewards.has_value(); }, 5.0);
+            // Fin de combat de l'hôte arrivée entre-temps : ses récompenses suivent de peu (~2 s, p3_freeaim 2026-10-22).
+            if (!b.host_rewards && b.host_end >= 0) wait_for([&] { return b.host_rewards.has_value(); }, 4.0);
             bump("rewards_checked");
             bool same = b.host_rewards && b.host_rewards->xp == mine.xp && b.host_rewards->gold == mine.gold && b.host_rewards->loot.size() == mine.loot.size();
             for (size_t i = 0; same && i < mine.loot.size(); ++i)
