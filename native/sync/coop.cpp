@@ -2819,8 +2819,14 @@ void tick(double dt)
             if (b.dep_active) {
                 bump("turn_deps_held");
                 dep_solve(ready ? "host_state" : "timeout");
-                ue::Call recheck(turn_deps(), STR("CheckDependencies"));
-                if (recheck) recheck.invoke();
+                // SolveDependency conclut déjà l'écoute quand c'était la dernière dépendance : un CheckDependencies de
+                // plus relançait la suite du tour une 2e fois (l'ennemi tirait deux fois sa cible, vu le 2026-10-22).
+                UObject* deps = turn_deps();
+                if (deps && ue::get_bool(deps, STR("IsListening")) && !ue::get_bool(deps, STR("HasTriggered"))) {
+                    bump("turn_deps_rechecked");
+                    ue::Call recheck(deps, STR("CheckDependencies"));
+                    if (recheck) recheck.invoke();
+                }
             }
         }
     }
