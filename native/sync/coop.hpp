@@ -57,5 +57,9 @@ const std::map<std::string, int>& counters();
 int counter(const std::string& name);
 // Version du mod (Hello, test à distance).
 const char* mod_version();
+// Hôte Steam : id de son salon coop prêt (0 sinon) ; ce SteamID en est-il membre ? (test à distance : salon proposé
+// au client par le canal à part, voir native/remote)
+uint64_t host_lobby();
+bool host_lobby_has(uint64_t steam_id);
 
 } // namespace e33::coop

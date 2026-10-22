@@ -101,6 +101,12 @@ struct State {
     double quit_at = -1;
     int dropped_untrusted = 0;
     bool snapshot_loaded = false;   // save coop chargée à distance (autosave coupée) : quitter reste sans risque
+    // salon proposé par l'hôte de confiance (Op::Lobby) : repli quand GetFriendGamePlayed ne donne rien
+    uint64_t offered_lobby = 0;
+    double offered_at = -1;
+    std::string offered_mod;
+    uint64_t offered_used = 0;
+    double offered_used_at = -1;
     // envois en cours
     std::deque<OutXfer> out;
     // hôte
@@ -109,6 +115,8 @@ struct State {
     uint32_t next_req = 0;
     std::map<uint32_t, HostReq> reqs;
     std::set<uint64_t> peers;
+    bool peers_loaded = false;
+    std::map<uint64_t, uint64_t> offer_logged;   // pair -> dernier salon proposé journalisé
 } s;
 
 const remotecfg::Config& cfg() { return cmdline::remote_config(); }
@@ -545,6 +553,22 @@ void client_command(const Packet& p)
     reply_error(p.req, "commande inconnue : " + c);
 }
 
+// Salon coop proposé par l'hôte de confiance : seulement gardé ici, rejoint par auto_join_lobby (menu principal, sans
+// session, si GetFriendGamePlayed ne donne rien). Rien d'autre n'en dépend : un salon faux ne mène qu'à un refus.
+void client_lobby_offer(uint64_t from, const Packet& p)
+{
+    if (!lobby_offer_valid(p, from, cfg().host)) {
+        log().write("remote_lobby_offer_refused", JsonObj().add("from", std::to_string(from)).add("owner", std::to_string(p.owner)).add("lobby", std::to_string(p.lobby)));
+        return;
+    }
+    if (p.lobby != s.offered_lobby)
+        log().write("remote_lobby_offer", JsonObj().add("lobby", std::to_string(p.lobby)).add("host_mod", p.mod_version).add("mod", coop::mod_version())
+                                              .add("friend_lobby", std::to_string(net::steam::friend_lobby(cfg().host))));
+    s.offered_lobby = p.lobby;
+    s.offered_at = s.now;
+    s.offered_mod = p.mod_version;
+}
+
 void client_tick()
 {
     const uint64_t host = cfg().host;
@@ -580,6 +604,7 @@ void client_tick()
         if (p->op == Op::Command) client_command(*p);
         else if (p->op == Op::File) update_file(*p);
         else if (p->op == Op::Done) update_done(*p);
+        else if (p->op == Op::Lobby) client_lobby_offer(m.from, *p);
     }
 }
 
@@ -678,6 +703,37 @@ void host_command_file(const fs::path& file)
     s.reqs.emplace(req, std::move(r));
 }
 
+// Réponse au Hello (toutes les 5 s) d'un pair connu : salon coop de l'hôte s'il est ouvert et que le pair n'y est pas
+// (contournement : jeu de l'ami relancé par script, salons d'amis invisibles chez lui).
+void host_offer_lobby(uint64_t to, uint16_t peer_version)
+{
+    const uint64_t lobby = coop::host_lobby();
+    if (!should_offer_lobby(peer_version, lobby, lobby && coop::host_lobby_has(to))) return;
+    Packet o;
+    o.op = Op::Lobby;
+    o.lobby = lobby;
+    o.owner = net::steam::my_id();
+    o.mod_version = coop::mod_version();
+    const int code = send(to, o);
+    if (s.offer_logged[to] != lobby) {
+        s.offer_logged[to] = lobby;
+        log().write("remote_host_lobby_offer", JsonObj().add("peer", std::to_string(to)).add("lobby", std::to_string(lobby)).add("code", code));
+    }
+}
+
+// Pairs déjà interrogés lors d'un lancement précédent (remote/peers/<SteamID>.json, écrits par ce mod hôte) : leurs
+// sessions sont acceptées, leur Hello reçu (salon proposé) sans attendre une nouvelle commande de remote.ps1.
+void load_known_peers()
+{
+    s.peers_loaded = true;
+    std::error_code ec;
+    for (auto it = fs::directory_iterator(remote_dir() / L"peers", ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        if (it->path().extension() != L".json") continue;
+        if (const uint64_t id = remotecfg::parse_steam_id(ue::to_utf8(it->path().stem().wstring()))) s.peers.insert(id);
+    }
+    if (!s.peers.empty()) log().write("remote_host_known_peers", JsonObj().add("count", static_cast<int64_t>(s.peers.size())));
+}
+
 void host_packet(uint64_t from, const Packet& p)
 {
     if (p.op == Op::Hello) {
@@ -685,7 +741,9 @@ void host_packet(uint64_t from, const Packet& p)
         write_text(remote_dir() / L"peers" / (std::to_wstring(from) + L".json"),
                    JsonObj().add("steam_id", std::to_string(from)).add("name", p.name).add("mod_version", p.mod_version)
                        .add("coop_protocol", static_cast<int>(p.protocol)).add("allow_restart", (p.flags & kFlagRestart) != 0)
-                       .add("allow_update", (p.flags & kFlagUpdate) != 0).add("test_mode", (p.flags & kFlagTestMode) != 0).add("seen", stamp()).str());
+                       .add("allow_update", (p.flags & kFlagUpdate) != 0).add("test_mode", (p.flags & kFlagTestMode) != 0)
+                       .add("remote_version", static_cast<int>(p.version)).add("seen", stamp()).str());
+        host_offer_lobby(from, p.version);
         return;
     }
     auto it = s.reqs.find(p.req);
@@ -738,6 +796,7 @@ void host_packet(uint64_t from, const Packet& p)
 
 void host_tick()
 {
+    if (!s.peers_loaded) load_known_peers();
     if (s.now >= s.next_inbox) {
         s.next_inbox = s.now + 0.5;
         std::error_code ec;
@@ -776,10 +835,20 @@ uint64_t auto_join_lobby()
     if (!client_enabled() || !net::steam::loaded() || s.now < s.next_auto_join) return 0;
     s.next_auto_join = s.now + 5.0;
     if (!s.at_menu) return 0;
-    const uint64_t lobby = net::steam::friend_lobby(cfg().host);
+    uint64_t lobby = net::steam::friend_lobby(cfg().host);
+    const char* source = "friend";
+    // Repli : salon proposé par l'hôte de confiance (Op::Lobby) encore frais ; même salon pas réessayé avant 20 s
+    // (entrée refusée : l'hôte en proposera un autre s'il l'a recréé).
+    if (!lobby && s.offered_lobby && s.now - s.offered_at < 20.0 && !(s.offered_lobby == s.offered_used && s.now - s.offered_used_at < 20.0)) {
+        lobby = s.offered_lobby;
+        source = "host_offer";
+        s.offered_used = lobby;
+        s.offered_used_at = s.now;
+        s.last_lobby_logged = 0;   // chaque essai journalisé
+    }
     if (lobby && lobby != s.last_lobby_logged) {
         s.last_lobby_logged = lobby;
-        log().write("remote_auto_join", JsonObj().add("lobby", std::to_string(lobby)));
+        log().write("remote_auto_join", JsonObj().add("lobby", std::to_string(lobby)).add("source", source).add("host_mod", lobby == s.offered_used ? s.offered_mod : std::string()));
     }
     return lobby;
 }

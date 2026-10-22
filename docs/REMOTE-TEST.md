@@ -96,6 +96,18 @@ powershell -NoProfile -File tools/remote/remote.ps1 peer
   (`last_run`), puis rapatrie les journaux. Sans `-AllowRestart`, l'ami doit relancer le jeu à la main.
 - Rejoindre : au menu principal, le client rejoint tout seul le lobby coop de l'hôte de confiance (essai toutes les
   5 s ; il faut être amis Steam). Une session coop terminée ne se relance pas dans le même processus : `restart`.
+  Repli (remote v2, 2026-10-23) : le jeu relancé par un script (`restart`, `run`, mise à jour) ne voyait parfois
+  **aucun** salon d'ami (`GetFriendGamePlayed` vide), alors que l'invitation marchait. L'hôte répond donc à chaque
+  « bonjour » du client (toutes les 5 s) par l'id de son salon coop (`Op::Lobby`), tant qu'il a un salon ouvert et que
+  le client n'y est pas ; le client le rejoint si `friend_lobby` ne donne rien. Il faut que l'hôte connaisse le pair :
+  pairs déjà interrogés (`remote\peers\<SteamID>.json`, relus au lancement du jeu hôte) ou un `status` après coup.
+  Journaux : `remote_host_lobby_offer` (hôte), `remote_lobby_offer`, `remote_auto_join` (`source` : `friend` ou
+  `host_offer`), `remote_lobby_offer_refused` (client).
+- Diagnostic des salons invisibles (`coop_lobby_diag`, client Steam au menu sans session, toutes les 30 s tant
+  qu'aucun salon d'ami n'est vu, puis une fois quand il l'est) : AppID vu par le jeu, connexion, nombre d'amis, amis
+  dans le jeu, `GetFriendGamePlayed` brut (ok, game_id, lobby) et état de persona de l'hôte de confiance et de l'ami
+  du `rejoin.txt` ; au premier enregistrement et quand un salon est trouvé : processus (chaîne des parents, ligne de
+  commande, dossier courant, variables `Steam*`). Comparer un lancement à la main et un lancement par script.
 - `update` : copie les fichiers permis du paquet dans `remote\updates\<id>\`, les envoie (SHA-256), le client vérifie,
   prépare `remote\staging\`, quitte, puis `apply-update.ps1` installe, relance et surveille (retour arrière automatique).
   Vérifier ensuite avec `status` (`mod_version`, `remote\helper.log` dans `fetch-logs`).
@@ -108,8 +120,11 @@ powershell -NoProfile -File tools/remote/remote.ps1 peer
   rapport avec `proto::kProtocolVersion`. On n'y ajoute que des commandes ou des champs en fin de paquet (ignorés par
   les anciennes versions) : une mise à jour qui change le protocole coop ne coupe jamais `status`, `fetch-logs`,
   `restart` ni `update`.
+- **Versions E33R** : 1 (v0.5-0.6.2) ; 2 : `Op::Lobby` (hôte -> client : salon, propriétaire, version du mod de
+  l'hôte), envoyé seulement à un client dont le Hello est en version 2 ou plus (un client v1 n'en reçoit jamais).
 - **Client** : ne lit que les messages du SteamID de confiance (sessions acceptées seulement pour lui), liste fermée
-  de commandes, chemins générés localement. **Hôte** : n'accepte une réponse que du pair interrogé, vérifie chaque
+  de commandes, chemins générés localement. Un salon proposé n'est retenu que s'il vient du SteamID de confiance et
+  que celui-ci s'en dit propriétaire ; il ne sert qu'à l'auto-jonction au menu principal, sans session. **Hôte** : n'accepte une réponse que du pair interrogé, vérifie chaque
   chemin reçu (relatif, sans `..`, caractères simples) avant d'écrire dans `outbox\<id>\files\`, limite de taille.
 - Assistants PowerShell installés par `install.ps1` dans `remote\` (`relaunch.ps1`, `apply-update.ps1`,
   `rollback.ps1`) : lancés cachés par le mod avec pour seul argument son PID ; ils attendent la fin du jeu.

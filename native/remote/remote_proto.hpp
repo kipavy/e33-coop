@@ -16,7 +16,9 @@
 namespace e33::remote {
 
 inline constexpr uint32_t kMagic = 0x52333345;   // "E33R"
-inline constexpr uint16_t kVersion = 1;
+// 2 : op Lobby (hôte -> client : salon coop ouvert par l'hôte de confiance).
+inline constexpr uint16_t kVersion = 2;
+inline constexpr uint16_t kVersionLobby = 2;   // première version qui comprend Op::Lobby
 inline constexpr int kSteamChannel = 1;
 
 inline constexpr size_t kMaxArg = 128 * 1024;          // scénario, options d'une commande
@@ -33,6 +35,10 @@ enum class Op : uint8_t {
     Reply = 3,     // client -> hôte : réponse (final = fin de la requête)
     File = 4,      // morceau de fichier (client -> hôte : journaux ; hôte -> client : mise à jour)
     Done = 5,      // fin d'un lot de fichiers (nombre, octets, empreinte du manifeste)
+    // Version 2 : hôte -> client, en réponse au Hello tant que l'hôte a un salon coop ouvert sans ce client : id du
+    // salon, propriétaire (= l'hôte), version du mod de l'hôte. Le client le rejoint au menu principal si
+    // GetFriendGamePlayed ne donne rien (jeu relancé par script : salon d'ami invisible, essai à deux PC du 2026-10-23).
+    Lobby = 6,
 };
 
 inline constexpr uint32_t kFlagRestart = 1;
@@ -41,6 +47,7 @@ inline constexpr uint32_t kFlagTestMode = 4;
 
 struct Packet {
     Op op = Op::Hello;
+    uint16_t version = kVersion;     // décodage : version E33R de l'émetteur (en-tête ; ignorée à l'encodage)
     uint32_t req = 0;
     // Hello
     std::string mod_version;
@@ -62,6 +69,9 @@ struct Packet {
     std::vector<uint8_t> data;
     uint32_t count = 0;              // Done
     uint64_t total = 0;              // Done
+    // Lobby (mod_version : celle de l'hôte)
+    uint64_t lobby = 0;
+    uint64_t owner = 0;
 };
 
 std::vector<uint8_t> encode(const Packet& p);
@@ -78,6 +88,12 @@ bool update_dest_allowed(std::string_view path);
 // (options -e33 connues ; -e33connect / -e33port retirées ; rôle client et transport Steam seulement). sanitized : le
 // scénario réécrit à exécuter ; notes : ce qui a été retiré.
 bool validate_scenario(std::string_view text, std::string& sanitized, std::string& err, std::vector<std::string>* notes = nullptr);
+// Client : salon proposé acceptable ? Seulement venu du SteamID de confiance (non nul), qui s'en dit propriétaire,
+// salon non nul.
+bool lobby_offer_valid(const Packet& p, uint64_t from, uint64_t trusted);
+// Hôte : proposer son salon à ce pair ? Pair qui comprend Op::Lobby (version E33R de son Hello), salon ouvert, pair
+// pas déjà dedans.
+bool should_offer_lobby(uint16_t peer_version, uint64_t lobby, bool peer_in_lobby);
 // Identifiant de requête (nom de dossier) : [A-Za-z0-9_-], 1 à 64 caractères.
 bool safe_id(std::string_view id);
 

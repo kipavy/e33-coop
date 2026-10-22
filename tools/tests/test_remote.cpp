@@ -65,6 +65,58 @@ static void test_packets()
     CHECK(r && r->mod_version == "0.5.0" && r->flags == 3);
 }
 
+// Op::Lobby (version 2) : salon coop proposé par l'hôte de confiance au client du test à distance.
+static void test_lobby()
+{
+    constexpr uint64_t host = 76561198355797267ull, other = 76561198045698677ull, lobby = 109775243312345678ull;
+    Packet l; l.op = Op::Lobby; l.lobby = lobby; l.owner = host; l.mod_version = "0.6.3";
+    auto r = roundtrip(l);
+    CHECK(r && r->op == Op::Lobby && r->lobby == lobby && r->owner == host && r->mod_version == "0.6.3" && r->version == kVersion);
+    CHECK(kVersion >= kVersionLobby);
+
+    // Disposition fixe : en-tête (7 octets) + lobby u64 + owner u64 + chaîne (u16 + octets).
+    const auto b = encode(l);
+    CHECK(b.size() == 7 + 8 + 8 + 2 + 5);
+    CHECK(b[6] == 6);
+    std::string err;
+    for (size_t n = 0; n < b.size(); ++n) CHECK(!decode(b.data(), n, err));   // tronqué : refusé
+
+    // Version plus récente avec des champs en fin : en tête inchangés, reste ignoré.
+    auto fut = b;
+    fut[4] = 7;
+    fut.push_back(1); fut.push_back(2); fut.push_back(3);
+    r = decode(fut.data(), fut.size(), err);
+    CHECK(r && r->lobby == lobby && r->owner == host && r->version == 7);
+
+    // Hello d'un client v1 : version lue dans l'en-tête (l'hôte ne lui propose pas de salon).
+    Packet h; h.op = Op::Hello; h.mod_version = "0.6.2";
+    auto old = encode(h);
+    old[4] = 1; old[5] = 0;
+    r = decode(old.data(), old.size(), err);
+    CHECK(r && r->op == Op::Hello && r->version == 1);
+    // Le Hello garde sa disposition v1 (aucun champ ajouté) : un hôte v1 le lit toujours.
+    CHECK(old.size() == 7 + 2 + 5 + 2 + 4 + 2);
+
+    // Client : seulement du SteamID de confiance, qui se dit propriétaire, salon non nul.
+    CHECK(lobby_offer_valid(l, host, host));
+    CHECK(!lobby_offer_valid(l, other, host));            // autre compte
+    CHECK(!lobby_offer_valid(l, host, 0));                // mode test à distance inactif
+    CHECK(!lobby_offer_valid(l, 0, 0));
+    Packet stolen = l; stolen.owner = other;
+    CHECK(!lobby_offer_valid(stolen, host, host));        // salon d'un autre propriétaire
+    Packet zero = l; zero.lobby = 0;
+    CHECK(!lobby_offer_valid(zero, host, host));
+    Packet notlobby = l; notlobby.op = Op::Command;
+    CHECK(!lobby_offer_valid(notlobby, host, host));
+
+    // Hôte : pair v2+, salon ouvert, pair pas déjà dedans.
+    CHECK(should_offer_lobby(kVersionLobby, lobby, false));
+    CHECK(should_offer_lobby(9, lobby, false));
+    CHECK(!should_offer_lobby(1, lobby, false));          // ancien client : op inconnue chez lui
+    CHECK(!should_offer_lobby(kVersionLobby, 0, false));  // pas de salon
+    CHECK(!should_offer_lobby(kVersionLobby, lobby, true));
+}
+
 static void test_paths()
 {
     CHECK(safe_relative("logs/20261022-210000/e33coop-client.jsonl"));
@@ -169,6 +221,7 @@ static void test_sha()
 int main()
 {
     test_packets();
+    test_lobby();
     test_paths();
     test_scenario();
     test_config();

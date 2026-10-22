@@ -71,6 +71,15 @@ uint64_t find_friend_lobby(const std::string& mod_version);
 // --- Test à distance (canal Steam à part, messages fiables de Steam ; voir native/remote) -------------------------------
 // Lobby dans lequel se trouve cet ami s'il joue au jeu, 0 sinon.
 uint64_t friend_lobby(uint64_t friend_id);
+// --- Diagnostic : salons d'amis invisibles quand le jeu est relancé par un script (essai à deux PC du 2026-10-23) ---
+// AppID vu par le jeu (ISteamUtils::GetAppID), 0 si Steam n'est pas chargé.
+uint32_t app_id();
+// Objet JSON (lecture seule) : AppID, connexion, nombre d'amis (flag immediate), amis qui jouent à ce jeu (au plus 10)
+// et, pour chaque SteamID de focus (hôte de confiance, ami du rejoin.txt…), le retour brut de GetFriendGamePlayed
+// (ok, game_id, lobby), l'état de persona et HasFriend.
+std::string friends_diag_json(const std::vector<uint64_t>& focus);
+// Objet JSON : processus du jeu (PID, parent et son exe, ligne de commande, dossier courant, variables Steam*).
+std::string process_diag_json();
 // Nom Steam d'un ami (vide si inconnu).
 std::string friend_name(uint64_t id);
 // Accepte la session P2P en attente de cet utilisateur (et seulement lui).

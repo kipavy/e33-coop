@@ -10,6 +10,9 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
+
+#include "../common/jsonlog.hpp"
 
 namespace e33::net::steam {
 
@@ -121,7 +124,22 @@ struct Api {
     bool (*call_done)(void*, uint64_t, bool*) = nullptr;
     bool (*call_result)(void*, uint64_t, void*, int, int, bool*) = nullptr;
     uint32_t (*app_id)(void*) = nullptr;
+    // Diagnostic seulement : facultatives (absentes = non journalisées, jamais un échec de load()).
+    int (*friend_state)(void*, uint64_t) = nullptr;     // ISteamFriends::GetFriendPersonaState
+    int (*my_state)(void*) = nullptr;                   // ISteamFriends::GetPersonaState
+    bool (*has_friend)(void*, uint64_t, int) = nullptr; // ISteamFriends::HasFriend
+    bool (*logged_on)(void*) = nullptr;                 // ISteamUser::BLoggedOn
 } api;
+
+constexpr uint32_t kE33AppId = 1903340;
+
+// Jeu d'un ami = ce jeu : AppID vu par le jeu, ou celui d'Expedition 33 (si GetAppID renvoyait autre chose, les salons
+// d'amis disparaissaient tous ; le diagnostic dit lequel des deux).
+bool same_app(uint64_t game_id)
+{
+    const uint32_t a = static_cast<uint32_t>(game_id & 0xFFFFFF);
+    return a != 0 && (a == api.app_id(api.utils) || a == kE33AppId);
+}
 
 uint64_t g_lobby_call = 0;   // appel Steam en cours (création ou entrée de lobby)
 
@@ -235,6 +253,10 @@ bool load(std::string& err)
     api.mm = mm_v();
     api.utils = utils_v();
     if (!api.msgs || !api.user || !api.friends || !api.mm || !api.utils) { err = "interfaces Steam indisponibles"; return false; }
+    api.friend_state = reinterpret_cast<decltype(api.friend_state)>(GetProcAddress(m, "SteamAPI_ISteamFriends_GetFriendPersonaState"));
+    api.my_state = reinterpret_cast<decltype(api.my_state)>(GetProcAddress(m, "SteamAPI_ISteamFriends_GetPersonaState"));
+    api.has_friend = reinterpret_cast<decltype(api.has_friend)>(GetProcAddress(m, "SteamAPI_ISteamFriends_HasFriend"));
+    api.logged_on = reinterpret_cast<decltype(api.logged_on)>(GetProcAddress(m, "SteamAPI_ISteamUser_BLoggedOn"));
     if (void* nu = netutils_v()) init_relay(nu);   // relais Steam prêts dès maintenant (première connexion plus rapide)
     register_cb(&g_join_cb, kCallbackGameLobbyJoinRequested);
     api.ok = true;
@@ -370,13 +392,12 @@ std::vector<FriendLobby> friend_lobbies(const std::string& mod_version, bool any
 {
     std::vector<FriendLobby> out;
     if (!api.ok) return out;
-    const uint32_t app = api.app_id(api.utils);
     const int n = api.friend_count(api.friends, kFriendFlagImmediate);
     for (int i = 0; i < n; ++i) {
         const uint64_t f = api.friend_by_index(api.friends, i, kFriendFlagImmediate);
         FriendGameInfo g{};
         if (!api.friend_game(api.friends, f, &g) || !g.lobby) continue;
-        if (static_cast<uint32_t>(g.game_id & 0xFFFFFF) != app) continue;
+        if (!same_app(g.game_id)) continue;
         // Données du lobby d'un ami pas toujours connues avant d'y entrer : un écart de version sera refusé au Hello.
         const std::string v = lobby_data(g.lobby, "mod");
         const bool compatible = v.empty() || v == mod_version;
@@ -398,8 +419,113 @@ uint64_t friend_lobby(uint64_t friend_id)
     if (!api.ok || !friend_id) return 0;
     FriendGameInfo g{};
     if (!api.friend_game(api.friends, friend_id, &g) || !g.lobby) return 0;
-    if (static_cast<uint32_t>(g.game_id & 0xFFFFFF) != api.app_id(api.utils)) return 0;
+    if (!same_app(g.game_id)) return 0;
     return g.lobby;
+}
+
+uint32_t app_id() { return api.ok ? api.app_id(api.utils) : 0; }
+
+std::string friends_diag_json(const std::vector<uint64_t>& focus)
+{
+    JsonObj o;
+    o.add("steam_loaded", api.ok);
+    if (!api.ok) return o.str();
+    auto state = [](uint64_t id) -> int64_t { return api.friend_state ? api.friend_state(api.friends, id) : -1; };
+    auto game = [&](uint64_t id) {
+        FriendGameInfo g{};
+        const bool ok = api.friend_game(api.friends, id, &g);
+        const char* name = api.friend_persona(api.friends, id);
+        JsonObj f;
+        f.add("id", std::to_string(id)).add("name", name ? name : "").add("ok", ok)
+            .add("game_id", std::to_string(g.game_id)).add("app", static_cast<int64_t>(g.game_id & 0xFFFFFF))
+            .add("lobby", std::to_string(g.lobby)).add("same_app", ok && same_app(g.game_id)).add("persona_state", state(id));
+        if (api.has_friend) f.add("has_friend", api.has_friend(api.friends, id, kFriendFlagImmediate));
+        return f.str();
+    };
+    const int n = api.friend_count(api.friends, kFriendFlagImmediate);
+    std::string playing = "[";
+    int shown = 0, in_game = 0;
+    for (int i = 0; i < n; ++i) {
+        const uint64_t f = api.friend_by_index(api.friends, i, kFriendFlagImmediate);
+        FriendGameInfo g{};
+        if (!api.friend_game(api.friends, f, &g) || !same_app(g.game_id)) continue;
+        ++in_game;
+        if (shown++ < 10) { if (playing.size() > 1) playing += ','; playing += game(f); }
+    }
+    std::string fo = "[";
+    for (uint64_t id : focus) {
+        if (!id) continue;
+        if (fo.size() > 1) fo += ',';
+        fo += game(id);
+    }
+    o.add("app_id", static_cast<int64_t>(api.app_id(api.utils))).add("my_id", std::to_string(my_id()))
+        .add("my_state", static_cast<int64_t>(api.my_state ? api.my_state(api.friends) : -1))
+        .add("logged_on", api.logged_on ? api.logged_on(api.user) : false)
+        .add("friends_immediate", n).add("friends_in_game", in_game)
+        .raw("playing", playing + "]").raw("focus", fo + "]");
+    return o.str();
+}
+
+namespace {
+std::string utf8(const std::wstring& w)
+{
+    if (w.empty()) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+    std::string s(static_cast<size_t>(n > 0 ? n : 0), '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
+    return s;
+}
+std::string env(const wchar_t* name)
+{
+    wchar_t buf[1024];
+    const DWORD n = GetEnvironmentVariableW(name, buf, 1024);
+    if (n == 0) return "<absent>";
+    if (n >= 1024) return "<trop long>";
+    return utf8(std::wstring(buf, n));
+}
+// Exe d'un processus (nom seul, depuis l'instantané) et son parent.
+bool process_entry(DWORD pid, std::wstring& exe, DWORD& parent)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W e{};
+    e.dwSize = sizeof e;
+    bool found = false;
+    for (BOOL ok = Process32FirstW(snap, &e); ok; ok = Process32NextW(snap, &e))
+        if (e.th32ProcessID == pid) { exe = e.szExeFile; parent = e.th32ParentProcessID; found = true; break; }
+    CloseHandle(snap);
+    return found;
+}
+} // namespace
+
+std::string process_diag_json()
+{
+    JsonObj o;
+    const DWORD pid = GetCurrentProcessId();
+    o.add("pid", static_cast<int64_t>(pid));
+    // Chaîne des parents (3 niveaux au plus) : Steam / lanceur Expedition33_Steam.exe / powershell / explorer…
+    std::string chain = "[";
+    DWORD cur = pid;
+    for (int depth = 0; depth < 4; ++depth) {
+        std::wstring exe;
+        DWORD parent = 0;
+        if (!process_entry(cur, exe, parent)) {
+            if (depth > 0) { if (chain.size() > 1) chain += ','; chain += JsonObj().add("pid", static_cast<int64_t>(cur)).add("exe", "<fini>").str(); }
+            break;
+        }
+        if (depth > 0) { if (chain.size() > 1) chain += ','; chain += JsonObj().add("pid", static_cast<int64_t>(cur)).add("exe", utf8(exe)).str(); }
+        if (!parent || parent == cur) break;
+        cur = parent;
+    }
+    wchar_t cwd[MAX_PATH]{};
+    GetCurrentDirectoryW(MAX_PATH, cwd);
+    o.raw("parents", chain + "]").add("command_line", utf8(GetCommandLineW())).add("cwd", utf8(cwd));
+    JsonObj e;
+    for (const wchar_t* k : {L"SteamAppId", L"SteamGameId", L"SteamOverlayGameId", L"SteamClientLaunch", L"SteamEnv", L"SteamPath",
+                             L"SteamNoOverlayUIDrawing", L"SteamStreaming", L"ENABLE_VK_LAYER_VALVE_steam_overlay_1"})
+        e.add(utf8(k), env(k));
+    o.raw("env", e.str());
+    return o.str();
 }
 
 std::string friend_name(uint64_t id)

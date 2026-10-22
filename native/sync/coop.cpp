@@ -2797,6 +2797,16 @@ std::vector<std::pair<uint8_t, std::string>> players()
     return out;
 }
 bool steam_transport() { return s.steam; }
+uint64_t host_lobby()
+{
+    return s.role == Role::Host && s.steam && s.lobby.state == net::steam::LobbyState::Ready ? s.lobby.id : 0;
+}
+bool host_lobby_has(uint64_t steam_id)
+{
+    if (!host_lobby()) return false;
+    for (uint64_t m : net::steam::lobby_members(s.lobby)) if (m == steam_id) return true;
+    return false;
+}
 void shutdown(const char* reason)
 {
     if (s.role == Role::Solo) return;
@@ -3231,6 +3241,27 @@ static void peer_activity_tick()
     ui::set_status_text("peer", "peer_loading", show ? presence::loading_text(ids, s.now, player_name) : std::string());
 }
 
+// Diagnostic (essai à deux PC du 2026-10-23) : jeu relancé par un script (relaunch.ps1, installateur) -> aucun salon
+// d'ami vu pendant 10 min, alors qu'un lancement à la main le trouve en quelques secondes. Au menu, toutes les 30 s
+// tant qu'aucun salon n'est trouvé, puis une fois quand un salon l'est : amis, GetFriendGamePlayed de l'hôte de
+// confiance et de l'ami du rejoin.txt, état de persona ; processus (parents, ligne de commande, variables Steam*) au
+// premier enregistrement et à celui du salon trouvé, pour comparer lancement à la main et lancement par script.
+static void lobby_diag_tick(bool found)
+{
+    static double next = 0;
+    static bool found_logged = false, process_logged = false;
+    if (found ? found_logged : s.now < next) return;
+    next = s.now + 30.0;
+    if (found) found_logged = true;
+    std::vector<uint64_t> focus{remote::trusted_host()};
+    if (s.rejoin_host && s.rejoin_host != focus.front()) focus.push_back(s.rejoin_host);
+    JsonObj o;
+    o.add("found", found).add("t", s.now).raw("steam", net::steam::friends_diag_json(focus));
+    if (!process_logged || found) o.raw("process", net::steam::process_diag_json());
+    process_logged = true;
+    log().write("coop_lobby_diag", o);
+}
+
 // Client Steam au menu principal : bouton « Rejoindre <ami> » quand un ami a ouvert une partie coop (liste d'amis
 // relue toutes les 5 s, seulement au menu). Le clic passe par le même chemin que F7 (steam_tick).
 static void join_button_tick()
@@ -3253,6 +3284,7 @@ static void join_button_tick()
             const std::string n = lobbies.empty() ? std::string() : lobbies.front().name;
             if (n != friend_name) log().write("coop_friend_lobby", JsonObj().add("friend", n).add("count", static_cast<int64_t>(lobbies.size())));
             friend_name = n;
+            lobby_diag_tick(!lobbies.empty());
         }
     }
     ui::joinbutton::tick(s.now, friend_name);

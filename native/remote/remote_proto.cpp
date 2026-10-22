@@ -114,6 +114,7 @@ std::vector<uint8_t> encode(const Packet& p)
     case Op::Reply: o.u32(p.req); o.u8(p.ok ? 1 : 0); o.u8(p.final ? 1 : 0); o.lstr(p.json.data(), p.json.size()); break;
     case Op::File: o.u32(p.req); o.str(p.path); o.u64(p.size); o.u64(p.offset); o.str(p.sha256); o.lstr(p.data.data(), p.data.size()); break;
     case Op::Done: o.u32(p.req); o.u32(p.count); o.u64(p.total); o.str(p.sha256); break;
+    case Op::Lobby: o.u64(p.lobby); o.u64(p.owner); o.str(p.mod_version); break;
     }
     return std::move(o.b);
 }
@@ -129,6 +130,7 @@ std::optional<Packet> decode(const uint8_t* data, size_t len, std::string& err)
     // Version plus récente : mêmes champs en tête (règle du format), la suite est ignorée.
     Packet p;
     p.op = static_cast<Op>(op);
+    p.version = ver;
     switch (p.op) {
     case Op::Hello: p.mod_version = in.str(64); p.protocol = in.u16(); p.flags = in.u32(); p.name = in.str(128); break;
     case Op::Command: p.req = in.u32(); p.cmd = in.str(32); p.arg = in.lstr(kMaxArg); break;
@@ -148,6 +150,7 @@ std::optional<Packet> decode(const uint8_t* data, size_t len, std::string& err)
         break;
     }
     case Op::Done: p.req = in.u32(); p.count = in.u32(); p.total = in.u64(); p.sha256 = in.str(64); break;
+    case Op::Lobby: p.lobby = in.u64(); p.owner = in.u64(); p.mod_version = in.str(64); break;
     default: err = "unknown op " + std::to_string(op); return std::nullopt;
     }
     if (!in.ok) { err = "truncated or invalid packet"; return std::nullopt; }
@@ -185,6 +188,16 @@ bool update_dest_allowed(std::string_view path)
     const std::string rest = l.substr(mod.size());
     if (rest.rfind("remote/", 0) == 0 || rest.rfind("logs/", 0) == 0 || rest == "remotetest.txt" || rest == "remote" || rest == "logs") return false;
     return true;
+}
+
+bool lobby_offer_valid(const Packet& p, uint64_t from, uint64_t trusted)
+{
+    return p.op == Op::Lobby && trusted != 0 && from == trusted && p.owner == trusted && p.lobby != 0;
+}
+
+bool should_offer_lobby(uint16_t peer_version, uint64_t lobby, bool peer_in_lobby)
+{
+    return peer_version >= kVersionLobby && lobby != 0 && !peer_in_lobby;
 }
 
 bool safe_id(std::string_view id)
