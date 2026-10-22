@@ -50,7 +50,10 @@ static std::vector<proto::Message> samples()
             proto::Owners{7, {{0, "Verso", 0}, {1, "Maelle", 0}}}, proto::BattleReady{7, 2}, proto::Roster{{{0, "Killian"}, {1, "Ami"}}},
             proto::WorldHash{12, "Level_Camp_Main", {{"gold", 10448}, {"items", 0x1234567890ull}}}, proto::ResyncRequest{"gold differs"}, forced,
             proto::BuildOffer{0x01000002, 1, true, 51234, 0xABCDull, {{"Verso", 42}, {"Lune", 7}}, "menu"}, proto::BuildChunk{0x01000002, 16000, {1, 2, 3}},
-            proto::EconomyDelta{3, 1, false, false, {{"gold", -100}, {"item:Lumicolor", 5}, {"level:Weapon_X", 1}}}};
+            proto::EconomyDelta{3, 1, false, false, {{"gold", -100}, {"item:Lumicolor", 5}, {"level:Weapon_X", 1}}},
+            proto::IntentPreview{7, 3, 1, 4, 5, false, "Combo1", {{proto::ActorKind::Enemy, 0}, {proto::ActorKind::Enemy, 2}}},
+            proto::IntentPreview{7, 3, 1, 5, 0, true, "", {}},
+            proto::AimView{7, 3, 2, 1250, -32163.5, 16193.25, 1188.0, -12.5, 87.25, 70.0}};
 }
 
 static void test_roundtrip()

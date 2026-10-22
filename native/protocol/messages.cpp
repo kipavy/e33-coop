@@ -160,6 +160,13 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u32(x.seq); w.u8(x.origin); w.boolean(x.authoritative); w.boolean(x.rejected);
             w.u16(static_cast<uint16_t>(x.parts.size()));
             for (auto& p : x.parts) { w.str(p.key); w.u64(static_cast<uint64_t>(p.delta)); }
+        } else if constexpr (std::is_same_v<T, IntentPreview>) {
+            w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u16(x.seq); w.u8(x.action_type); w.boolean(x.aiming); w.str(x.secondary);
+            w.u16(static_cast<uint16_t>(x.targets.size()));
+            for (auto& u : x.targets) w_unit(w, u);
+        } else if constexpr (std::is_same_v<T, AimView>) {
+            w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u32(x.t_ms);
+            w.f64(x.x); w.f64(x.y); w.f64(x.z); w.f64(x.pitch); w.f64(x.yaw); w.f64(x.fov);
         } else {
             static_assert(always_false<T>, "message non géré");
         }
@@ -346,6 +353,21 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         for (uint16_t i = 0; i < n && r.ok(); ++i) { EconomyPart p; p.key = r.str(128); p.delta = static_cast<int64_t>(r.u64()); x.parts.push_back(p); }
         return finish(x);
     }
+    case MsgType::IntentPreview: {
+        IntentPreview x; x.battle_id = r.u32(); x.turn = r.u32(); x.spot = r.u8(); x.seq = r.u16(); x.action_type = r.u8(); x.aiming = r.boolean();
+        if (x.action_type > 6) r.fail();
+        x.secondary = r.str(128);
+        const uint16_t n = r.count(kMaxUnits);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) x.targets.push_back(r_unit(r));
+        return finish(x);
+    }
+    case MsgType::AimView: {
+        AimView x; x.battle_id = r.u32(); x.turn = r.u32(); x.spot = r.u8(); x.t_ms = r.u32();
+        x.x = r.f64(); x.y = r.f64(); x.z = r.f64(); x.pitch = r.f64(); x.yaw = r.f64(); x.fov = r.f64();
+        for (double v : {x.x, x.y, x.z, x.pitch, x.yaw, x.fov}) if (!std::isfinite(v)) r.fail();
+        if (x.fov < 0 || x.fov > 180) r.fail();
+        return finish(x);
+    }
     }
     err = "unknown message type " + std::to_string(static_cast<unsigned>(t));
     return std::nullopt;
@@ -395,6 +417,8 @@ const char* type_name(MsgType t)
     case MsgType::BuildOffer: return "BuildOffer";
     case MsgType::BuildChunk: return "BuildChunk";
     case MsgType::EconomyDelta: return "EconomyDelta";
+    case MsgType::IntentPreview: return "IntentPreview";
+    case MsgType::AimView: return "AimView";
     }
     return "?";
 }
@@ -409,7 +433,8 @@ MsgType type_of(const Message& m)
                                         MsgType::PilotRequest, MsgType::PilotChange, MsgType::WorldInteract, MsgType::DialogueChoice,
                                         MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState,
                                         MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
-                                        MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta};
+                                        MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta,
+                                        MsgType::IntentPreview, MsgType::AimView};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -545,6 +570,14 @@ std::string to_json(const Message& m)
             std::string ps = "{";
             for (size_t i = 0; i < x.parts.size(); ++i) { if (i) ps += ","; ps += "\"" + json_escape(x.parts[i].key) + "\":" + std::to_string(x.parts[i].delta); }
             o.add("seq", x.seq).add("origin", static_cast<int>(x.origin)).add("authoritative", x.authoritative).add("rejected", x.rejected).raw("parts", ps + "}");
+        } else if constexpr (std::is_same_v<T, IntentPreview>) {
+            std::string ts = "[";
+            for (size_t i = 0; i < x.targets.size(); ++i) { if (i) ts += ","; ts += unit_json(x.targets[i]); }
+            o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("seq", static_cast<int>(x.seq))
+                .add("action", static_cast<int>(x.action_type)).add("aiming", x.aiming).add("secondary", x.secondary).raw("targets", ts + "]");
+        } else if constexpr (std::is_same_v<T, AimView>) {
+            o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("t_ms", x.t_ms)
+                .add("x", x.x).add("y", x.y).add("z", x.z).add("pitch", x.pitch).add("yaw", x.yaw).add("fov", x.fov);
         }
     }, m);
     return o.str();

@@ -169,6 +169,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     uint32_t narr_seq = 0;
     proto::NarrativeKind narr_kind = proto::NarrativeKind::Cinematic;
     uint32_t pilot_seq = 0;
+    std::vector<std::pair<double, proto::Message>> later;   // envois différés (aperçu de l'action, puis l'action)
 
     std::vector<std::string> defense;
     for (size_t i = 0; i < script["defense"].size(); ++i) defense.push_back(script["defense"][i].as_string("fail"));
@@ -321,6 +322,19 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ac.actor_spot = ts->index;
                 ac.action_type = 1;
                 ac.targets = {{proto::ActorKind::Enemy, proto::kAutoSpot}};
+                // "intent_preview" : {"delay_s":3} : aperçu de l'action (choix sans cible, puis avec cible) envoyé avant
+                // elle, l'action partant delay_s plus tard (affichage « X prépare … » chez l'hôte).
+                const json::Value& ip = script["intent_preview"];
+                const double act_at = ip.is_object() ? now_s() + ip["delay_s"].as_number(3) : 0;
+                uint16_t intent_seq = 0;
+                auto preview = [&](double at, uint8_t type, const std::string& secondary, bool aiming, std::vector<proto::Unit> targets) {
+                    if (!ip.is_object()) return;
+                    proto::IntentPreview p;
+                    p.battle_id = ts->battle_id; p.turn = ts->turn; p.spot = ts->index; p.seq = ++intent_seq;
+                    p.action_type = type; p.secondary = secondary; p.aiming = aiming; p.targets = std::move(targets);
+                    later.emplace_back(at, p);
+                    ++counts["intent_previews_sent"];
+                };
                 if (!candidates.empty()) {
                     const json::Value* actp = &actions[candidates[action_index[cls]++ % candidates.size()]];
                     // Visée libre : même chronologie que le test runner (tirs à 1,5 s puis toutes les 1,2 s sur le premier
@@ -334,12 +348,24 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                             lp->send(e);
                         };
                         ev(proto::FreeAimKind::Start, 0, 0);
+                        preview(now_s(), 0, "", true, {});
+                        const uint32_t end_ms = 1500 + static_cast<uint32_t>(shots) * 1200;
+                        // "aim_points" : point visé (relatif au premier ennemi) toutes les 250 ms, qui balaie autour de lui.
+                        if ((*actp)["aim_points"].as_bool(false)) {
+                            for (uint32_t t = 250; t < end_ms; t += 250) {
+                                proto::FreeAimEvent e;
+                                e.battle_id = ts->battle_id; e.turn = ts->turn; e.spot = ts->index; e.kind = proto::FreeAimKind::Aim; e.t_ms = t;
+                                e.y = 60.0 * ((t / 250) % 5) - 120.0; e.z = 100.0; e.target = {proto::ActorKind::Enemy, 0};
+                                lp->send(e, false);
+                                ++counts["aim_points_sent"];
+                            }
+                        }
                         for (int i = 1; i <= shots; ++i) {
                             const uint32_t t = 1500 + static_cast<uint32_t>(i - 1) * 1200;
                             ev(proto::FreeAimKind::Fire, static_cast<uint16_t>(i), t);
                             ev(proto::FreeAimKind::Shot, static_cast<uint16_t>(i), t);
                         }
-                        ev(proto::FreeAimKind::Cancel, 0, 1500 + static_cast<uint32_t>(shots) * 1200);
+                        ev(proto::FreeAimKind::Cancel, 0, end_ms);
                         static const json::Value attack;   // "then" absent : attaque
                         actp = (*actp)["then"].is_object() ? &(*actp)["then"] : &attack;
                     }
@@ -356,7 +382,17 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     for (size_t k = 0; combo.size() > 0 && k < 16; ++k) ac.combo.push_back(combo_bits(combo[k % combo.size()].as_string("success")));
                 }
                 if (ac.combo.empty()) ac.combo.assign(16, 1);   // par défaut : QTE réussis (comme DEBUG_ComboAutoSuccessCount)
-                lp->send(ac);
+                if (ip.is_object()) {
+                    // Cible affichée : celle de l'action, sinon le premier ennemi (cible automatique résolue par l'hôte).
+                    std::vector<proto::Unit> shown;
+                    for (auto& u : ac.targets) shown.push_back(u.spot == proto::kAutoSpot ? proto::Unit{u.kind, 0} : u);
+                    const double d = act_at - now_s();
+                    preview(now_s() + d * 0.3, ac.action_type, ac.secondary, false, {});
+                    preview(now_s() + d * 0.6, ac.action_type, ac.secondary, false, shown);
+                    later.emplace_back(act_at, ac);
+                } else {
+                    lp->send(ac);
+                }
                 ++turns_played;
             } else if (auto* dq = std::get_if<proto::DefenseRequest>(&m)) {
                 proto::DefenseResult dr;
@@ -417,6 +453,10 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 }
             } else if (std::get_if<proto::PauseState>(&m)) {
                 ++counts["pauses"];
+            } else if (std::get_if<proto::IntentPreview>(&m)) {
+                ++counts["intent_previews_received"];   // aperçu des actions des héros de l'hôte
+            } else if (std::get_if<proto::AimView>(&m)) {
+                ++counts["aim_views_received"];
             } else if (auto* pc = std::get_if<proto::PilotChange>(&m)) {
                 ++counts["pilot_changes"];
                 if (pc->pilot == my_id && my_id != 0xFF && last_host_state && pilot_t0 < 0) { pilot_t0 = now_s(); pilot_base = *last_host_state; }
@@ -429,6 +469,11 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
             }
         }
         if (disconnected) continue;   // vient de se déconnecter : plus rien n'est envoyé
+        // Envois différés arrivés à échéance, dans l'ordre de programmation.
+        for (size_t i = 0; i < later.size();) {
+            if (now_s() >= later[i].first) { lp->send(later[i].second); later.erase(later.begin() + static_cast<std::ptrdiff_t>(i)); }
+            else ++i;
+        }
         // "build_send" : [{"after_ok":1,"names":["Lune"]}, …] : renvoie le dernier état reçu comme proposition de ce joueur.
         if (script["build_send"].is_array() && build_sends < script["build_send"].size() && !last_build.empty() &&
             counts["builds_received_ok"] >= script["build_send"][build_sends]["after_ok"].as_int(1)) {
@@ -690,7 +735,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     ++cursor;
                 } else if (std::holds_alternative<proto::NarrativeState>(l.msg) || std::holds_alternative<proto::PauseState>(l.msg) ||
                            std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg) ||
-                           std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg)) {
+                           std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg) ||
+                           std::holds_alternative<proto::IntentPreview>(l.msg) || std::holds_alternative<proto::AimView>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;

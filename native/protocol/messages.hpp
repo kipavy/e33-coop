@@ -20,6 +20,8 @@ namespace e33::proto {
 // v6 : robustesse (phase 5) : époque du lien (reconnexion), battement « occupé », propriétaires réattribués en combat
 //      (Owners), démarrage de combat coordonné (BattleReady), joueurs (Roster), hash d'exploration (WorldHash) et
 //      resynchro (ResyncRequest), minuteur de tour (BattleStart.turn_timer_s, ActionCommand.forced).
+// Ajouts sans changement de version (un pair plus ancien ignore un type inconnu, le flux reste lisible) :
+//      aperçu de l'action en préparation (IntentPreview), caméra de la visée libre du propriétaire (AimView).
 inline constexpr uint16_t kProtocolVersion = 6;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
@@ -27,7 +29,7 @@ enum class MsgType : uint16_t {
     Hello = 1, Welcome = 2, Reject = 3, Bye = 4, Ping = 5, Pong = 6,
     BattleStart = 20, TurnStart = 21, ActionCommand = 22,
     DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, Draws = 28,
-    ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33,
+    ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33, IntentPreview = 34, AimView = 35,
     SaveOffer = 40, SaveChunk = 41, JoinWait = 42, JoinReady = 43, PilotState = 44, PilotRequest = 45, PilotChange = 46,
     WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52,
     Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
@@ -178,6 +180,29 @@ struct FreeAimEvent {
     double x = 0, y = 0, z = 0;           // Aim / Shot : point visé
     Unit target{ActorKind::Enemy, kAutoSpot};
 };
+// Ce que le propriétaire d'un héros prépare pendant son tour (aperçu chez les autres) : action et compétence/objet
+// choisis dans la roue, cibles visées. Propriétaire -> hôte -> autres, à chaque changement (10 fois/s au plus).
+struct IntentPreview {
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    uint8_t spot = 0;
+    uint16_t seq = 0;                     // croissant dans le tour
+    uint8_t action_type = 0;              // E_jRPG_ActionType (0 = rien de choisi)
+    bool aiming = false;                  // visée libre en cours
+    std::string secondary;                // compétence ou objet (FName), vide sinon
+    std::vector<Unit> targets;
+};
+// Caméra du propriétaire pendant sa visée libre (non fiable, ~20 fois/s) : les autres instances la rejouent avec le même
+// décalage que la visée. t_ms : depuis le début de la visée (comme FreeAimEvent). fov : 0 = inconnu.
+struct AimView {
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    uint8_t spot = 0;
+    uint32_t t_ms = 0;
+    double x = 0, y = 0, z = 0;           // position de la caméra
+    double pitch = 0, yaw = 0;
+    double fov = 0;
+};
 
 // --- Session et exploration (v5, D12) ----------------------------------------------------------
 // Instantané de la partie de l'hôte (save complète) : annoncé puis envoyé par morceaux, dans l'ordre.
@@ -249,7 +274,8 @@ using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStar
                              BattleRewards, FreeAimEvent,
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
                              WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
-                             Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk, EconomyDelta>;
+                             Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk, EconomyDelta,
+                             IntentPreview, AimView>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

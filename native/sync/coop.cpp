@@ -34,6 +34,7 @@
 #include "builds.hpp"
 #include "coopsave.hpp"
 #include "explore.hpp"
+#include "intent.hpp"
 #include "state.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -652,6 +653,21 @@ bool handle_battle_common(Peer& p, proto::Message& m)
         }
         b.fa_events[key].push_back(*fa);
         if (s.role == Role::Host) publish(*fa, &p, fa->kind != proto::FreeAimKind::Aim);
+        return true;
+    }
+    // Aperçu de l'action en préparation et caméra de visée libre d'un autre joueur (affichage seulement).
+    if (auto* ip = std::get_if<proto::IntentPreview>(&m)) {
+        if (ip->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(ip->spot) != p.player_id) return true;
+        intent::receive(*ip);
+        if (s.role == Role::Host) publish(*ip, &p);
+        return true;
+    }
+    if (auto* av = std::get_if<proto::AimView>(&m)) {
+        if (av->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(av->spot) != p.player_id) return true;
+        intent::receive(*av);
+        if (s.role == Role::Host) publish(*av, &p, false);
         return true;
     }
     if (auto* dr = std::get_if<proto::DefenseResult>(&m)) {
@@ -2545,7 +2561,20 @@ void init()
         builds::init(s.role == Role::Host, bn);
     }
     coopsave::init(s.role == Role::Host, [](const char* c, int n) { s.counters[c] += n; });
+    {
+        intent::Net in;
+        in.publish = [](const proto::Message& m, bool reliable) { publish(m, nullptr, reliable); };
+        in.bump = [](const char* c, int n) { s.counters[c] += n; };
+        in.name_of = [](uint8_t id) { return player_name(id); };
+        in.owner_of_spot = [](int spot) { return owner_of_spot(spot); };
+        in.controls = [](int spot) { return controls(spot); };
+        in.action_known = [](uint32_t turn, int spot) { return s.battle.commands.count({turn, spot}) > 0 || s.battle.executed.count({turn, spot}) > 0; };
+        in.local_aiming = [] { return s.fa_own.active; };
+        in.battle = [] { return intent::BattleRef{s.battle.id, s.battle.turn, s.battle.active}; };
+        intent::init(in);
+    }
     subscribe();
+    intent::subscribe();
     explore::subscribe();
     coopsave::subscribe();
     subscribe_session();
@@ -2629,6 +2658,13 @@ bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
     const proto::FreeAimEvent* aim = nullptr;
     for (auto& e : events) if (e.kind == proto::FreeAimKind::Aim && e.t_ms <= elapsed && (!aim || e.t_ms >= aim->t_ms)) aim = &e;
     if (aim && aim->target.spot == proto::kAutoSpot) { r.point = {aim->x, aim->y, aim->z}; r.have_override = true; }
+    else if (aim) {   // point relatif à un combattant (faux client)
+        double a[3];
+        if (game::location(game::find_unit(aim->target.kind == proto::ActorKind::Hero, aim->target.spot), a)) {
+            r.point = {a[0] + aim->x, a[1] + aim->y, a[2] + aim->z};
+            r.have_override = true;
+        }
+    }
     // Événements fiables, dans l'ordre.
     while (r.next < events.size() && events[r.next].t_ms <= elapsed) {
         const auto& e = events[r.next++];
@@ -2854,6 +2890,23 @@ void tick(double dt)
     explore::tick(s.now);
     builds::tick(s.now);
     run_remote_action();
+    // Aperçu de ce que préparent les joueurs, caméra de la visée libre (envoyée par le propriétaire, rejouée ailleurs).
+    intent::tick(s.now);
+    if (s.fa_own.active && s.battle.active)
+        intent::aim_owner_tick(s.now, s.fa_own.spot, static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count()));
+    {
+        const auto& r = s.fa_rep;
+        intent::AimReplay ar;
+        const bool replaying = s.battle.active && r.started && !r.done && r.key.first == s.battle.turn;
+        if (replaying) {
+            ar.hero = game::find_unit(true, r.key.second);
+            ar.spot = r.key.second;
+            ar.elapsed_ms = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - r.t0).count());
+            ar.have_point = r.have_override;
+            std::copy(r.point.begin(), r.point.end(), ar.point);
+        }
+        intent::aim_camera_tick(s.now, dt, replaying ? &ar : nullptr);
+    }
     // Visée libre d'un héros d'ici quittée par un autre chemin que CancelFreeAimFromUI / EndFreeAim (touche
     // d'annulation de la visée : vu le 2026-10-21, l'autre joueur restait en visée et l'action suivante attendait).
     if (s.fa_own.active) {
