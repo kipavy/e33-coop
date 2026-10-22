@@ -30,6 +30,7 @@
 #include "../net/steam.hpp"
 #include "../net/transport.hpp"
 #include "../protocol/messages.hpp"
+#include "../ui/owners_ui.hpp"
 #include "../ui/ui.hpp"
 #include "builds.hpp"
 #include "coopsave.hpp"
@@ -2451,6 +2452,23 @@ bool holding() { return s.battle.hold || s.battle.dep_active || s.battle.dep_fin
 bool session_ended() { return s.ended; }
 bool action_forced(int spot) { return s.battle.forced.count({s.battle.turn, spot}) > 0; }
 std::string name_of(uint8_t player) { return player_name(player); }
+uint8_t my_player() { return s.my_player_id; }
+uint8_t spot_owner(int spot) { return owner_of_spot(spot); }
+uint8_t hero_owner(const std::string& name)
+{
+    if (s.battle.active)
+        for (UObject* h : game::players())
+            if (game::hardcoded_name(h) == name) return owner_of_spot(game::spot(h));
+    return character_owner(name);
+}
+std::vector<std::pair<uint8_t, std::string>> players()
+{
+    std::vector<std::pair<uint8_t, std::string>> out;
+    for (auto& [id, n] : s.roster) out.emplace_back(id, n.empty() ? player_name(id) : n);
+    if (out.empty() || out.front().first != 0) out.insert(out.begin(), {uint8_t{0}, s.role == Role::Host ? s.my_name : player_name(0)});
+    return out;
+}
+bool steam_transport() { return s.steam; }
 void shutdown(const char* reason)
 {
     if (s.role == Role::Solo) return;
@@ -2832,7 +2850,7 @@ void tick(double dt)
     // Rappel des touches du mod tant que le menu pause est ouvert.
     {
         static bool keys_shown = false;
-        const bool show = game::pause_menu_visible();
+        const bool show = game::pause_menu_visible() && !owners_ui::shows_key_hints();   // panneau Coop : il porte déjà les touches
         if (show != keys_shown) {
             keys_shown = show;
             if (show) ui::set_status("keys", s.role == Role::Host ? "keys_host" : "keys_client");

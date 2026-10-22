@@ -22,6 +22,7 @@ add_library(${TARGET} SHARED
     ../ui/overlay.cpp
     ../remote/remote.cpp
     ../remote/remote_proto.cpp
+    ../ui/owners_ui.cpp
 )
 
 target_compile_features(${TARGET} PRIVATE cxx_std_23)

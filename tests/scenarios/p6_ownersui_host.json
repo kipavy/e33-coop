@@ -1,0 +1,21 @@
+{
+  "name": "p6_ownersui_host",
+  "description": "Interface « qui joue qui » (variante C) : équipe de 3 (Verso, Lune : hôte « Killian » ; Maelle : faux client « TOTOFF »). Losanges d'initiale dans l'ordre des tours (K or, T azur) et panneau Coop du menu pause ouvert 8 s au tour 3. Captures toutes les 2 s : vérifier à l'œil shots/*.png.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 600,
+  "wait_players": 1,
+  "max_turns": 40,
+  "pause_at_turn": 3,
+  "pause_s": 8,
+  "shots_every_s": 2,
+  "actions": [
+    { "hero": "Lune", "type": "attack" },
+    { "hero": "Verso", "type": "attack" }
+  ],
+  "defense": ["fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33name=Killian", "-e33lang=fr", "-e33owners=Maelle:1", "-e33seed=2"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_ownersui.json", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "pauses_opened": "1", "owners_ui:badges_built": ">=1", "owners_ui:badges_shown_max": ">=2", "owners_ui:pause_panels_built": ">=1", "owners_ui:badge_errors": "0", "owners_ui:pause_errors": "0" }
+}
