@@ -2,7 +2,14 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## État courant (2026-10-21, nuit) — phases 5-6 : batterie 36/36 verte ; prochain essai à deux PC avec le paquet du build 39515111132
+## État courant (2026-10-22, fin d'après-midi) — branche `integ2` : batterie verte sauf la parade en duo ; Release v0.6.0 avec le miroir des menus désactivé
+
+- **`integ2`** = `integ` + `feat/menu-mirror` + `feat/easy-install` + correctifs des tests. Batterie (build 39779386369) : 43/45, puis `p5_version_host` vert après correction du test (faux pair refusé = le suivant peut partir ; attente de refus sans numéro de version). Seul rouge : `p6_duoparry_host` (l'ennemi du test ne fait jamais d'attaque de groupe : à valider à deux PC).
+- **Panneau Coop** (`p6_panel_host`) vérifié sur captures : ligne surlignée, Monoco donné à FakeClient, bandeau d'équipe. Ligne d'aide raccourcie (elle débordait du cadre).
+- **Miroir des menus** (`p7_menumirror_host`, entrées réelles injectées) : **rouge**. Une touche locale confirmait la cible ouverte par le miroir (`ConfirmTarget` + `RequestActionExecution` chez l'observateur, 2 fois) ; le miroir abandonne souvent (`menu_mirror_gave_up` « cancel: » ×43, colonnes jamais reproduites). Miroir **désactivé par défaut** (`-e33menumirror=1` pour l'activer, son scénario le fait), avec l'accord de Killian ; correction en cours sur `fix/menu-mirror`, livrée par mise à jour automatique (v0.6.1). Sans miroir (`p7_menumirror_off_host`), aucune action locale ne passe.
+- Contrôle de PA du testeur affiné (accord de Killian) : base prise 2 s après le début du tour et reprise pendant une visée libre rejouée (ses tirs coûtent des PA) ; les choix d'action restent surveillés par crochets.
+
+### État précédent (2026-10-21, nuit) — phases 5-6 : batterie 36/36 verte ; prochain essai à deux PC avec le paquet du build 39515111132
 
 | Phase | État | Branche |
 |---|---|---|
