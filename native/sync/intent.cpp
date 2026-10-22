@@ -1174,9 +1174,57 @@ void install_choice_gates()
     install_choice_gates_impl(std::make_integer_sequence<int, static_cast<int>(std::size(g_choice_gates))>{});
 }
 
+// Clics sur la roue (bouton d'action, compétence ou objet choisi, retour) : événements de WBP_HUD_WheelsContainer reçus
+// par délégué (ProcessEvent), vus dans les appelants de SelectSecondaryAction le 2026-10-22. Même porte. La classe est
+// prise sur la roue du combat en cours (chemin de l'asset inconnu du dump).
+ChoiceGate g_wheel_gates[] = {
+    {L"BndEvt__WBP_HUD_WheelsContainer_WBP_BattleWheel_Action_K2Node_ComponentBoundEvent_10_OnButtonClicked__DelegateSignature"},
+    {L"BndEvt__WBP_HUD_WheelsContainer_WBP_HUD_SkillWheel_Items_K2Node_ComponentBoundEvent_12_OnSkillChosen__DelegateSignature"},
+    {L"BndEvt__WBP_HUD_WheelsContainer_WBP_HUD_SkillWheel_Items_K2Node_ComponentBoundEvent_13_OnBackClicked__DelegateSignature"},
+};
+
+template <int I>
+void wheel_gate(UObject* context, FFrame& stack, void* result)
+{
+    ChoiceGate& g = g_wheel_gates[I];
+    if (game::mod_call_depth() > 0 || !confirm_must_block()) { g.orig(context, stack, result); return; }
+    bump("input_guard_wheel_clicks_blocked");
+    static int logged = 0;
+    if (logged++ < 20) log().write("input_guard_wheel_click_blocked", JsonObj().add("event", I).add("spot", remote_turn_spot()), battle().turn);
+}
+
+template <int... I>
+void install_wheel_gates_impl(std::integer_sequence<int, I...>)
+{
+    const UnrealScriptFunction thunks[] = {&wheel_gate<I>...};
+    UObject* wheels = nullptr;
+    for (int i = 0; i < static_cast<int>(sizeof...(I)); ++i) {
+        ChoiceGate& g = g_wheel_gates[i];
+        if (g.installed) continue;
+        if (!wheels) wheels = hud().wheels;
+        if (!wheels || !wheels->GetClassPrivate()) return;
+        const std::wstring cls = wheels->GetClassPrivate()->GetFullName();   // « Type /Game/…/X.X_C »
+        const size_t sp = cls.find(L' ');
+        const std::wstring path = (sp == std::wstring::npos ? cls : cls.substr(sp + 1)) + L":" + g.name;
+        UFunction* f = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path.c_str());
+        if (!f || !f->GetFuncPtr()) {
+            static int missing_logged = 0;
+            if (missing_logged++ < 3) log().write("input_guard_wheel_gate_missing", JsonObj().add("path", ue::to_utf8(path)));
+            continue;
+        }
+        g.orig = f->GetFuncPtr();
+        f->SetFuncPtr(thunks[i]);
+        g.installed = true;
+        log().write("input_guard_wheel_gate", JsonObj().add("event", i));
+    }
+}
+
 void install_confirm_click_gate()
 {
     install_choice_gates();
+    static int wheel_tries = 0;   // une recherche toutes les 30 images au plus (roue absente, fonction manquante)
+    if (g_guard && !g_wheel_gates[std::size(g_wheel_gates) - 1].installed && wheel_tries++ % 30 == 0)
+        install_wheel_gates_impl(std::make_integer_sequence<int, static_cast<int>(std::size(g_wheel_gates))>{});
     if (g_confirm_click_installed || !g_guard) return;
     UFunction* f = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, kConfirmClickPath);
     if (!f || !f->GetFuncPtr()) return;
