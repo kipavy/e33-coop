@@ -206,7 +206,7 @@ UObject* diamond(UObject* outer, float side, const Rgba& c, const std::string& i
     }
     UObject* rim = border(outer, c, 2, HFill, VFill);
     UObject* fill = border(outer, kPanel, 0, HCenter, VCenter);
-    UObject* tb = text(outer, initial, c, side * 0.6f, font_src);
+    UObject* tb = text(outer, initial, c, side * 0.5f, font_src);
     if (!rim || !fill || !tb) return nullptr;
     call_floats(tb, L"SetRenderTransformAngle", L"Angle", {-45.f});
     call_int(tb, L"SetJustification", L"InJustification", kJustifyCenter);
@@ -384,13 +384,13 @@ void tick_pause()
     UObject* vb = make(L"/Script/UMG.VerticalBox", outer, L"List");
     if (!root || !bg || !vb) { ++g_counts["pause_errors"]; g_panel_failed = true; log().write("owners_ui_error", JsonObj().add("what", "panel")); return; }
     pad(bg, 32, 24, 32, 24);
-    add_vb(vb, text(outer, ui::text("coop_title"), kGold, 32, font), 0, 0);
-    add_vb(vb, text(outer, sub, kDim, 19, font), 0, 12);
+    add_vb(vb, text(outer, ui::text("coop_title"), kGold, 26, font), 0, 0);
+    add_vb(vb, text(outer, sub, kDim, 15, font), 0, 12);
     for (auto& r : rows) {
         UObject* hb = make(L"/Script/UMG.HorizontalBox", outer, L"Row");
-        UObject* hero = text(outer, r.hero, r.reserve ? kDim : kInk, 26, font);
+        UObject* hero = text(outer, r.hero, r.reserve ? kDim : kInk, 20, font);
         UObject* mark = diamond(outer, 10, r.reserve ? kDim : r.color, "", nullptr, L"Mark");
-        UObject* name = text(outer, r.who, r.reserve ? kDim : r.color, 21, font);
+        UObject* name = text(outer, r.who, r.reserve ? kDim : r.color, 17, font);
         if (!hb || !hero || !mark || !name) continue;
         if (UObject* s = add_child(hb, L"AddChildToHorizontalBox", hero)) {
             ue::Call c(s, L"SetSize");   // FSlateChildSize { float Value; uint8 SizeRule } : remplir
@@ -409,7 +409,7 @@ void tick_pause()
         UObject* fill = border(outer, kLine, 0, HFill, VFill);
         if (line && fill) { add_child(line, L"SetContent", fill); add_vb(vb, line, 0, 0); }
     }
-    add_vb(vb, text(outer, foot, kDim, 18, font), 12, 0);
+    add_vb(vb, text(outer, foot, kDim, 14, font), 12, 0);
     add_child(bg, L"SetContent", vb);
     add_child(root, L"SetContent", bg);
     call_int(root, L"SetVisibility", L"InVisibility", kHitTestInvisible);
@@ -424,8 +424,8 @@ void tick_pause()
             UObject* item = make(L"/Script/UMG.HorizontalBox", outer, L"Hint");
             UObject* rim = border(outer, kKeyRim, 1, HFill, VFill);
             UObject* key = border(outer, kKeyBg, 0, HCenter, VCenter);
-            UObject* kt = text(outer, h.key, kGold, 15, nullptr);
-            UObject* lt = text(outer, ui::text(h.label), kInk, 20, font);
+            UObject* kt = text(outer, h.key, kGold, 12, nullptr);
+            UObject* lt = text(outer, ui::text(h.label), kInk, 16, font);
             if (!item || !rim || !key || !kt || !lt) continue;
             pad(key, 7, 1, 7, 1);
             add_child(key, L"SetContent", kt);
