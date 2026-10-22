@@ -18,6 +18,7 @@
 #include "../hooks/reflect.hpp"
 #include "../hooks/ue.hpp"
 #include "../sync/coop.hpp"
+#include "options.hpp"
 #include "ui.hpp"
 
 // Chemins vérifiés dans le dump (build 23765773) :
@@ -29,7 +30,8 @@
 // Les widgets créés portent un nom « E33Coop_<Tag>_<n> » : on les retrouve parmi les enfants à chaque passage (aucun
 // pointeur gardé d'un passage à l'autre, donc rien de périmé quand le jeu détruit son HUD).
 // Bouton « Coop » dans la liste du menu pause : écarté (boutons CommonUI liés au graphe BP et à la navigation manette) ;
-// le panneau s'affiche donc de lui-même à droite dès que le menu pause est ouvert.
+// le panneau s'affiche donc de lui-même à droite dès que le menu pause est ouvert. Il n'a jamais le focus : les flèches
+// et Entrée restent au menu du jeu ; ses lignes se choisissent avec F9 et se changent avec Maj+F9 (native/ui/options).
 
 using namespace RC;
 using namespace RC::Unreal;
@@ -46,7 +48,7 @@ Rgba col(uint32_t hex, float a = 1.f)
     return {lin((hex >> 16) & 0xFF), lin((hex >> 8) & 0xFF), lin(hex & 0xFF), a};
 }
 const Rgba kInk = col(0xf1ece2), kDim = col(0xa29d93), kGold = col(0xe2cba0), kPanel = col(0x141312, 0.9f),
-           kKeyBg = col(0x1c1b19), kKeyRim = col(0xcbb68c), kLine = col(0xece6da, 0.14f);
+           kKeyBg = col(0x1c1b19), kKeyRim = col(0xcbb68c), kLine = col(0xece6da, 0.14f), kHighlight = col(0xe2cba0, 0.16f);
 // Hôte : or ; puis azur, rose, vert (maquette).
 Rgba player_col(uint8_t id)
 {
@@ -325,6 +327,44 @@ void add_vb(UObject* vb, UObject* w, float t, float b)
     if (UObject* slot = add_child(vb, L"AddChildToVerticalBox", w)) pad(slot, 0, t, 0, b);
 }
 
+// Cellule qui remplit la largeur restante d'une HorizontalBox (FSlateChildSize { float Value; uint8 SizeRule }).
+void fill_slot(UObject* s)
+{
+    ue::Call c(s, L"SetSize");
+    if (auto* d = static_cast<uint8_t*>(c.param_ptr(L"InSize")); d && c.param_size(L"InSize") >= 5) {
+        const float one = 1.f;
+        std::memcpy(d, &one, 4);
+        d[4] = 1;
+        c.invoke();
+    }
+}
+
+// Ligne « libellé ……… marque valeur », surlignée si choisie (F9) : fond doré léger et chevron.
+void add_row(UObject* outer, UObject* vb, UObject* font, const std::string& label, const std::string& value, const Rgba& label_col,
+             const Rgba& value_col, bool diamond_mark, bool selected, float size)
+{
+    UObject* hb = make(L"/Script/UMG.HorizontalBox", outer, L"Row");
+    UObject* hero = text(outer, (selected ? "› " : "") + label, selected ? kGold : label_col, size, font);
+    UObject* mark = diamond_mark ? diamond(outer, 10, value_col, "", nullptr, L"Mark") : nullptr;
+    UObject* name = text(outer, value, value_col, size - 3, font);
+    if (!hb || !hero || !name) return;
+    if (UObject* s = add_child(hb, L"AddChildToHorizontalBox", hero)) { fill_slot(s); align(s, HLeft, VCenter); }
+    if (mark) if (UObject* s = add_child(hb, L"AddChildToHorizontalBox", mark)) { align(s, HRight, VCenter); pad(s, 0, 0, 10, 0); }
+    if (UObject* s = add_child(hb, L"AddChildToHorizontalBox", name)) align(s, HRight, VCenter);
+    UObject* row = hb;
+    if (selected) {
+        if (UObject* hl = border(outer, kHighlight, 0, HFill, VFill, L"Sel")) {
+            pad(hl, 8, 2, 8, 2);
+            add_child(hl, L"SetContent", hb);
+            row = hl;
+        }
+    }
+    add_vb(vb, row, 4, 4);
+    UObject* line = sizebox(outer, 0, 1);
+    UObject* fill = border(outer, kLine, 0, HFill, VFill);
+    if (line && fill) { add_child(line, L"SetContent", fill); add_vb(vb, line, 0, 0); }
+}
+
 void tick_pause()
 {
     UObject* menu = ue::get_object(game::controller(), L"PauseMenuWidget");
@@ -343,12 +383,15 @@ void tick_pause()
     }
 
     // Contenu
+    const bool session = coop::active();
     const bool battle = game::in_battle();
     const auto names = player_names();
     const uint8_t me = coop::my_player();
     std::vector<std::string> party;
-    if (battle) for (UObject* h : game::players()) { const std::string n = game::hardcoded_name(h); if (!n.empty()) party.push_back(n); }
-    if (party.empty()) party = game::party_names();
+    if (session) {
+        if (battle) for (UObject* h : game::players()) { const std::string n = game::hardcoded_name(h); if (!n.empty()) party.push_back(n); }
+        if (party.empty()) party = game::party_names();
+    }
     std::vector<Row> rows;
     auto who = [&](uint8_t id) {
         auto n = names.find(id);
@@ -356,19 +399,32 @@ void tick_pause()
         return id == me ? ui::text("coop_you", {name}) : name;
     };
     for (auto& h : party) { const uint8_t o = coop::hero_owner(h); rows.push_back({h, who(o), player_col(o), false}); }
-    for (auto& h : game::character_names())
-        if (std::find(party.begin(), party.end(), h) == party.end()) { const uint8_t o = coop::hero_owner(h); rows.push_back({h, ui::text("coop_reserve", {who(o)}), player_col(o), true}); }
+    if (session)
+        for (auto& h : game::character_names())
+            if (std::find(party.begin(), party.end(), h) == party.end()) { const uint8_t o = coop::hero_owner(h); rows.push_back({h, ui::text("coop_reserve", {who(o)}), player_col(o), true}); }
+    // Lignes choisissables au clavier (F9) : personnages de l'équipe (hôte, hors combat), puis options.
+    const auto sel_rows = options::rows();
+    size_t hero_sel = SIZE_MAX;
+    std::vector<options::Row> opts;
+    for (size_t i = 0; i < sel_rows.size(); ++i) {
+        if (sel_rows[i].hero) { if (sel_rows[i].selected) hero_sel = i; }
+        else opts.push_back(sel_rows[i]);
+    }
     const std::string host_name = names.count(0) ? names.at(0) : coop::name_of(0);
-    const std::string sub = ui::text("coop_session", {host_name, std::to_string(names.size()), ui::text(coop::steam_transport() ? "coop_transport_steam" : "coop_transport_udp")});
+    const std::string sub = session ? ui::text("coop_session", {host_name, std::to_string(names.size()), ui::text(coop::steam_transport() ? "coop_transport_steam" : "coop_transport_udp")})
+                                    : ui::text("coop_session_none");
     const bool is_host = coop::role() == coop::Role::Host;
-    const std::string foot = ui::text(is_host ? "coop_change_host" : "coop_change_client");
+    const std::string foot = session ? ui::text(is_host ? "coop_change_host" : "coop_change_client") : std::string();
     std::vector<Hint> hints;
-    if (is_host && coop::steam_transport()) hints.push_back({"F7", "hint_invite", false});
-    hints.push_back({"F8", "hint_take", false});
+    if ((is_host || !session) && coop::steam_transport()) hints.push_back({"F7", "hint_invite", !session && battle});
+    if (session) hints.push_back({"F8", "hint_take", false});
     if (is_host) { hints.push_back({"F5", "hint_pick", battle}); hints.push_back({"F6", "hint_give", battle}); }
+    hints.push_back({"F9", "hint_row", false});
+    hints.push_back({ui::lang() == ui::Lang::Fr ? "Maj+F9" : "Shift+F9", "hint_change", options::selected() < 0});
 
-    std::string sig = sub + "|" + foot + "|" + (battle ? "b" : "w") + "|" + std::to_string(static_cast<int>(ui::lang()));
+    std::string sig = sub + "|" + foot + "|" + (battle ? "b" : "w") + "|" + std::to_string(static_cast<int>(ui::lang())) + "|" + std::to_string(options::selected());
     for (auto& r : rows) sig += "|" + r.hero + "=" + r.who + (r.reserve ? "*" : "") + std::to_string(r.color.r + r.color.g * 7 + r.color.b * 13);
+    for (auto& o : opts) sig += "|" + o.label + "=" + o.value;
     if (!existing.empty() && sig == g_panel_sig) { g_panel_shown = true; return; }
     for (UObject* w : existing) remove_widget(w);
     g_panel_sig.clear();
@@ -386,30 +442,14 @@ void tick_pause()
     pad(bg, 32, 24, 32, 24);
     add_vb(vb, text(outer, ui::text("coop_title"), kGold, 26, font), 0, 0);
     add_vb(vb, text(outer, sub, kDim, 15, font), 0, 12);
-    for (auto& r : rows) {
-        UObject* hb = make(L"/Script/UMG.HorizontalBox", outer, L"Row");
-        UObject* hero = text(outer, r.hero, r.reserve ? kDim : kInk, 20, font);
-        UObject* mark = diamond(outer, 10, r.reserve ? kDim : r.color, "", nullptr, L"Mark");
-        UObject* name = text(outer, r.who, r.reserve ? kDim : r.color, 17, font);
-        if (!hb || !hero || !mark || !name) continue;
-        if (UObject* s = add_child(hb, L"AddChildToHorizontalBox", hero)) {
-            ue::Call c(s, L"SetSize");   // FSlateChildSize { float Value; uint8 SizeRule } : remplir
-            if (auto* d = static_cast<uint8_t*>(c.param_ptr(L"InSize")); d && c.param_size(L"InSize") >= 5) {
-                const float one = 1.f;
-                std::memcpy(d, &one, 4);
-                d[4] = 1;
-                c.invoke();
-            }
-            align(s, HLeft, VCenter);
-        }
-        if (UObject* s = add_child(hb, L"AddChildToHorizontalBox", mark)) { align(s, HRight, VCenter); pad(s, 0, 0, 10, 0); }
-        if (UObject* s = add_child(hb, L"AddChildToHorizontalBox", name)) align(s, HRight, VCenter);
-        add_vb(vb, hb, 4, 4);
-        UObject* line = sizebox(outer, 0, 1);
-        UObject* fill = border(outer, kLine, 0, HFill, VFill);
-        if (line && fill) { add_child(line, L"SetContent", fill); add_vb(vb, line, 0, 0); }
+    // Personnages de l'équipe en tête, dans l'ordre de game::party_names : l'indice de ligne est celui de options::rows.
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const Row& r = rows[i];
+        add_row(outer, vb, font, r.hero, r.who, r.reserve ? kDim : kInk, r.reserve ? kDim : r.color, true, !r.reserve && i == hero_sel, 20);
     }
-    add_vb(vb, text(outer, foot, kDim, 14, font), 12, 0);
+    if (!foot.empty()) add_vb(vb, text(outer, foot, kDim, 14, font), 12, 0);
+    add_vb(vb, text(outer, ui::text("coop_options"), kGold, 18, font), 16, 4);
+    for (auto& o : opts) add_row(outer, vb, font, o.label, o.value, o.editable ? kInk : kDim, o.editable ? kGold : kDim, false, o.selected, 16);
     add_child(bg, L"SetContent", vb);
     add_child(root, L"SetContent", bg);
     call_int(root, L"SetVisibility", L"InVisibility", kHitTestInvisible);
@@ -443,8 +483,10 @@ void tick_pause()
     g_panel_failed = false;
     g_panel_shown = true;
     ++g_counts["pause_panels_built"];
+    if (options::selected() >= 0) ++g_counts["pause_panels_selected"];
     log().write("owners_ui_pause_panel", JsonObj().add("rows", static_cast<int64_t>(rows.size())).add("hints", static_cast<int64_t>(hints.size()))
-                                             .add("font", font != nullptr).add("sub", sub));
+                                             .add("font", font != nullptr).add("sub", sub).add("selected", options::selected())
+                                             .add("options", static_cast<int64_t>(opts.size())));
 }
 
 } // namespace
@@ -454,13 +496,13 @@ void tick(double dt)
     g_now += dt;
     if (g_now < g_next) return;
     g_next = g_now + 0.25;   // ProcessEvent : pas à chaque image
-    if (!coop::active()) return;
-    tick_badges();
+    if (!coop::ready()) return;
+    if (coop::active()) tick_badges();
     tick_pause();
 }
 
 bool pause_panel_shown() { return g_panel_shown; }
-bool shows_key_hints() { return coop::active() && !g_panel_failed; }
+bool shows_key_hints() { return coop::ready() && !g_panel_failed; }
 
 int count(const std::string& name)
 {

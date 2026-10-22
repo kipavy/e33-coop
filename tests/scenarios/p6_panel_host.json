@@ -1,0 +1,31 @@
+{
+  "name": "p6_panel_host",
+  "description": "Panneau Coop du menu pause au clavier (F9 : ligne, Maj+F9 : changer), par le même code que les touches. Save TEST_B, équipe Maelle, Verso, Monoco. Menu pause ouvert, ligne 3 (Monoco) choisie puis donnée au faux client (même chemin que F6 : Owners diffusé), puis une ligne d'option choisie (surlignée, sans changement). Captures toutes les 2 s : vérifier à l'œil la ligne surlignée dans shots/*.png.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 600,
+  "shots_every_s": 2,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 3 },
+    { "do": "set_party", "party": ["Maelle", "Verso", "Monoco"] },
+    { "do": "wait", "s": 2 },
+    { "do": "pause_menu", "open": true },
+    { "do": "wait", "s": 2 },
+    { "do": "panel", "row": 2 },
+    { "do": "wait", "s": 2 },
+    { "do": "panel", "row": 2, "change": true },
+    { "do": "wait", "s": 3 },
+    { "do": "panel", "row": 4 },
+    { "do": "wait", "s": 3 },
+    { "do": "panel", "row": -1 },
+    { "do": "pause_menu", "open": false },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=7", "-e33name=Killian", "-e33lang=fr"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_panel.json", "--timeout", "600"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "party_changes": "1", "panel_ops": "4", "panel_refused": "0",
+              "owner_reassignments": "1", "options:panel_changes": "1", "owners_ui:pause_panels_built": ">=2",
+              "owners_ui:pause_panels_selected": ">=2", "owners_ui:pause_errors": "0" }
+}

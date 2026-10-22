@@ -23,7 +23,7 @@ $all = @(
     "p6_steam_selftest",
     "p6_world_host", "p6_world_client", "p6_world2_host", "p6_world2_client",
     "p6_newgame_host", "p6_newgame_client", "p6_duoparry_host", "p6_ownersui_host", "p7_intent_host", "p7_intent_client",
-    "p6_coopsave_client", "p6_coopsave_host"
+    "p6_coopsave_client", "p6_coopsave_host", "p6_panel_host"
 )
 $list = if ($Only) { $Only -split "," } else { $all }
 $results = @()

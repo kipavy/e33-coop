@@ -21,6 +21,7 @@
 #include "../sync/coop.hpp"
 #include "../sync/coopsave.hpp"
 #include "../sync/explore.hpp"
+#include "../ui/options.hpp"
 #include "../ui/owners_ui.hpp"
 #include "../ui/ui.hpp"
 
@@ -256,6 +257,7 @@ int metric(const std::string& name)
 {
     if (name.rfind("ui:", 0) == 0) return ui::count(name.substr(3));   // textes affichés (phase 5)
     if (name.rfind("owners_ui:", 0) == 0) return owners_ui::count(name.substr(10));   // losanges, panneau Coop
+    if (name.rfind("options:", 0) == 0) return options::count(name.substr(8));       // panneau Coop au clavier, options
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
 }
@@ -894,6 +896,18 @@ void run_explore_step(float dt)
         next_step("done");
     } else if (what == "reassign") {   // réattribution d'un personnage (touche F6 de l'hôte)
         coop::reassign_character(static_cast<size_t>(st["index"].as_int(0)));
+        next_step("done");
+    } else if (what == "pause_menu") {   // ouvre / referme le menu pause (panneau Coop)
+        if (st["open"].as_bool(true)) { ue::Call c(game::controller(), STR("OpenPauseMenu")); if (c) c.invoke(); }
+        else { ue::Call c(ue::get_object(game::controller(), STR("PauseMenuWidget")), STR("OnResumeClicked")); if (c) c.invoke(); }
+        log().write("tr_pause_menu", JsonObj().add("open", st["open"].as_bool(true)).add("visible", game::pause_menu_visible()));
+        next_step("done");
+    } else if (what == "panel") {   // panneau Coop au clavier (F9 : ligne, Maj+F9 : changer), par le même code que les touches
+        options::select(static_cast<int>(st["row"].as_int(0)));
+        bool ok = true;
+        if (st["change"].as_bool(false)) ok = options::change();
+        ++g.metrics[ok ? "panel_ops" : "panel_refused"];
+        log().write("tr_panel", JsonObj().add("row", options::selected()).add("change", st["change"].as_bool(false)).add("ok", ok));
         next_step("done");
     } else if (what == "economy") {   // dépense / gain local, comme un achat ou une amélioration dans un menu (phase 5)
         std::string e1;
