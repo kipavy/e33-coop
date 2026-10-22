@@ -292,6 +292,16 @@ UObject* spawn_camera(UObject* pc, const double pos[3])
     return actor;
 }
 
+// Réglages d'image de la caméra d'épaule du héros (celle de la visée du jeu) : post-traitement (exposition…) et champ de vision.
+void copy_camera_look(UObject* from, UObject* to)
+{
+    if (!from || !to) return;
+    for (const wchar_t* name : {STR("PostProcessSettings"), STR("PostProcessBlendWeight"), STR("FieldOfView")}) {
+        FProperty* dst = ue::prop(to, name);
+        if (dst && dst == ue::prop(from, name)) dst->CopyCompleteValue(dst->ContainerPtrToValuePtr<void>(to), dst->ContainerPtrToValuePtr<void>(from));
+    }
+}
+
 void place_camera(const double pos[3], double pitch, double yaw)
 {
     ue::Call c(g_cam.actor, STR("K2_SetActorLocationAndRotation"));
@@ -516,6 +526,8 @@ void aim_camera_tick(double now, double dt, const AimReplay* r)
         log().write("aim_camera_source", JsonObj().add("from_owner", from_owner).add("spot", r->spot));
     }
     if (!g_cam.engaged) {
+        copy_camera_look(ue::get_object(r->hero, STR("Camera_Shoulder")), ue::get_object(g_cam.actor, STR("CameraComponent")));
+        if (fov > 1) if (auto* f = ue::value_ptr<float>(ue::get_object(g_cam.actor, STR("CameraComponent")), STR("FieldOfView"))) *f = static_cast<float>(fov);
         g_cam.prev = view_target(pc);
         set_view_target(pc, g_cam.actor, 0.35f);
         g_cam.engaged = true;
