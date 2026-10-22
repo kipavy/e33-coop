@@ -1069,6 +1069,75 @@ bool confirm_must_block()
     return true;
 }
 
+// Appelants (cadres de script) d'une fonction accrochée, pour les diagnostics de la garde.
+std::string script_callers(FFrame& stack)
+{
+    std::string frames = "[";
+    FFrame* f = stack.PreviousFrame();
+    for (int depth = 0; f && depth < 5; ++depth) {
+        if (frames.size() > 1) frames += ",";
+        frames += JsonObj().add("o", ue::short_name(f->Object())).add("n", ue::short_name(f->Node())).str();
+        FFrame* prev = f->PreviousFrame();
+        if (prev == f) break;
+        f = prev;
+    }
+    return frames + "]";
+}
+
+// État du gestionnaire de ciblage mis de côté pendant un appel bloqué : TargetingEnabled? à faux (si ConfirmTarget, la
+// visée à la souris ou le clic sur un ennemi le testent, ils ne font rien).
+struct HeldTargeting
+{
+    UObject* tm = nullptr;
+    bool enabled = false;
+};
+std::vector<HeldTargeting> g_targeting_held;
+
+UObject* targeting_manager() { return ue::get_object(game::controller(), STR("AC_jRPG_TargetingManager")); }
+
+void hold_targeting(UObject* tm)
+{
+    if (!tm) return;
+    g_targeting_held.push_back({tm, ue::get_bool(tm, STR("TargetingEnabled?"))});
+    ue::set_bool(tm, STR("TargetingEnabled?"), false);
+}
+
+void release_targeting(UObject* tm)
+{
+    for (auto it = g_targeting_held.rbegin(); it != g_targeting_held.rend(); ++it) {
+        if (it->tm != tm) continue;
+        ue::set_bool(tm, STR("TargetingEnabled?"), it->enabled);
+        g_targeting_held.erase(std::next(it).base());
+        return;
+    }
+}
+
+// Bouton « Confirmer » du bandeau de ciblage : l'écran de combat reçoit l'événement par un délégué natif (ProcessEvent),
+// qui passe par UFunction::Func ; sa fonction est remplacée par confirm_click_gate (au tick, une fois l'écran chargé).
+constexpr const wchar_t* kConfirmClickPath = L"/Game/UI/Widgets/HUD_Battle/WBP_HUD_BattleScreen.WBP_HUD_BattleScreen_C:"
+    L"BndEvt__WBP_HUD_BattleScreen_WBP_HUD_TargetingControls_K2Node_ComponentBoundEvent_3_OnConfirmClicked__DelegateSignature";
+UnrealScriptFunction g_confirm_click_orig = nullptr;
+bool g_confirm_click_installed = false;
+bool confirm_must_block();
+
+void confirm_click_gate(UObject* context, FFrame& stack, void* result)
+{
+    if (!confirm_must_block()) { g_confirm_click_orig(context, stack, result); return; }
+    bump("input_guard_confirm_clicks_blocked");
+    log().write("input_guard_confirm_click_blocked", JsonObj().add("spot", remote_turn_spot()), battle().turn);
+}
+
+void install_confirm_click_gate()
+{
+    if (g_confirm_click_installed || !g_guard) return;
+    UFunction* f = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, kConfirmClickPath);
+    if (!f || !f->GetFuncPtr()) return;
+    g_confirm_click_orig = f->GetFuncPtr();
+    f->SetFuncPtr(&confirm_click_gate);
+    g_confirm_click_installed = true;
+    log().write("input_guard_confirm_click_gate", JsonObj().add("installed", true));
+}
+
 void confirm_pre(HookCtx& ctx)
 {
     if (!confirm_must_block()) return;
@@ -1079,26 +1148,17 @@ void confirm_pre(HookCtx& ctx)
     std::memcpy(h.bytes.data(), d, h.bytes.size());
     std::memset(d, 0, h.bytes.size());
     g_confirm_held.push_back(h);
+    hold_targeting(ctx.Context);
     bump("input_guard_confirms_blocked");
-    if (g_confirm_logged++ < 30) {
-        // Appelants (cadres de script) : pour savoir d'où vient la confirmation.
-        std::string frames = "[";
-        FFrame* f = ctx.TheStack.PreviousFrame();
-        for (int depth = 0; f && depth < 5; ++depth) {
-            if (frames.size() > 1) frames += ",";
-            frames += JsonObj().add("o", ue::short_name(f->Object())).add("n", ue::short_name(f->Node())).str();
-            FFrame* prev = f->PreviousFrame();
-            if (prev == f) break;
-            f = prev;
-        }
+    if (g_confirm_logged++ < 30)
         log().write("input_guard_confirm_blocked", JsonObj().add("spot", remote_turn_spot()).add("mod", game::mod_call_depth() > 0)
                                                        .add("pretargeting", ue::get_bool(ctx.Context, STR("IsPretargeting")))
-                                                       .add("mirror_selected", g_mir.selected).raw("callers", frames + "]"), battle().turn);
-    }
+                                                       .add("mirror_selected", g_mir.selected).raw("callers", script_callers(ctx.TheStack)), battle().turn);
 }
 
 void confirm_post(HookCtx& ctx)
 {
+    release_targeting(ctx.Context);
     for (auto it = g_confirm_held.rbegin(); it != g_confirm_held.rend(); ++it) {
         if (it->tm != ctx.Context) continue;
         if (void* d = ue::value_ptr<void>(ctx.Context, STR("OnTargetConfirmed"))) std::memcpy(d, it->bytes.data(), it->bytes.size());
@@ -1146,6 +1206,18 @@ void subscribe()
         bus.pre(confirm, [](HookCtx& ctx, UFunction*) { confirm_pre(ctx); });
         bus.post(confirm, [](HookCtx& ctx, UFunction*) { confirm_post(ctx); });
     }
+    // Visée à la souris du jeu (clic sur un ennemi -> OnClicked_Trace -> ConfirmTarget, vu le 2026-10-22) : ciblage
+    // désactivé le temps de l'appel pendant le tour d'un autre joueur.
+    for (const wchar_t* name : {L"UpdateMouseTargeting", L"UpdateFreeAimHover"}) {
+        bus.pre(fn(bm, name), [](HookCtx&, UFunction*) { if (confirm_must_block()) hold_targeting(targeting_manager()); });
+        bus.post(fn(bm, name), [](HookCtx&, UFunction*) { if (!g_targeting_held.empty()) release_targeting(targeting_manager()); });
+    }
+    // Diagnostic : d'où part une action lancée pendant le tour d'un autre joueur sans sa commande.
+    bus.pre(fn(bm, L"RequestActionExecution"), [](HookCtx& ctx, UFunction*) {
+        if (!confirm_must_block()) return;
+        static int logged = 0;
+        if (logged++ < 30) log().write("input_guard_execution_callers", JsonObj().raw("callers", script_callers(ctx.TheStack)), battle().turn);
+    });
     bus.post(fn(bm, L"RequestActionExecution"), [](HookCtx&, UFunction*) {
         if (!g_guard || game::mod_call_depth() > 0 || remote_turn_spot() < 0) return;
         log().write("input_guard_execution_leak", JsonObj(), battle().turn);   // diagnostic : la confirmation a quand même lancé l'action
@@ -1224,6 +1296,7 @@ void tick(double now)
         if (!g_remote.empty() || !g_views.empty()) { g_remote.clear(); g_views.clear(); g_unit_names.clear(); }
         g_menus.clear();
     }
+    if (battle().active) install_confirm_click_gate();
     poll_local(now);
     poll_menu(now);
     mirror_tick(now);
