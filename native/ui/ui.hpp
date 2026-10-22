@@ -20,6 +20,9 @@ std::string text(const std::string& key, const std::vector<std::string>& args = 
 // Indicateur persistant d'un emplacement (ex. "turn", "pause", "session") ; clé vide = effacer.
 void set_status(const std::string& slot, const std::string& key, const std::vector<std::string>& args = {});
 void clear_status(const std::string& slot);
+// Indicateur au texte déjà composé (attente détaillée, compteur de secondes) : journalisé et compté seulement quand la
+// clé change, pas à chaque mise à jour du texte.
+void set_status_text(const std::string& slot, const std::string& key, const std::string& text);
 // Message temporaire (secondes).
 void toast(const std::string& key, const std::vector<std::string>& args = {}, double seconds = 6.0);
 void tick(double now);       // game thread : affichage

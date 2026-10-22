@@ -1,6 +1,7 @@
 #include "explore.hpp"
 
 #include "builds.hpp"
+#include "presence.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -145,6 +146,7 @@ struct S {
     int world_mismatch_streak = 0;
     int perturb_gold = 0;                         // -e33perturbworld=N (test)
     double cj_joined_at = 0;
+    double waited_since = -1;                     // joueur en retard : les autres ont fini depuis
 } s;
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
@@ -203,6 +205,7 @@ void send_snapshot(uint8_t player)
 
 void host_join_tick()
 {
+    for (auto& [player, pj] : s.peers) presence::set_joining(player, pj.state == JoinState::Sent, s.now);   // charge notre instantané
     for (auto& [player, pj] : s.peers) {
         if (pj.state != JoinState::Pending && pj.state != JoinState::Waiting) continue;
         // Client encore dans l'intro de sa nouvelle partie : on attend sa fin (l'instantané la couperait).
@@ -607,6 +610,38 @@ bool others_in_narrative()
     return false;
 }
 
+std::vector<uint8_t> narrative_players()
+{
+    std::vector<uint8_t> out;
+    for (auto& [p, a] : s.remote_narr) if (a && p != s.me) out.push_back(p);
+    return out;
+}
+
+// Autres joueurs de la partie connus ici (hôte : clients entrés ; client : l'hôte et ceux dont la narration est relayée).
+std::vector<uint8_t> known_players()
+{
+    std::set<uint8_t> ps;
+    if (s.host) { for (auto& [p, pj] : s.peers) if (pj.state == JoinState::Joined || pj.state == JoinState::InGame) ps.insert(p); }
+    else ps.insert(0);
+    for (auto& [p, a] : s.remote_narr) ps.insert(p);
+    ps.erase(s.me);
+    return std::vector<uint8_t>(ps.begin(), ps.end());
+}
+
+// Joueur en retard (cinématique ou dialogue encore en cours ici, les autres ont fini et leur barrière les tient en
+// pause) : rappel discret, après 3 s pour ne pas l'afficher quand un autre commence la même cinématique un peu après.
+void waited_line_tick(bool narr)
+{
+    std::vector<uint8_t> waiting;
+    if (narr && sharing())
+        for (uint8_t p : known_players()) if (auto it = s.remote_narr.find(p); it == s.remote_narr.end() || !it->second) waiting.push_back(p);
+    if (waiting.empty()) s.waited_since = -1;
+    else if (s.waited_since < 0) s.waited_since = s.now;
+    if (!waiting.empty() && s.now - s.waited_since >= 3.0)
+        ui::set_status_text("waited", "waited_by", presence::waited_by_text(waiting, s.net.name_of, s.local_kind == proto::NarrativeKind::Cinematic));
+    else ui::clear_status("waited");
+}
+
 void poll_tick()
 {
     if (s.now < s.next_poll) return;
@@ -645,7 +680,6 @@ void poll_tick()
     if (hold && !s.barrier_paused) {
         s.pause_reasons.insert("barrier");
         s.barrier_paused = true;
-        ui::set_status("wait", "waiting_players");
         s.barrier_since = s.now;
         bump("barrier_waits");
         log().write("coop_barrier_hold", JsonObj());
@@ -657,6 +691,12 @@ void poll_tick()
         bump("barrier_releases");
         log().write("coop_barrier_release", JsonObj().add("waited_s", s.now - s.barrier_since).add("timeout", hold));
     }
+    // Qui on attend et pourquoi (cinématique, dialogue, chargement, menu, reconnexion), mis à jour à chaque passage.
+    if (s.barrier_paused) {
+        const auto who = narrative_players();
+        ui::set_status_text("wait", "waiting_players", who.empty() ? ui::text("waiting_players") : presence::wait_text(who, s.now, s.net.name_of));
+    }
+    waited_line_tick(narr);
     // Menu pause local
     const bool paused = game::pause_menu_visible();
     if (paused != s.local_pause) {
@@ -851,6 +891,7 @@ void on_session_end()
     movement_lock_tick();
     ui::clear_status("pause");
     ui::clear_status("wait");
+    ui::clear_status("waited");
 }
 
 void hold_pause(const char* reason, bool on)
@@ -866,6 +907,7 @@ void on_peer_left(uint8_t player)
     s.peers.erase(player);
     s.remote_narr.erase(player);
     s.remote_pause.erase(player);
+    presence::forget(player);
     if (s.host && s.pilot == player) { set_pilot(0, "pilot left"); s.net.publish(proto::PilotChange{0}, true); }
 }
 
@@ -889,7 +931,11 @@ bool handle(uint8_t from, const proto::Message& m)
         log().write("coop_join_waiting", JsonObj().add("reason", w->reason));
         bump("join_waits");
         // Écran d'attente : l'hôte est en combat (ou en cinématique, en chargement) ; entrée dès son prochain point sûr.
-        ui::set_status("session", w->reason == "battle" ? "waiting_battle_end" : "joining");
+        const std::string host = s.net.name_of ? s.net.name_of(0) : std::string();
+        if (w->reason == "battle") ui::set_status("session", "waiting_battle_end");
+        else if (w->reason == "narrative") ui::set_status("session", "join_wait_narrative", {host});
+        else if (w->reason == "loading") ui::set_status("session", "join_wait_loading", {host});
+        else ui::set_status("session", "joining");
         if (w->reason == "new_game" && !s.host) follow_new_game();
         return true;
     }
@@ -963,6 +1009,7 @@ bool handle(uint8_t from, const proto::Message& m)
     if (auto* ns = std::get_if<proto::NarrativeState>(&m)) {
         if (s.host) { if (ns->player != from) return true; s.net.relay(m, from, true); }
         s.remote_narr[ns->player] = ns->active;
+        presence::set_narrative(ns->player, ns->active, ns->kind == proto::NarrativeKind::Cinematic, s.now);
         log().write("coop_narrative_remote", JsonObj().add("player", static_cast<int>(ns->player)).add("active", ns->active).add("seq", ns->seq));
         return true;
     }
@@ -970,6 +1017,7 @@ bool handle(uint8_t from, const proto::Message& m)
     if (auto* ps = std::get_if<proto::PauseState>(&m)) {
         if (s.host) { if (ps->player != from) return true; s.net.relay(m, from, true); }
         s.remote_pause[ps->player] = ps->paused;
+        presence::set_menu(ps->player, ps->paused, s.now);
         log().write("coop_pause_remote_state", JsonObj().add("player", static_cast<int>(ps->player)).add("paused", ps->paused).add("in_battle", ps->in_battle));
         return true;
     }

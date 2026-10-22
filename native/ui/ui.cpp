@@ -61,10 +61,33 @@ constexpr Entry kTexts[] = {
     {"steam_no_friend_lobby", "Aucun ami n'a ouvert de partie coop", "No friend has an open coop game"},
     {"you", "vous", "you"},
     {"host", "l'hôte", "the host"},
+    // Attente détaillée : qui on attend et pourquoi ({1} : secondes écoulées, vide au début)
+    {"wait_loading", "{0} charge la zone…{1}", "{0} is loading the area…{1}"},
+    {"wait_joining", "{0} charge votre partie…{1}", "{0} is loading your game…{1}"},
+    {"wait_cinematic", "En attente de {0}, qui regarde une cinématique", "Waiting for {0}, who is watching a cutscene"},
+    {"wait_dialogue", "En attente de {0}, en pleine conversation", "Waiting for {0}, who is in a conversation"},
+    {"wait_menu", "En attente de {0}, qui est dans un menu", "Waiting for {0}, who is in a menu"},
+    {"wait_reconnecting", "En attente de {0}, qui se reconnecte…", "Waiting for {0} to reconnect…"},
+    {"wait_battle_prep", "En attente de {0}, qui entre en combat…", "Waiting for {0} to enter the battle…"},
+    {"wait_generic", "En attente de {0}…", "Waiting for {0}…"},
+    {"seconds_suffix", " {0} s", " {0} s"},
+    {"names_and", "{0} et {1}", "{0} and {1}"},
+    // Joueur en retard (cinématique ou dialogue encore en cours ici)
+    {"waited_by_one", "{0} a fini et vous attend", "{0} is done and waiting for you"},
+    {"waited_by_many", "{0} ont fini et vous attendent", "{0} are done and waiting for you"},
+    {"skip_hint", "Maintenir Échap pour passer", "Hold Esc to skip"},
+    // Client : l'hôte n'est pas encore à un point sûr pour l'envoi de sa partie
+    {"join_wait_narrative", "{0} regarde une cinématique : vous entrerez dans sa partie juste après", "{0} is watching a cutscene: you will join right after"},
+    {"join_wait_loading", "{0} charge la zone : vous entrerez dans sa partie juste après", "{0} is loading the area: you will join right after"},
+    // Menu principal : partie coop d'un ami
+    {"join_button", "Rejoindre {0}", "Join {0}"},
+    {"join_button_sub", "partie coop ouverte", "coop game open"},
+    {"friend_invite", "{0} joue en coop · F7 Rejoindre sa partie", "{0} is playing coop · F7 Join their game"},
 };
 
 Lang g_lang = Lang::Fr;
 std::map<std::string, std::string> g_status;
+std::map<std::string, std::string> g_status_key;   // set_status_text : clé courante par emplacement
 struct Toast { std::string text; double seconds; };
 std::deque<Toast> g_pending;
 int g_toasts = 0;
@@ -104,13 +127,30 @@ void set_status(const std::string& slot, const std::string& key, const std::vect
     auto it = g_status.find(slot);
     if (it != g_status.end() && it->second == t) return;
     g_status[slot] = t;
+    g_status_key[slot] = key;
     ++g_counts[key];
     log().write("ui_status", JsonObj().add("slot", slot).add("key", key).add("text", t));
     overlay::set_line(slot, t);
 }
 
+void set_status_text(const std::string& slot, const std::string& key, const std::string& text)
+{
+    if (text.empty()) { clear_status(slot); return; }
+    auto it = g_status.find(slot);
+    if (it != g_status.end() && it->second == text) return;
+    g_status[slot] = text;
+    std::string& k = g_status_key[slot];
+    if (k != key) {
+        k = key;
+        ++g_counts[key];
+        log().write("ui_status", JsonObj().add("slot", slot).add("key", key).add("text", text));
+    }
+    overlay::set_line(slot, text);
+}
+
 void clear_status(const std::string& slot)
 {
+    g_status_key.erase(slot);
     if (!g_status.erase(slot)) return;
     log().write("ui_status", JsonObj().add("slot", slot).add("text", ""));
     overlay::set_line(slot, "");
