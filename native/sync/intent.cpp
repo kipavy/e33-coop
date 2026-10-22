@@ -1041,6 +1041,61 @@ bool mirror_release(double now)
 
 void reload_options() { g_aim_cam = cmdline::arg(L"e33aimcam") != L"0"; }
 
+// Garde des entrées, au plus près : pendant le tour du héros d'un autre joueur, tant que sa commande n'est pas arrivée,
+// aucune confirmation de cible ne doit lancer d'action ici. Qu'elle vienne d'une touche, d'un clic, d'un délai interne du
+// jeu ou d'un appel du miroir, elle est ignorée. Un crochet UE4SS ne peut pas empêcher un appel : la fonction de
+// ConfirmTarget (UFunction::Func) est remplacée par confirm_gate, qui appelle l'originale sauf dans ce cas (2026-10-22 :
+// cinq confirmations non expliquées dans p7_menumirror_host malgré les contextes d'entrée retirés).
+constexpr const wchar_t* kConfirmTargetPath =
+    L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_TargetingManager.AC_jRPG_TargetingManager_C:ConfirmTarget";
+UnrealScriptFunction g_confirm_orig = nullptr;
+UFunction* g_confirm_fn = nullptr;
+int g_confirm_logged = 0;
+
+bool confirm_must_block()
+{
+    if (!g_guard) return false;
+    const int spot = remote_turn_spot();
+    if (spot < 0) return false;
+    const BattleRef b = battle();
+    if (g_net.action_known && g_net.action_known(b.turn, spot)) return false;   // commande arrivée : le rejeu confirme
+    if (g_net.remote_aim_active && g_net.remote_aim_active()) return false;     // visée libre rejouée
+    return true;
+}
+
+void confirm_gate(UObject* context, FFrame& stack, void* result)
+{
+    if (!confirm_must_block()) { g_confirm_orig(context, stack, result); return; }
+    bump("input_guard_confirms_blocked");
+    if (g_confirm_logged++ < 30) {
+        // Appelants (cadres de script) : pour savoir d'où vient la confirmation.
+        std::string frames = "[";
+        FFrame* f = stack.PreviousFrame();
+        for (int depth = 0; f && depth < 5; ++depth) {
+            if (frames.size() > 1) frames += ",";
+            frames += JsonObj().add("o", ue::short_name(f->Object())).add("n", ue::short_name(f->Node())).str();
+            FFrame* prev = f->PreviousFrame();
+            if (prev == f) break;
+            f = prev;
+        }
+        log().write("input_guard_confirm_blocked", JsonObj().add("spot", remote_turn_spot()).add("mod", game::mod_call_depth() > 0)
+                                                       .add("pretargeting", ue::get_bool(context, STR("IsPretargeting")))
+                                                       .add("mirror_selected", g_mir.selected).raw("callers", frames + "]"), battle().turn);
+    }
+}
+
+void install_confirm_block()
+{
+    if (g_confirm_fn || !g_guard) return;
+    UFunction* f = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, kConfirmTargetPath);
+    if (!f) return;
+    g_confirm_orig = f->GetFuncPtr();
+    if (!g_confirm_orig) return;
+    f->SetFuncPtr(&confirm_gate);
+    g_confirm_fn = f;
+    log().write("input_guard_confirm_gate", JsonObj().add("installed", true));
+}
+
 void subscribe()
 {
     using game::path::fn;
@@ -1074,23 +1129,7 @@ void subscribe()
     for (const wchar_t* name : {L"RequestActionExecution", L"OnSelectSkip", L"OnSelectFlee"})
         bus.pre(fn(bm, name), [](HookCtx&, UFunction*) { if (Local* l = local_turn()) l->done = true; });
 
-    // Garde des entrées, dernier recours : une confirmation de cible qui ne vient pas du mod pendant le tour du héros d'un
-    // autre joueur (avant sa commande) est une entrée d'ici qui a fuité. Un crochet UE4SS ne peut pas empêcher l'appel :
-    // le ciblage est refermé juste avant (BM.OnCancelTargeting), pour que la confirmation n'ait plus rien à lancer.
-    bus.pre(fn(L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_TargetingManager.AC_jRPG_TargetingManager_C:", L"ConfirmTarget"),
-            [](HookCtx& ctx, UFunction*) {
-        if (!g_guard || game::mod_call_depth() > 0) return;
-        const int spot = remote_turn_spot();
-        if (spot < 0) return;
-        const BattleRef b = battle();
-        if ((g_net.action_known && g_net.action_known(b.turn, spot)) || (g_net.remote_aim_active && g_net.remote_aim_active())) return;
-        bump("input_guard_confirms_neutralized");
-        log().write("input_guard_confirm", JsonObj().add("spot", spot).add("targeting", ue::get_bool(ctx.Context, STR("TargetingEnabled?")))
-                                               .add("pretargeting", ue::get_bool(ctx.Context, STR("IsPretargeting"))).add("mirror_selected", g_mir.selected), b.turn);
-        ue::Call c(game::battle_manager(), STR("OnCancelTargeting"));
-        if (c) { game::ModCall mod; c.invoke(); }
-        g_mir.selected.clear();
-    });
+    // La confirmation de cible elle-même est bloquée par remplacement de sa fonction (install_confirm_block, appelé au tick).
     bus.post(fn(bm, L"RequestActionExecution"), [](HookCtx&, UFunction*) {
         if (!g_guard || game::mod_call_depth() > 0 || remote_turn_spot() < 0) return;
         log().write("input_guard_execution_leak", JsonObj(), battle().turn);   // diagnostic : la confirmation a quand même lancé l'action
@@ -1169,6 +1208,7 @@ void tick(double now)
         if (!g_remote.empty() || !g_views.empty()) { g_remote.clear(); g_views.clear(); g_unit_names.clear(); }
         g_menus.clear();
     }
+    if (battle().active) install_confirm_block();
     poll_local(now);
     poll_menu(now);
     mirror_tick(now);
