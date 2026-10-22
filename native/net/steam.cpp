@@ -104,6 +104,7 @@ struct Api {
     int (*receive)(void*, int, SteamNetworkingMessage**, int) = nullptr;
     bool (*accept)(void*, const SteamNetworkingIdentity*) = nullptr;
     uint64_t (*get_steam_id)(void*) = nullptr;
+    const char* (*friend_persona)(void*, uint64_t) = nullptr;
     const char* (*persona)(void*) = nullptr;
     const char* (*friend_persona)(void*, uint64_t) = nullptr;
     void (*invite)(void*, uint64_t) = nullptr;
@@ -366,9 +367,10 @@ uint64_t command_line_lobby()
 
 uint64_t take_join_request() { return g_join_request.exchange(0); }
 
-uint64_t find_friend_lobby(const std::string& mod_version)
+std::vector<FriendLobby> friend_lobbies(const std::string& mod_version)
 {
-    if (!api.ok) return 0;
+    std::vector<FriendLobby> out;
+    if (!api.ok) return out;
     const uint32_t app = api.app_id(api.utils);
     const int n = api.friend_count(api.friends, kFriendFlagImmediate);
     for (int i = 0; i < n; ++i) {
@@ -379,9 +381,16 @@ uint64_t find_friend_lobby(const std::string& mod_version)
         // Données du lobby d'un ami pas toujours connues avant d'y entrer : un écart de version sera refusé au Hello.
         const std::string v = lobby_data(g.lobby, "mod");
         if (!v.empty() && v != mod_version) continue;
-        return g.lobby;
+        const char* name = api.friend_persona(api.friends, f);
+        out.push_back({g.lobby, f, name ? name : ""});
     }
-    return 0;
+    return out;
+}
+
+uint64_t find_friend_lobby(const std::string& mod_version)
+{
+    const auto l = friend_lobbies(mod_version);
+    return l.empty() ? 0 : l.front().lobby;
 }
 
 uint64_t friend_lobby(uint64_t friend_id)

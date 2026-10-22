@@ -14,6 +14,7 @@ add_library(${TARGET} SHARED
     ../sync/coopsave.cpp
     ../sync/intent.cpp
     ../sync/state.cpp
+    ../sync/presence.cpp
     ../protocol/messages.cpp
     ../net/link.cpp
     ../net/udp.cpp
@@ -23,6 +24,7 @@ add_library(${TARGET} SHARED
     ../remote/remote.cpp
     ../remote/remote_proto.cpp
     ../ui/owners_ui.cpp
+    ../ui/joinbutton.cpp
 )
 
 target_compile_features(${TARGET} PRIVATE cxx_std_23)

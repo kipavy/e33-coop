@@ -14,5 +14,5 @@
   ],
   "launch_args": ["-e33role=host", "-e33port=7777"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_cinematic.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
-  "expect": { "snapshots_sent": "1", "joined_players": "1", "narratives_started": ">=1", "narratives_finished": ">=1", "barrier_waits": ">=1", "barrier_timeouts": "0" }
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "narratives_started": ">=1", "narratives_finished": ">=1", "barrier_waits": ">=1", "barrier_timeouts": "0", "ui:waiting_players": ">=1" }
 }
