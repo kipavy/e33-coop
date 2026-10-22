@@ -191,7 +191,7 @@ constexpr double kMirrorStepS = 0.15;      // miroir : un appel au jeu par pas, 
 constexpr double kModWindowS = 0.8;        // changement des menus attribué au mod s'il suit un de ses appels de moins de 0,8 s
 constexpr double kTurnGraceS = 1.2;        // début de tour : le jeu ouvre lui-même la roue
 
-bool g_mirror = true;                      // -e33menumirror=0 : ligne de texte seulement (comportement d'avant)
+bool g_mirror = false;                     // -e33menumirror=1 : miroir des menus ; sinon ligne de texte seulement
 bool g_guard = true;                       // -e33inputguard=0 : pas de coupure de la navigation ni des clics sur la roue
 
 // Objets de l'interface de combat, relus à chaque usage (le HUD est recréé à chaque combat).
@@ -869,7 +869,8 @@ void init(const Net& net)
 {
     g_net = net;
     g_aim_cam = cmdline::arg(L"e33aimcam") != L"0";
-    g_mirror = cmdline::arg(L"e33menumirror") != L"0";
+    // Désactivé par défaut (2026-10-22) : une touche d'ici confirmait la cible ouverte par le miroir (p7_menumirror_host).
+    g_mirror = cmdline::arg(L"e33menumirror") == L"1";
     g_guard = cmdline::arg(L"e33inputguard") != L"0";
     log().write("intent_init", JsonObj().add("aim_cam", g_aim_cam).add("menu_mirror", g_mirror).add("input_guard", g_guard));
 }

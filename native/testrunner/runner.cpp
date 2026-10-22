@@ -160,6 +160,8 @@ struct State {
         unsigned up_vk = 0;
         double up_fx = 0, up_fy = 0;
         double ap0 = -1;
+        int fa0 = -1;                     // compteurs de visée libre rejouée (dernière valeur vue)
+        double fa_t = -10;                // instant de leur dernier changement
         int drifts0 = 0;
         bool ap_leak = false;
     } spam;
@@ -723,11 +725,16 @@ void tick_spam()
     const double ap = ue::get_double(game::stats(hero), STR("CurrentAP"), -1);
     if (!sp.active) {
         sp.active = true;
-        sp.ap0 = ap;
         sp.drifts0 = coop::counter("menu_drifts");
         ++g.metrics["spam_turns"];
         log().write("tr_spam", JsonObj().add("on", true).add("spot", spot).add("ap", ap).add("foreground", GetForegroundWindow() == w), g.turn);
     }
+    // PA : base prise 2 s après le début du tour (gains de PA de début de tour du jeu), reprise à chaque étape d'une visée
+    // libre rejouée (ses tirs coûtent des PA). Les choix d'action restent surveillés par les crochets (subscribe).
+    const int fa_on = coop::counter("free_aims_replayed"), fa_off = coop::counter("free_aim_replays_ended");
+    const int fa = fa_on + fa_off + coop::counter("free_aim_shots_replayed");
+    if (fa != sp.fa0) { sp.fa0 = fa; sp.fa_t = g.t; }
+    if (g.t - sp.turn_t >= 2.0 && (sp.ap0 < 0 || fa_on > fa_off || g.t - sp.fa_t < 1.0)) sp.ap0 = ap;
     if (!sp.ap_leak && sp.ap0 >= 0 && ap != sp.ap0) { sp.ap_leak = true; input_leak("ap_changed"); }
     if (const int d = coop::counter("menu_drifts"); d > sp.drifts0) { for (int i = sp.drifts0; i < d; ++i) input_leak("menu_drift"); sp.drifts0 = d; }
     if (g.t < sp.next || sp.up_kind) return;

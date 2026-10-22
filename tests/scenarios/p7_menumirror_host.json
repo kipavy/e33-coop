@@ -11,7 +11,7 @@
   "spam_local_input": true,
   "actions": [ { "hero": "Lune", "type": "attack" } ],
   "defense": ["parry", "fail"],
-  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=16250036901998647475"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=16250036901998647475", "-e33menumirror=1"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_menumirror.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
   "expect": {
     "battle_end": "any",
