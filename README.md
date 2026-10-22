@@ -6,7 +6,7 @@
 Chacun joue sur son PC, avec son propre jeu. Pas de streaming vidéo : les parties se synchronisent par le réseau Steam.
 Un seul fichier à installer, puis le mod se met à jour tout seul.
 
-![Exploration à deux dans les Vallons fleuris](docs/img/exploration.jpg)
+![Panneau Coop du menu pause : qui joue quel personnage, et les options du mod](docs/img/panneau-coop.jpg)
 
 <a href="https://github.com/kipavy/e33-coop/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/kipavy/e33-coop/build.yml?branch=main&label=build" alt="Build"></a>
 <img src="https://img.shields.io/badge/status-en%20d%C3%A9veloppement-f59e0b" alt="En développement">
@@ -44,9 +44,6 @@ Dans Expedition 33, le combat au tour par tour repose sur des **réflexes** : pa
 |---|---|
 | ![Attaque en combat](docs/img/combat-attaque.jpg) | ![Lumière](docs/img/lumiere.jpg) |
 | Chaque joueur joue les tours de ses personnages et pare les coups qui les visent. | Exploration : un pilote, les autres le suivent, d'une zone à l'autre. |
-
-![Panneau Coop du menu pause](docs/img/panneau-coop.jpg)
-<sub>Le panneau **Coop** du menu pause : qui joue quel personnage (ici Monoco vient d'être donné à l'autre joueur avec **F9** puis **Maj+F9**), et les options du mod.</sub>
 
 ## Fonctionnalités
 
