@@ -130,6 +130,7 @@ struct Battle {
     UObject* dep_actor = nullptr;
     proto::StateSync dep_start;                            // état local photographié au début du tour (comparé à l'hôte plus tard)
     bool dep_finish_pending = false;                       // vérification du tour en attente de l'état de l'hôte
+    double dep_recheck_at = -1;                            // vérification de secours après résolution (si le jeu écoute encore)
     uint32_t sct_seq = 0, ots_seq = 0, listen_seq = 0;     // StartCharacterTurn vus ; dernier suivi d'un OnTurnStart ; d'une écoute
     bool strict = false;                                   // écart d'acteur vu dans ce combat : on revient à l'attente bloquante
     bool finalized = false;
@@ -2821,15 +2822,22 @@ void tick(double dt)
             if (b.dep_active) {
                 bump("turn_deps_held");
                 dep_solve(ready ? "host_state" : "timeout");
-                // SolveDependency conclut déjà l'écoute quand c'était la dernière dépendance : un CheckDependencies de
-                // plus relançait la suite du tour une 2e fois (l'ennemi tirait deux fois sa cible, vu le 2026-10-22).
-                UObject* deps = turn_deps();
-                if (deps && ue::get_bool(deps, STR("IsListening")) && !ue::get_bool(deps, STR("HasTriggered"))) {
-                    bump("turn_deps_rechecked");
-                    ue::Call recheck(deps, STR("CheckDependencies"));
-                    if (recheck) recheck.invoke();
-                }
+                // SolveDependency conclut déjà l'écoute quand c'était la dernière dépendance ; ses drapeaux (IsListening,
+                // HasTriggered) ne sont pas encore à jour juste après : un CheckDependencies immédiat relançait la suite du tour
+                // une 2e fois (l'ennemi tirait deux fois sa cible, tours 21 et 28 de p3_party, 2026-10-22). Secours différé.
+                b.dep_recheck_at = s.now + 0.5;
             }
+        }
+    }
+    // Secours : le jeu écoute toujours sans avoir conclu 0,5 s après la résolution (autre tour pas commencé entre-temps).
+    if (auto& b = s.battle; b.dep_recheck_at >= 0 && s.now >= b.dep_recheck_at) {
+        b.dep_recheck_at = -1;
+        UObject* deps = b.active && !b.dep_active && b.turn == b.dep_turn ? turn_deps() : nullptr;
+        if (deps && ue::get_bool(deps, STR("IsListening")) && !ue::get_bool(deps, STR("HasTriggered"))) {
+            bump("turn_deps_rechecked");
+            log().write("coop_turn_dep_recheck", JsonObj().add("turn", b.dep_turn), b.turn);
+            ue::Call recheck(deps, STR("CheckDependencies"));
+            if (recheck) recheck.invoke();
         }
     }
     // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
