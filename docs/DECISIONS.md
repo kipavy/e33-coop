@@ -203,3 +203,21 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 8. **Textes** : cartes « toast » du jeu (`WBP_ToastCard`), une persistante pour les indicateurs, une par message ; table FR/EN dans `native/ui`.
 
 **Remise en cause si** : un achat coïncide souvent avec un événement rejoué (la variation est alors absorbée et la resynchro reprend l'état de l'hôte) ; ou si `LoadCharacterState` ne reproduit plus l'empreinte de l'émetteur (compteur `build_hash_mismatches`).
+
+---
+
+## D15 — Sauvegarde côté client : copie coop à jour, hébergeable (2026-10-22, demande de Killian)
+
+**Constat** : la progression commune n'existait que dans la save de l'hôte. Si l'hôte est absent (ou change), son ami ne peut pas continuer, et peut tout perdre.
+
+**Décision** :
+1. **Où** : `SaveGames\e33coop\copies\<hôte>.sav` + `<hôte>.json` (nom affiché, date, niveau, origine) + `<hôte>.prev.sav` (copie précédente). Nom de fichier = nom de l'hôte en ASCII ; une copie par hôte, la plus récente proposée. Jamais dans `SaveGames\<SteamID>\`. Les tests écrivent dans `e33coop\test-copies\` (vidé par `reset-env`), jamais dans les vraies copies.
+2. **Client, à la réception** d'un instantané (rejoindre, resynchro) : les octets vérifiés deviennent la copie.
+3. **Client, ensuite** : à chaque empreinte d'exploration **identique** à celle de l'hôte (D14.5, donc au calme, à un point sûr), la copie est refaite localement (`CreateSaveGameDataFromGameState`, comme l'instantané de l'hôte) si l'empreinte a changé depuis la dernière copie (au plus une fois par minute, `-e33copymin`) ou au bout de 5 min (`-e33copyevery`).
+   Pourquoi pas un nouvel instantané demandé à l'hôte à chaque autosave : il faudrait un message de plus (version de protocole), ~440 Ko par envoi, et aujourd'hui recevoir un instantané recharge la partie du client. La copie locale ne coûte rien sur le réseau, ne recharge rien, et n'est écrite que quand l'état du client est vérifié égal à celui de l'hôte (or, inventaire, objets, ennemis, drapeaux, GPE, cinématiques, dialogues ; builds par D13).
+4. **Héberger la copie** : options de lancement de l'hôte (`-e33role=host -e33transport=steam`) ; au menu principal, la ligne « Coop : F10 pour héberger la partie coop de X (copie du JJ/MM HH:MM) » ; **F10** charge la copie (autosave coupée), le lobby s'ouvre comme d'habitude (F7 pour inviter). La progression va dans la copie : à chaque instantané envoyé, après chaque demande de sauvegarde du jeu (autosave, drapeau) au calme suivant, toutes les 5 min au calme, et au retour au menu (menu pause). Un client lancé en `-e33role=client` voit seulement un rappel au menu (comment l'héberger).
+5. **Saves perso protégées** tant que la partie chargée vient de l'hôte ou d'une copie : autosave coupée au chargement (comme avant), **retenue coupée** (relevé chaque seconde, `coop_autosave_reenabled`), recoupée avant toute demande de sauvegarde du jeu (`RequestAutoSave`, `ForceAutoSave`, `RequestSaveInternal`, `SaveGameToFile`), et filet : un `AsyncSaveGameToSlot` hors `e33coop` voit son objet de save retiré (l'écriture échoue, `coop_personal_saves_blocked`). La garde se lève au retour au menu principal, au chargement d'une save hors `e33coop` ou à une nouvelle partie (sauf nouvelle partie suivie, remarquée juste après).
+
+**Non vérifié en jeu** : l'appel effectif de ces fonctions de sauvegarde (noms tirés du dump), le nom de leurs paramètres (repli : premier paramètre chaîne / objet), et l'échec propre d'un `AsyncSaveGameToSlot` sans objet. Le filet ne devrait jamais servir.
+
+**Remise en cause si** : la copie locale du client diffère de la progression de l'hôte sur un point que l'empreinte ne couvre pas (quêtes, carte du monde) : passer à l'instantané de l'hôte envoyé à chaque autosave (option écartée au point 3).

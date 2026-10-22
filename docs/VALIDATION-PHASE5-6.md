@@ -65,6 +65,18 @@ Les deux installations doivent être identiques : le jeu refuse la connexion sin
 - [ ] **Toi** : menu pause > Écran titre. Chez lui : « L'hôte a quitté la partie. Session terminée. », puis retour au menu
       principal.
 
+## 5. Copie coop chez ton ami (≈ 5 min)
+- [ ] Après quelques minutes de partie ensemble, chez **ton ami** : le dossier
+      `%LOCALAPPDATA%\Sandfall\Saved\SaveGames\e33coop\copies\` contient `<ton nom>.sav` et `.json` (date récente).
+      Ses saves perso (`SaveGames\<17 chiffres>\`) n'ont pas changé de date.
+- [ ] Toi : menu pause > Écran titre. Lui : options de lancement `-e33role=host -e33transport=steam`, relance le jeu.
+      Au menu principal : « Coop : F10 pour héberger la partie coop de <toi> (copie du JJ/MM HH:MM) ». **F10** : la partie
+      se charge à l'endroit où vous étiez.
+- [ ] Il joue 2 minutes (un coffre, un combat), revient au menu principal par le menu pause, relance F10 : le coffre est
+      ouvert, le combat gagné. Ses saves perso n'ont toujours pas changé.
+- [ ] Optionnel : toi en `-e33role=client`, F7 au menu : tu rejoins sa partie (la copie).
+- Puis remettre ses options de lancement client.
+
 ## Après
 - Chacun : `powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1` dans le dossier dézippé, puis vider les options
   de lancement Steam.
