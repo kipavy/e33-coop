@@ -18,6 +18,7 @@
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
 #include "../sync/coop.hpp"
+#include "../sync/coopsave.hpp"
 #include "../sync/explore.hpp"
 #include "../ui/ui.hpp"
 
@@ -85,6 +86,7 @@ struct Scenario {
     json::Value expect;
     json::Value setup;                    // {"<Héros>": {"hp": n, "shield": n, "dead": true}} : appliqué au tour 1, à l'identique sur chaque instance
     bool join = false;                    // client : rejoindre la partie de l'hôte (instantané) au lieu de charger "save"
+    bool host_copy = false;               // hôte : "save" installée comme copie coop, puis hébergée comme avec F10 au menu (D15)
     bool new_game = false;                // hôte : nouvelle partie (une fois "wait_players" clients connectés) au lieu de charger "save"
     double join_timeout_s = 400;          // client : délai maximal pour recevoir et charger l'instantané
     int pause_at_turn = 0;                // ouvre le menu pause au début de ce tour (3 s), puis le referme (phase 4)
@@ -206,6 +208,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.setup = v["setup"];
     s.join = v["join"].as_bool(false);
     s.new_game = v["new_game"].as_bool(false);
+    s.host_copy = v["host_copy"].as_bool(false);
     s.join_timeout_s = v["join_timeout_s"].as_number(400);
     s.pause_at_turn = static_cast<int>(v["pause_at_turn"].as_int(0));
     s.end_on_battle = v["end_on_battle"].as_bool(false);
@@ -1002,6 +1005,12 @@ void tick(float dt)
             if (coop::connected_players() < g.sc.wait_players) break;
             if (!game::start_new_game(true, err)) { fail("start_new_game: " + err); return; }
             ++g.metrics["new_games_started"];
+            set_phase(Phase::WaitWorld);
+            break;
+        }
+        if (g.sc.host_copy) {   // copie coop : même chemin que F10 au menu principal
+            if (!coopsave::install_copy(g.sc.save, "TestHost", err)) { fail("install_copy: " + err); return; }
+            if (!coopsave::host_latest_copy(err)) { fail("host_copy: " + err); return; }
             set_phase(Phase::WaitWorld);
             break;
         }

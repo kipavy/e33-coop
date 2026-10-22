@@ -58,6 +58,9 @@ Log ("saves de test : " + ((Get-ChildItem $testSavesDst -File | ForEach-Object N
 # Emplacement coop (instantanés de l'hôte reçus ou envoyés, D12) : vidé avant chaque run.
 $coopSaves = Join-Path $savesRoot "e33coop"
 if (Test-Path $coopSaves) { Get-ChildItem $coopSaves -File | Remove-Item -Force }
+# Copies coop des tests (D15) ; les vraies copies (e33coop\copies) ne sont jamais touchées.
+$testCopies = Join-Path $coopSaves "test-copies"
+if (Test-Path $testCopies) { Get-ChildItem $testCopies -File | Remove-Item -Force }
 
 # 4. Mods
 $win64 = Join-Path $GameDir "Sandfall\Binaries\Win64"

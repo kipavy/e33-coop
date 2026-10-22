@@ -11,6 +11,7 @@ add_library(${TARGET} SHARED
     ../sync/coop.cpp
     ../sync/explore.cpp
     ../sync/builds.cpp
+    ../sync/coopsave.cpp
     ../sync/state.cpp
     ../protocol/messages.cpp
     ../net/link.cpp
