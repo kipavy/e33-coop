@@ -2,6 +2,13 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## État courant (2026-10-23, 00h30) — v0.6.2 publiée et installée chez Killian et TOTOFFF
+
+- **v0.6.2** (tag sur `main` = `integ3`) : correctifs du premier essai à deux PC (sections ci-dessous) : fin de combat imposée chez le client + horloge sans double compte, duel du prologue (barrière levée en combat, grâce de 6 s aux cinématiques), boucle de rechargements (empreinte d'inventaire résumée + partie ignorée après 2 instantanés inutiles), sprint du suiveur, pion fantôme sur Esquie (D19), relance Steam fiable (lanceur + `Apps\1903340\Running`), assistants du test à distance toujours installés. Batterie ciblée 17/17 (build 39851683637) après réenregistrement de `p5_resync_host` ; `p3_battleend_client` tolère ≤ 6 tirages de butin en trop (accord de Killian).
+- **Validé à deux PC** : test à distance (`status`, `fetch-logs`, `restart` en 0.6.1 : 1 échec « jeu déjà en cours » puis 2 réussites), mise à jour automatique 0.6.1 → 0.6.2 (téléchargée au menu, installée à la fermeture, relance à distance), invitation Steam acceptée → jonction, jonction automatique au menu (22h38, 0.6.1).
+- **Bugs ouverts** : (1) après la mise à jour, le client ne voit plus le salon de Killian (`friend_lobby`/`friend_lobbies` vides, aucun `coop_friend_lobby`) alors que l'invitation marche : à comprendre (données de jeu Steam de l'ami ? salon recréé après un refus de version ?) ; (2) un client en rôle `client` (test à distance) filtre les salons d'une autre version : le chemin « hôte plus récent → mise à jour immédiate » ne se déclenche jamais ; (3) tirs de visée libre rejoués qui ratent (`coop_free_aim_replay_miss`).
+- À vérifier dans les prochains journaux : `coop_force_end`, `barrier_releases_battle`, `coop_world_part_unfixable`, `coop_follow_stats`/`frame_hitch_explore`, `coop_follower_ghost`, `game_thread_stall`/`mod_unload`.
+
 ## 2026-10-22, soir — premier essai à deux PC Steam en v0.6.1 : client renvoyé au menu après une victoire (branche `fix/battle-end-client`)
 
 Combat SpringMeadows (Killian hôte, TOTOFFF client ; journaux dans `e33coop-backups/twopc-20261022`). L'hôte gagne, le client continue le combat puis reçoit « Connexion à l'hôte perdue ».
