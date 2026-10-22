@@ -2,6 +2,17 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-22 soir — « freeze quand l'hôte court » (essai à deux PC, v0.6.1) : branche `fix/follow-stutter`
+
+- **Mesuré dans les journaux** (`e33coop-backups\twopc-20261022`) :
+  - PilotState réguliers : ~15 par seconde (écarts de 60-70 ms, l'envoi partait toutes les 4 images), aucun perdu, < 2 % d'écarts > 80 ms. Ni le réseau ni un gel du thread de jeu du client (réceptions sans rafale) n'expliquent les à-coups.
+  - **Le pilote sprinte à ~720 u/s, le suiveur restait en course (~350 u/s)** : écart +370 u/s, téléportation toutes les ~2,2 s au seuil de 800 u (12 dans la session de 21:57, 5 et 3 dans les suivantes).
+  - **Écart d'inventaire permanent du hash d'exploration** : 11 741 feuilles chez l'hôte, 11 342 chez le client juste après l'instantané de l'hôte ; 14 écarts, ~6 nouveaux instantanés (rechargement de 5-6 s chacun) en ~15 min de jeu.
+  - Hôte : à-coups de 100-215 ms toutes les 30 à 100 s (vus dans ses envois), sans lien net avec ses empreintes.
+- **Corrigé (compilé, pas testé en vrai)** : sprint du suiveur (`SprintAction`, repli `SetDesiredGait`) quand le pilote sprinte ou pour rattraper ; inventaire de l'empreinte = quantités par objet + niveaux d'équipement (liste journalisée à l'envoi de l'hôte et sur un écart du client) ; une seule tâche lourde par image (builds, ressources, ennemis passifs, empreinte, copie coop), et builds/empreinte/copies reportés pendant que le pion court ; PilotState à 20 par seconde.
+- **Diagnostic ajouté** : `frame_hitch_explore` (> 80 ms, avec les durées des étapes du mod de l'image), `explore_frame_stats` (30 s), `coop_follow_stats` (15 s : écarts de réception, pertes, arrêts/reprises, téléportations, sprint), `coop_follow_sprint` / `coop_follow_sprint_fallback`.
+- **Au prochain essai** : `coop_follower_teleport` doit devenir rare (et donner `gait`/`sprint`) ; `sprint_gait_ok_s` proche de `sprint_s` ; plus de `coop_world_hash_diff` sur l'inventaire (sinon comparer les listes `inventory` de l'hôte et du client) ; regarder `frame_hitch_explore.steps` des deux côtés.
+
 ## État courant (2026-10-22, fin d'après-midi) — branche `integ2` : batterie verte sauf la parade en duo ; Release v0.6.0 avec le miroir des menus désactivé
 
 - **`integ2`** = `integ` + `feat/menu-mirror` + `feat/easy-install` + correctifs des tests. Batterie (build 39779386369) : 43/45, puis `p5_version_host` vert après correction du test (faux pair refusé = le suivant peut partir ; attente de refus sans numéro de version). Seul rouge : `p6_duoparry_host` (l'ennemi du test ne fait jamais d'attaque de groupe : à valider à deux PC).
