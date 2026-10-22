@@ -4,10 +4,11 @@
 
 **Un vrai mode coopératif en ligne, de 2 à 3 joueurs, pour _Clair Obscur: Expedition 33_.**
 Chacun joue sur son PC, avec son propre jeu. Pas de streaming vidéo : les parties se synchronisent par le réseau Steam.
+Un seul fichier à installer, puis le mod se met à jour tout seul.
 
 ![Exploration à deux dans les Vallons fleuris](docs/img/exploration.jpg)
 
-<a href="https://github.com/kipavy/e33-coop/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/kipavy/e33-coop/build.yml?branch=phase-6&label=build" alt="Build"></a>
+<a href="https://github.com/kipavy/e33-coop/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/kipavy/e33-coop/build.yml?branch=main&label=build" alt="Build"></a>
 <img src="https://img.shields.io/badge/status-en%20d%C3%A9veloppement-f59e0b" alt="En développement">
 <img src="https://img.shields.io/badge/joueurs-2%E2%80%933-3b82f6" alt="2 à 3 joueurs">
 <img src="https://img.shields.io/badge/C%2B%2B-UE4SS-00599c?logo=cplusplus" alt="C++ UE4SS">
@@ -57,9 +58,10 @@ Les cases cochées passent les tests automatiques. « À valider » signifie : �
 - [x] Récompenses de fin de combat identiques pour tous
 - [x] Attaque surprise et équipe de l'hôte appliquées chez tous
 - [x] Losanges de joueur dans l'ordre des tours
-- [ ] Voir ses menus s'ouvrir en direct : roue d'actions, compétences, gradients, cible *(en cours)*
+- [x] Voir ce que l'autre joueur prépare : son action et sa cible s'affichent avant qu'il ne joue
+- [ ] Menus synchronisés : voir en direct les menus de l'autre s'ouvrir et se fermer (roue d'actions, compétences, gradients, cible) et sa sélection active, sans pouvoir y toucher *(prochaine mise à jour)*
 - [ ] Bonus « parade en duo » : +1 PA si chaque joueur pare la même attaque de groupe *(à valider)*
-- [ ] Vue de la visée libre de l'autre joueur depuis l'épaule de son personnage *(à valider)*
+- [x] Vue de la visée libre de l'autre joueur depuis l'épaule de son personnage
 
 **Exploration et session**
 - [x] Rejoindre à tout moment : l'hôte envoie un instantané de sa partie, chargé dans un emplacement coop séparé
@@ -70,15 +72,17 @@ Les cases cochées passent les tests automatiques. « À valider » signifie : �
 - [x] Écrans d'attente qui disent ce que fait l'autre (« En attente de TOTOFF, qui regarde une cinématique »)
 - [x] Sauvegarde côté client : copie à jour de la partie commune, hébergeable avec **F10**, sans toucher aux sauvegardes perso
 - [ ] Bouton « Rejoindre *ami* » dans le menu principal *(à valider)*
-- [ ] Panneau « Coop » dans le menu pause : qui joue qui, raccourcis *(à valider)*
+- [x] Panneau « Coop » dans le menu pause : qui joue qui, répartition des personnages et options au clavier (**F9**)
 
 **Réseau**
 - [x] Steam Networking Messages : P2P avec relais Steam, lobby « amis seulement », invitation par l'overlay
 - [x] Vérification des versions du jeu, du mod et du protocole, avec un message clair en cas d'écart
 - [ ] Mode test à distance pour le développement : commandes en liste fermée, journaux renvoyés par Steam *(à valider)*
-- [ ] Sans option de lancement : on invite (F7) ou on rejoint depuis le jeu *(à valider)*
-- [ ] Installateur en un seul fichier, mises à jour depuis les releases GitHub avec vérification SHA-256 *(à valider)*
-- [ ] Options en jeu (F9) et panneau Coop interactif : répartition des personnages au clavier *(à valider)*
+
+**Installation et mises à jour**
+- [ ] Un seul fichier à télécharger, `Installer E33 Coop.exe`, qui trouve le jeu et installe tout *(à valider)*
+- [ ] **Mises à jour automatiques** : le mod télécharge la dernière version publiée et l'installe à la fermeture du jeu ; rejoindre un ami plus à jour met à jour tout de suite *(à valider)*
+- [ ] Aucune option de lancement : on invite (F7) ou on rejoint depuis le jeu *(à valider)*
 
 ## Installer
 
