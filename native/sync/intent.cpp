@@ -1,6 +1,9 @@
 #include "intent.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
+#include <iterator>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -1042,14 +1045,17 @@ bool mirror_release(double now)
 void reload_options() { g_aim_cam = cmdline::arg(L"e33aimcam") != L"0"; }
 
 // Garde des entrées, au plus près : pendant le tour du héros d'un autre joueur, tant que sa commande n'est pas arrivée,
-// aucune confirmation de cible ne doit lancer d'action ici. Qu'elle vienne d'une touche, d'un clic, d'un délai interne du
-// jeu ou d'un appel du miroir, elle est ignorée. Un crochet UE4SS ne peut pas empêcher un appel : la fonction de
-// ConfirmTarget (UFunction::Func) est remplacée par confirm_gate, qui appelle l'originale sauf dans ce cas (2026-10-22 :
-// cinq confirmations non expliquées dans p7_menumirror_host malgré les contextes d'entrée retirés).
-constexpr const wchar_t* kConfirmTargetPath =
-    L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_TargetingManager.AC_jRPG_TargetingManager_C:ConfirmTarget";
-UnrealScriptFunction g_confirm_orig = nullptr;
-UFunction* g_confirm_fn = nullptr;
+// aucune confirmation de cible ne doit lancer d'action ici, qu'elle vienne d'une touche, d'un clic, d'un délai interne du
+// jeu ou d'un appel du miroir. Un crochet UE4SS ne peut pas empêcher un appel, et un Blueprint qui appelle ConfirmTarget
+// exécute son bytecode sans passer par UFunction::Func (essai du 2026-10-22). ConfirmTarget lance l'action par son
+// délégué OnTargetConfirmed : pendant l'appel bloqué, la liste de ses abonnés (TArray de 16 octets) est mise de côté
+// avant l'appel et remise après, la confirmation ne lance donc rien.
+struct HeldDelegate
+{
+    UObject* tm = nullptr;
+    std::array<uint8_t, 16> bytes{};
+};
+std::vector<HeldDelegate> g_confirm_held;
 int g_confirm_logged = 0;
 
 bool confirm_must_block()
@@ -1063,14 +1069,21 @@ bool confirm_must_block()
     return true;
 }
 
-void confirm_gate(UObject* context, FFrame& stack, void* result)
+void confirm_pre(HookCtx& ctx)
 {
-    if (!confirm_must_block()) { g_confirm_orig(context, stack, result); return; }
+    if (!confirm_must_block()) return;
+    void* d = ue::value_ptr<void>(ctx.Context, STR("OnTargetConfirmed"));
+    if (!d) { log().write("input_guard_confirm_missing", JsonObj(), battle().turn); return; }
+    HeldDelegate h;
+    h.tm = ctx.Context;
+    std::memcpy(h.bytes.data(), d, h.bytes.size());
+    std::memset(d, 0, h.bytes.size());
+    g_confirm_held.push_back(h);
     bump("input_guard_confirms_blocked");
     if (g_confirm_logged++ < 30) {
         // Appelants (cadres de script) : pour savoir d'où vient la confirmation.
         std::string frames = "[";
-        FFrame* f = stack.PreviousFrame();
+        FFrame* f = ctx.TheStack.PreviousFrame();
         for (int depth = 0; f && depth < 5; ++depth) {
             if (frames.size() > 1) frames += ",";
             frames += JsonObj().add("o", ue::short_name(f->Object())).add("n", ue::short_name(f->Node())).str();
@@ -1079,21 +1092,19 @@ void confirm_gate(UObject* context, FFrame& stack, void* result)
             f = prev;
         }
         log().write("input_guard_confirm_blocked", JsonObj().add("spot", remote_turn_spot()).add("mod", game::mod_call_depth() > 0)
-                                                       .add("pretargeting", ue::get_bool(context, STR("IsPretargeting")))
+                                                       .add("pretargeting", ue::get_bool(ctx.Context, STR("IsPretargeting")))
                                                        .add("mirror_selected", g_mir.selected).raw("callers", frames + "]"), battle().turn);
     }
 }
 
-void install_confirm_block()
+void confirm_post(HookCtx& ctx)
 {
-    if (g_confirm_fn || !g_guard) return;
-    UFunction* f = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, kConfirmTargetPath);
-    if (!f) return;
-    g_confirm_orig = f->GetFuncPtr();
-    if (!g_confirm_orig) return;
-    f->SetFuncPtr(&confirm_gate);
-    g_confirm_fn = f;
-    log().write("input_guard_confirm_gate", JsonObj().add("installed", true));
+    for (auto it = g_confirm_held.rbegin(); it != g_confirm_held.rend(); ++it) {
+        if (it->tm != ctx.Context) continue;
+        if (void* d = ue::value_ptr<void>(ctx.Context, STR("OnTargetConfirmed"))) std::memcpy(d, it->bytes.data(), it->bytes.size());
+        g_confirm_held.erase(std::next(it).base());
+        return;
+    }
 }
 
 void subscribe()
@@ -1129,7 +1140,12 @@ void subscribe()
     for (const wchar_t* name : {L"RequestActionExecution", L"OnSelectSkip", L"OnSelectFlee"})
         bus.pre(fn(bm, name), [](HookCtx&, UFunction*) { if (Local* l = local_turn()) l->done = true; });
 
-    // La confirmation de cible elle-même est bloquée par remplacement de sa fonction (install_confirm_block, appelé au tick).
+    // Confirmation de cible pendant le tour d'un autre joueur : abonnés de OnTargetConfirmed mis de côté pendant l'appel.
+    {
+        const std::wstring confirm = fn(L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_TargetingManager.AC_jRPG_TargetingManager_C:", L"ConfirmTarget");
+        bus.pre(confirm, [](HookCtx& ctx, UFunction*) { confirm_pre(ctx); });
+        bus.post(confirm, [](HookCtx& ctx, UFunction*) { confirm_post(ctx); });
+    }
     bus.post(fn(bm, L"RequestActionExecution"), [](HookCtx&, UFunction*) {
         if (!g_guard || game::mod_call_depth() > 0 || remote_turn_spot() < 0) return;
         log().write("input_guard_execution_leak", JsonObj(), battle().turn);   // diagnostic : la confirmation a quand même lancé l'action
@@ -1208,7 +1224,6 @@ void tick(double now)
         if (!g_remote.empty() || !g_views.empty()) { g_remote.clear(); g_views.clear(); g_unit_names.clear(); }
         g_menus.clear();
     }
-    if (battle().active) install_confirm_block();
     poll_local(now);
     poll_menu(now);
     mirror_tick(now);
