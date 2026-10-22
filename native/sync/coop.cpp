@@ -2540,7 +2540,18 @@ void neutral_steam(bool f7)
             const auto any = net::steam::friend_lobbies(kModVersion, true);
             if (!any.empty()) id = any.front().lobby;
         }
-        if (!id) ui::toast("steam_no_friend_lobby", {}, 8.0);
+        if (!id && clicked) ui::toast("steam_no_friend_lobby", {}, 8.0);
+        if (!id && !clicked) {
+            // F7 au menu sans partie d'ami : ouvrir la sienne dès le menu. L'ami rejoint ici, puis la partie lancée
+            // (nouvelle partie ensemble avec l'intro, ou sauvegarde chargée) est partagée, comme avec l'ancien -e33role=host.
+            start_session(Role::Host, "F7 menu");
+            s.invite_on_ready = true;
+            bump("coop_opened");
+            bump("coop_opened_at_menu");
+            ui::toast("coop_opened_menu", {}, 10.0);
+            log().write("coop_opened_at_menu", JsonObj());
+            return;
+        }
     }
     if (id) {
         start_session(Role::Client, why);

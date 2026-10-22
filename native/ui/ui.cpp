@@ -68,6 +68,8 @@ constexpr Entry kTexts[] = {
     {"steam_lobby_failed", "Lobby Steam impossible : {0}", "Steam lobby failed: {0}"},
     {"session_open_steam", "Partie ouverte au coop : F7 pour inviter un ami", "Game open for coop: press F7 to invite a friend"},
     {"steam_no_friend_lobby", "Aucun ami n'a ouvert de partie coop", "No friend has an open coop game"},
+    {"coop_opened_menu", "Partie coop ouverte : invitez vos amis, puis lancez une nouvelle partie ou chargez la vôtre",
+                         "Coop game open: invite your friends, then start a new game or load yours"},
     // Copie coop (D15)
     {"copy_host_hint", "Coop : F10 pour héberger la partie coop de {0} (copie du {1})", "Coop: press F10 to host {0}'s coop game (copy from {1})"},
     {"copy_client_hint", "Copie de la partie coop de {0} gardée (du {1}). Pour l'héberger : jeu lancé sans option -e33role, puis F10 au menu",
