@@ -67,7 +67,7 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u64(x.rng_seed);
             w.u16(static_cast<uint16_t>(x.party.size()));
             for (auto& p : x.party) w.str(p);
-            w.str(x.world_enemy); w.str(x.enemy_global_id); w.u8(x.engage); w.u16(x.turn_timer_s);
+            w.str(x.world_enemy); w.str(x.enemy_global_id); w.u8(x.engage); w.u16(x.turn_timer_s); w.u8(x.duo_parry);
         } else if constexpr (std::is_same_v<T, TurnStart>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(static_cast<uint8_t>(x.kind)); w.u8(x.index); w.str(x.actor);
         } else if constexpr (std::is_same_v<T, ActionCommand>) {
@@ -200,6 +200,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         for (uint16_t i = 0; i < np && r.ok(); ++i) x.party.push_back(r.str(64));
         if (r.ok() && !r.at_end()) { x.world_enemy = r.str(256); x.enemy_global_id = r.str(256); x.engage = r.u8(); }   // v5
         if (r.ok() && !r.at_end()) x.turn_timer_s = r.u16();   // v6
+        if (r.ok() && !r.at_end()) x.duo_parry = r.u8();       // parade en duo (facultatif)
         return finish(x);
     }
     case MsgType::TurnStart: {
@@ -457,7 +458,8 @@ std::string to_json(const Message& m)
             std::string party = "[";
             for (size_t i = 0; i < x.party.size(); ++i) { if (i) party += ","; party += "\"" + json_escape(x.party[i]) + "\""; }
             o.add("battle", x.battle_id).add("encounter", x.encounter).raw("owners", ow + "]").add("seed", static_cast<int64_t>(x.rng_seed)).raw("party", party + "]")
-                .add("world_enemy", x.world_enemy).add("enemy_id", x.enemy_global_id).add("engage", static_cast<int>(x.engage)).add("turn_timer_s", static_cast<int>(x.turn_timer_s));
+                .add("world_enemy", x.world_enemy).add("enemy_id", x.enemy_global_id).add("engage", static_cast<int>(x.engage)).add("turn_timer_s", static_cast<int>(x.turn_timer_s))
+                .add("duo_parry", static_cast<int>(x.duo_parry));
         } else if constexpr (std::is_same_v<T, TurnStart>) {
             o.add("battle", x.battle_id).add("turn", x.turn).add("kind", static_cast<int>(x.kind)).add("index", static_cast<int>(x.index)).add("actor", x.actor);
         } else if constexpr (std::is_same_v<T, ActionCommand>) {
