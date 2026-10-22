@@ -45,6 +45,10 @@ constexpr double kPollPeriod = 0.2;                                 // dialogues
 constexpr double kTeleportDistance = 800;                           // écart au-delà duquel le suiveur est téléporté
 constexpr double kBarrierTimeout = 600;   // les cinématiques durent jusqu'à ~5 min (intro de Renoir : 295 s)
 constexpr double kIntroMax = 900;         // nouvelle partie : intro comptée comme cinématique au plus 15 min (filet si sa fin n'est pas vue)
+// Cinématique ou dialogue commencé chez un autre joueur, pas ici : délai avant la pause de la barrière, pour que le
+// suiveur atteigne le déclencheur et commence la même scène (sinon il reste figé en dehors, ne la déclenche qu'après
+// la fin chez l'autre, et c'est l'autre qui attend ensuite : scènes « en décalé », essai à deux PC du 2026-10-22).
+constexpr double kBarrierGrace = 6.0;
 
 uint64_t fnv64(const std::vector<uint8_t>& b)
 {
@@ -116,6 +120,8 @@ struct S {
     proto::NarrativeKind local_kind = proto::NarrativeKind::Dialogue;
     uint32_t narr_seq = 0;
     std::map<uint8_t, bool> remote_narr;
+    std::map<uint8_t, double> remote_narr_since;  // début de la narration en cours de chaque autre joueur
+    double local_narr_end = -1;                   // fin de la dernière narration d'ici
     bool barrier_paused = false;
     double barrier_since = -1;
     bool local_pause = false;
@@ -145,6 +151,10 @@ struct S {
     std::optional<proto::WorldHash> pending_world;   // client : dernière empreinte de l'hôte, à comparer au calme
     double pending_world_at = 0;
     int world_mismatch_streak = 0;
+    std::set<std::string> world_ignored;          // client : parties qu'un instantané n'a pas réparées (plus de resynchro)
+    std::set<std::string> resync_parts;           // client : parties en écart de la dernière demande d'instantané
+    double resync_at = -1;                        // client : instant de cette demande (-1 : aucune en cours)
+    std::map<std::string, int> resync_failures;   // client : instantanés de suite qui n'ont pas réparé cette partie
     int perturb_gold = 0;                         // -e33perturbworld=N (test)
     double cj_joined_at = 0;
     double waited_since = -1;                     // joueur en retard : les autres ont fini depuis
@@ -677,6 +687,7 @@ void poll_tick()
     const bool narr = cine || dlg;
     if (narr != s.local_narr) {
         s.local_narr = narr;
+        if (!narr) s.local_narr_end = s.now;
         if (narr) s.local_kind = cine ? proto::NarrativeKind::Cinematic : proto::NarrativeKind::Dialogue;
         ++s.narr_seq;
         s.net.publish(proto::NarrativeState{s.me, s.local_kind, narr, s.narr_seq}, true);
@@ -685,20 +696,39 @@ void poll_tick()
     }
     // Barrière : fini ici, pas chez les autres -> jeu en pause jusqu'à ce que tout le monde ait fini. Aussi quand la
     // cinématique enchaîne sur un combat (boss) : personne ne commence le combat avant les autres.
-    const bool hold = !narr && others_in_narrative();
+    // Jamais pendant un combat coop engagé : c'est le démarrage coordonné (BattleReady) qui attend les joueurs. Sinon
+    // interblocage, vu le 2026-10-22 (duel du prologue contre Maelle) : le dialogue de l'hôte reste « en cours » pendant
+    // tout le duel, la barrière gardait le client en pause, son premier tour ne commençait jamais, pas de BattleReady,
+    // et l'hôte restait figé à son tour 1 en attendant le client.
+    const bool battle = s.net.battle_engaged && s.net.battle_engaged();
+    bool hold = false, finished_here = false;
+    double since = s.now;
+    if (!narr && !battle && others_in_narrative()) {
+        // Fini ici après le début chez les autres (même scène, on a fini avant) : pause tout de suite. Scène des autres
+        // pas (encore) jouée ici : délai de grâce pour que le suiveur la déclenche aussi.
+        for (auto& [p, a] : s.remote_narr) {
+            if (!a || p == s.me) continue;
+            auto it = s.remote_narr_since.find(p);
+            since = std::min(since, it == s.remote_narr_since.end() ? -1e9 : it->second);
+        }
+        finished_here = s.local_narr_end >= 0 && s.local_narr_end >= since - 1.0;
+        hold = finished_here || s.now - since >= kBarrierGrace || s.barrier_paused;
+    }
     if (hold && !s.barrier_paused) {
         s.pause_reasons.insert("barrier");
         s.barrier_paused = true;
         s.barrier_since = s.now;
         bump("barrier_waits");
-        log().write("coop_barrier_hold", JsonObj());
+        // finished_here : même scène, finie ici avant les autres ; sinon scène pas commencée ici après le délai de grâce.
+        log().write("coop_barrier_hold", JsonObj().add("finished_here", finished_here).add("others_since_s", since < -1e8 ? -1.0 : s.now - since));
     } else if (s.barrier_paused && (!hold || s.now - s.barrier_since > kBarrierTimeout)) {
-        if (hold) { bump("barrier_timeouts"); s.remote_narr.clear(); }
+        if (hold) { bump("barrier_timeouts"); s.remote_narr.clear(); s.remote_narr_since.clear(); }
         s.pause_reasons.erase("barrier");
         s.barrier_paused = false;
         ui::clear_status("wait");
         bump("barrier_releases");
-        log().write("coop_barrier_release", JsonObj().add("waited_s", s.now - s.barrier_since).add("timeout", hold));
+        if (battle) bump("barrier_releases_battle");
+        log().write("coop_barrier_release", JsonObj().add("waited_s", s.now - s.barrier_since).add("timeout", hold).add("battle", battle));
     }
     // Qui on attend et pourquoi (cinématique, dialogue, chargement, menu, reconnexion), mis à jour à chaque passage.
     if (s.barrier_paused) {
@@ -757,6 +787,26 @@ std::vector<proto::HashPart> world_parts(std::map<std::string, reflect::Leaves>*
 
 void touch() { s.last_event_at = s.now; }
 
+std::vector<std::string> split_csv(const std::string& csv)
+{
+    std::vector<std::string> out;
+    size_t a = 0;
+    while (a <= csv.size()) {
+        const size_t b = std::min(csv.find(',', a), csv.size());
+        if (b > a) out.push_back(csv.substr(a, b - a));
+        a = b + 1;
+    }
+    return out;
+}
+
+// Diagnostic des écarts d'exploration : toutes les feuilles d'une partie (au plus 3000), une ligne par partie.
+void log_world_leaves(const std::string& part, const reflect::Leaves& l, uint32_t seq)
+{
+    std::string arr = "[";
+    for (size_t i = 0; i < l.size() && i < 3000; ++i) { if (arr.size() > 1) arr += ","; arr += JsonObj().add("p", l[i].first).add("v", l[i].second).str(); }
+    log().write("coop_world_leaves", JsonObj().add("part", part).add("seq", seq).add("count", static_cast<int64_t>(l.size())).raw("leaves", arr + "]"));
+}
+
 bool quiet(double secs)
 {
     return safe_point() && s.interactions.empty() && s.choices.empty() && !s.choice_pending && s.now - s.last_event_at >= secs;
@@ -805,6 +855,40 @@ void world_hash_tick()
         for (auto& mp : mine)
             if (mp.name == hp.name && mp.value != hp.value) { if (!differ.empty()) differ += ","; differ += mp.name; }
     bump("world_hashes_compared");
+    // Première comparaison après un instantané demandé (ResyncRequest) : une partie qui diffère encore juste après
+    // avoir rechargé l'état exact de l'hôte, deux fois de suite, ne sera pas réparée par un autre instantané (écart
+    // d'inventaire permanent après une nouvelle partie, 2026-10-22 : 5 rechargements en 10 min, chacun en plein jeu).
+    // Elle reste journalisée, mais ne demande plus d'instantané.
+    std::string ignored;
+    if (s.resync_at >= 0 && s.cj_joined_at > s.resync_at) {
+        const auto now_differ = split_csv(differ);
+        for (const std::string& part : s.resync_parts) {
+            if (std::find(now_differ.begin(), now_differ.end(), part) == now_differ.end()) { s.resync_failures.erase(part); continue; }
+            const int n = ++s.resync_failures[part];
+            log().write("coop_world_resync_failed", JsonObj().add("part", part).add("seq", host.seq).add("times", n));
+            if (n >= 2 && s.world_ignored.insert(part).second) {
+                bump("world_parts_unfixable");
+                log().write("coop_world_part_unfixable", JsonObj().add("part", part).add("seq", host.seq));
+            }
+        }
+        s.resync_at = -1;
+        s.resync_parts.clear();
+    }
+    {
+        std::string kept;
+        for (const std::string& part : split_csv(differ)) {
+            std::string& dst = s.world_ignored.count(part) ? ignored : kept;
+            if (!dst.empty()) dst += ",";
+            dst += part;
+        }
+        differ = kept;
+    }
+    if (differ.empty() && !ignored.empty()) {
+        s.world_mismatch_streak = 0;
+        bump("world_hash_diffs_ignored");
+        log().write("coop_world_hash_ignored", JsonObj().add("seq", host.seq).add("parts", ignored));
+        return;
+    }
     if (differ.empty()) {
         s.world_mismatch_streak = 0;
         log().write("coop_world_hash_ok", JsonObj().add("seq", host.seq));
@@ -819,19 +903,26 @@ void world_hash_tick()
     for (auto& [k, l] : leaves) { if (sizes.size() > 1) sizes += ","; sizes += "\"" + k + "\":" + std::to_string(l.size()); }
     // Détail local des parties en écart (l'hôte journalise sa taille de chaque partie à l'envoi).
     std::string detail = "{";
+    const auto parts = split_csv(differ);
     for (auto& [k, l] : leaves) {
-        if (differ.find(k) == std::string::npos) continue;
+        if (std::find(parts.begin(), parts.end(), k) == parts.end()) continue;
         if (detail.size() > 1) detail += ",";
         std::string first = "[";
         for (size_t i = 0; i < l.size() && i < 12; ++i) { if (first.size() > 1) first += ","; first += JsonObj().add("p", l[i].first).add("v", l[i].second).str(); }
         detail += "\"" + k + "\":" + first + "]";
     }
-    log().write("coop_world_hash_diff", JsonObj().add("seq", host.seq).add("parts", differ).add("streak", s.world_mismatch_streak)
+    log().write("coop_world_hash_diff", JsonObj().add("seq", host.seq).add("parts", differ).add("ignored", ignored).add("streak", s.world_mismatch_streak)
                                            .raw("leaves", sizes + "}").raw("mine", detail + "}"));
     if (s.world_mismatch_streak >= 2) {
         s.world_mismatch_streak = 0;
         bump("world_resyncs");
         ui::set_status("session", "resyncing");
+        // Diagnostic : toutes les feuilles locales des parties en écart (l'hôte journalise les siennes à la réception de
+        // la demande, coop_world_leaves) : comparer les deux journaux hors ligne.
+        for (const std::string& part : parts)
+            if (auto it = leaves.find(part); it != leaves.end()) log_world_leaves(part, it->second, host.seq);
+        s.resync_parts = std::set<std::string>(parts.begin(), parts.end());
+        s.resync_at = s.now;
         s.net.publish(proto::ResyncRequest{"world state differs: " + differ}, true);
         log().write("coop_world_resync", JsonObj().add("parts", differ));
     }
@@ -927,6 +1018,7 @@ void on_peer_left(uint8_t player)
 {
     s.peers.erase(player);
     s.remote_narr.erase(player);
+    s.remote_narr_since.erase(player);
     s.remote_pause.erase(player);
     presence::forget(player);
     if (s.host && s.pilot == player) { set_pilot(0, "pilot left"); s.net.publish(proto::PilotChange{0}, true); }
@@ -964,12 +1056,19 @@ bool handle(uint8_t from, const proto::Message& m)
         if (!s.host) { s.pending_world = *wh; s.pending_world_at = s.now; }
         return true;
     }
-    if (std::get_if<proto::ResyncRequest>(&m)) {
+    if (auto* rr = std::get_if<proto::ResyncRequest>(&m)) {
         if (!s.host) return true;
         // Le client recharge un instantané : il ne participe plus jusqu'à son JoinReady.
         s.peers[from] = PeerJoin{JoinState::Pending, s.now, false};
         bump("resyncs_requested");
-        log().write("coop_resync_requested", JsonObj().add("player", static_cast<int>(from)));
+        log().write("coop_resync_requested", JsonObj().add("player", static_cast<int>(from)).add("reason", rr->reason));
+        // Diagnostic : feuilles de l'hôte des parties en écart (le client journalise les siennes avant sa demande).
+        if (const std::string tag = "world state differs: "; rr->reason.rfind(tag, 0) == 0) {
+            std::map<std::string, reflect::Leaves> leaves;
+            world_parts(&leaves);
+            for (const std::string& part : split_csv(rr->reason.substr(tag.size())))
+                if (auto it = leaves.find(part); it != leaves.end()) log_world_leaves(part, it->second, s.world_seq);
+        }
         return true;
     }
     if (auto* r = std::get_if<proto::JoinReady>(&m)) {
@@ -1029,6 +1128,7 @@ bool handle(uint8_t from, const proto::Message& m)
     }
     if (auto* ns = std::get_if<proto::NarrativeState>(&m)) {
         if (s.host) { if (ns->player != from) return true; s.net.relay(m, from, true); }
+        if (ns->active && !s.remote_narr[ns->player]) s.remote_narr_since[ns->player] = s.now;
         s.remote_narr[ns->player] = ns->active;
         presence::set_narrative(ns->player, ns->active, ns->kind == proto::NarrativeKind::Cinematic, s.now);
         log().write("coop_narrative_remote", JsonObj().add("player", static_cast<int>(ns->player)).add("active", ns->active).add("seq", ns->seq));
