@@ -20,6 +20,7 @@
 #include "../../hooks/ue.hpp"
 #include "../../sync/coop.hpp"
 #include "../../testrunner/runner.hpp"
+#include "../../ui/owners_ui.hpp"
 
 using namespace RC;
 using namespace RC::Unreal;
@@ -120,6 +121,7 @@ private:
                 if (hook_retry_ > 1.0) { hook_retry_ = 0; hooks_done_ = e33::HookBus::get().try_register(); }
             }
             e33::coop::tick(dt);
+            e33::owners_ui::tick(dt);
             e33::testrunner::tick(dt);
         } catch (const std::exception& ex) {
             e33::log().write("tick_exception", e33::JsonObj().add("what", ex.what()));

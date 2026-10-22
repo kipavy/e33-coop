@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace e33::coop {
 
@@ -29,6 +31,12 @@ bool session_ended();
 bool action_forced(int spot);
 // Nom affiché d'un joueur (« vous » pour soi).
 std::string name_of(uint8_t player);
+// Répartition « qui joue qui » pour l'interface (native/ui/owners_ui) :
+uint8_t my_player();                                      // hôte = 0
+uint8_t hero_owner(const std::string& name);              // personnage (nom interne) : en combat par emplacement, sinon répartition hors combat
+uint8_t spot_owner(int spot);                             // héros du combat en cours, par emplacement
+std::vector<std::pair<uint8_t, std::string>> players();  // joueurs connus, noms bruts (hôte = 0 en tête)
+bool steam_transport();
 // Hôte : le personnage d'indice index dans l'équipe passe au joueur suivant (touche F6, test runner).
 void reassign_character(size_t index);
 // Fin de session propre (fin de test, sortie) : Bye à tous les pairs, envoyé immédiatement.

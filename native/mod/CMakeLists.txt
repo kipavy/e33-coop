@@ -18,6 +18,7 @@ add_library(${TARGET} SHARED
     ../net/steam.cpp
     ../ui/ui.cpp
     ../ui/overlay.cpp
+    ../ui/owners_ui.cpp
 )
 
 target_compile_features(${TARGET} PRIVATE cxx_std_23)
