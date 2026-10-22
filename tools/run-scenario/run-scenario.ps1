@@ -104,9 +104,11 @@ else {
         # Sinon les deux faux clients se connectaient ensemble et échangeaient leurs héros (p3_three_host, 2026-10-22).
         if ($prevLog) {
             $deadline = (Get-Date).AddMinutes(5)
-            while ((Get-Date) -lt $deadline -and -not ((Test-Path $prevLog) -and (Select-String -Path $prevLog -Pattern '"Welcome"' -Quiet))) { Start-Sleep -Milliseconds 500 }
+            # Accueilli, refusé (tests de version) ou arrêté : le suivant peut se présenter.
+            while ((Get-Date) -lt $deadline -and -not $prevPeer.HasExited -and -not ((Test-Path $prevLog) -and (Select-String -Path $prevLog -Pattern '"(Welcome|rejected)"' -Quiet))) { Start-Sleep -Milliseconds 500 }
         }
-        $peers += Start-FakePeer $peerSpecs[$i] $i
+        $prevPeer = Start-FakePeer $peerSpecs[$i] $i
+        $peers += $prevPeer
         $prevLog = Join-Path $run $(if ($i -eq 0) { "fakepeer.jsonl" } else { "fakepeer$($i + 1).jsonl" })
     }
     $result = Join-Path $run "result.json"

@@ -1,7 +1,7 @@
 {
   "player_name": "FakeClient",
   "game_build": 23765773,
-  "mod_version": "0.5.0",
+  "mod_version": "current",
   "gameplay_mods": [],
   "intent_preview": { "delay_s": 12, "menus": { "targets": ["enemy:0"], "item_targets": ["hero:Lune", "hero:Verso", "hero:Lune", "hero:Verso"] } },
   "actions": [
