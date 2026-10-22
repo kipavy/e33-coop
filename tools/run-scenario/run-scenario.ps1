@@ -97,8 +97,17 @@ while (-not $game -and ((Get-Date) - $t0).TotalSeconds -lt 120) {
 if (-not $game) { Log "ÉCHEC : le jeu n'a pas démarré en 120 s (fenêtre Steam en attente ?)"; $status = "launch_failed" }
 else {
     Log "jeu démarré (pid $($game.Id))"
+    $prevLog = $null
     for ($i = 0; $i -lt $peerSpecs.Count; $i++) {
-        if ($peerSpecs[$i].start -eq "after_game") { $peers += Start-FakePeer $peerSpecs[$i] $i }
+        if ($peerSpecs[$i].start -ne "after_game") { continue }
+        # Ordre d'arrivée = numéro de joueur (-e33owners) : le pair suivant attend l'accueil du précédent (5 min max).
+        # Sinon les deux faux clients se connectaient ensemble et échangeaient leurs héros (p3_three_host, 2026-10-22).
+        if ($prevLog) {
+            $deadline = (Get-Date).AddMinutes(5)
+            while ((Get-Date) -lt $deadline -and -not ((Test-Path $prevLog) -and (Select-String -Path $prevLog -Pattern '"Welcome"' -Quiet))) { Start-Sleep -Milliseconds 500 }
+        }
+        $peers += Start-FakePeer $peerSpecs[$i] $i
+        $prevLog = Join-Path $run $(if ($i -eq 0) { "fakepeer.jsonl" } else { "fakepeer$($i + 1).jsonl" })
     }
     $result = Join-Path $run "result.json"
     $status = $null
