@@ -2,6 +2,19 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## Fin de session (2026-10-23, 01h15) — v0.6.4 publiée ; prochaine session : autonomie à 100 %
+
+- **v0.6.3** : l'hôte envoie son salon au client du test à distance (E33R v2, `Op::Lobby`) ; diagnostic `coop_lobby_diag`. Validé : après une relance, le client a rejoint grâce à l'offre de l'hôte. **v0.6.4** : relance détachée (relaunch.ps1 / apply-update.ps1 se recréent par WMI `Win32_Process.Create`, l'installateur confie la relance à un script détaché). Cause trouvée : Steam compte le jeu « en cours » tant qu'un processus lancé par le jeu vit (helper dans le job du jeu) -> « jeu déjà en cours d'exécution ». Vérifié localement : processus WMI dans la session de l'utilisateur, parent WmiPrvSE. **Pas encore vérifié à deux PC.**
+- Mise à jour à distance (`remote.ps1 update`) validée en 0.6.2 -> 0.6.3 (paquet installé ; seule la relance a raté). Elle n'installe pas `remote\*.ps1` (règle de sécurité) : les assistants ne changent que par l'installateur.
+- État des PC : Killian en 0.6.4 ; TOTOFFF en 0.6.3 (devait réinstaller la 0.6.4 à la main en début de prochaine session : « Réinstaller » dans l'installateur, Killian l'a accepté).
+- **Plan pour être autonome à 100 % (demande de Killian)** :
+  1. Vérifier en début de session (TOTOFFF en 0.6.4) : `remote.ps1 restart` x2 -> retour sans erreur Steam, offre de salon -> jonction.
+  2. Mod : `start_helper` passe lui-même par WMI (repli CreateProcess) : relance fiable même avec d'anciens scripts.
+  3. Mise à jour à distance : autoriser aussi `ue4ss/Mods/E33Coop/remote/{relaunch,apply-update,rollback}.ps1` (mêmes empreintes vérifiées ; `remotetest.txt` reste interdit) pour corriger les assistants sans l'ami.
+  4. Hôte sans clavier : lancer le jeu de Killian par `steam.exe -applaunch 1903340 -e33role=host -e33transport=steam` (salon ouvert au premier tick, validé ce soir) ; jamais de touches simulées (Killian utilise parfois son PC).
+  5. Scénarios à deux PC : paire hôte réel (`run-scenario.ps1` avec `-e33transport=steam`) + `remote.ps1 run <client>` chez l'ami ; écrire les paires utiles (combat simple, visée libre, fin de combat, prologue, exploration/suivi, parade en duo avec une attaque de groupe).
+  6. Bugs ouverts : client en rôle `client` qui filtre un salon d'une autre version (chemin « mise à jour immédiate » jamais déclenché) ; salon invisible après relance par script (lire `coop_lobby_diag`) ; tirs de visée libre rejoués qui ratent.
+
 ## État courant (2026-10-23, 00h30) — v0.6.2 publiée et installée chez Killian et TOTOFFF
 
 - **v0.6.2** (tag sur `main` = `integ3`) : correctifs du premier essai à deux PC (sections ci-dessous) : fin de combat imposée chez le client + horloge sans double compte, duel du prologue (barrière levée en combat, grâce de 6 s aux cinématiques), boucle de rechargements (empreinte d'inventaire résumée + partie ignorée après 2 instantanés inutiles), sprint du suiveur, pion fantôme sur Esquie (D19), relance Steam fiable (lanceur + `Apps\1903340\Running`), assistants du test à distance toujours installés. Batterie ciblée 17/17 (build 39851683637) après réenregistrement de `p5_resync_host` ; `p3_battleend_client` tolère ≤ 6 tirages de butin en trop (accord de Killian).
