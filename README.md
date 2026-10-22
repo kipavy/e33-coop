@@ -45,6 +45,9 @@ Dans Expedition 33, le combat au tour par tour repose sur des **réflexes** : pa
 | ![Attaque en combat](docs/img/combat-attaque.jpg) | ![Lumière](docs/img/lumiere.jpg) |
 | Chaque joueur joue les tours de ses personnages et pare les coups qui les visent. | Exploration : un pilote, les autres le suivent, d'une zone à l'autre. |
 
+![Menus synchronisés : la compétence et la cible choisies par l'autre joueur](docs/img/menus-synchronises.jpg)
+<sub>**Menus synchronisés.** Pendant le tour de l'autre joueur, on voit ses menus s'ouvrir chez soi : ici il a choisi *Assaut Zéro* et vise le boss. Les boutons d'ici sont grisés : on regarde, sans pouvoir agir.</sub>
+
 ## Fonctionnalités
 
 Les cases cochées passent les tests automatiques. « À valider » signifie : écrit et compilé, en attente d'une vraie partie à deux.
@@ -59,7 +62,7 @@ Les cases cochées passent les tests automatiques. « À valider » signifie : �
 - [x] Attaque surprise et équipe de l'hôte appliquées chez tous
 - [x] Losanges de joueur dans l'ordre des tours
 - [x] Voir ce que l'autre joueur prépare : son action et sa cible s'affichent avant qu'il ne joue
-- [ ] Menus synchronisés : voir en direct les menus de l'autre s'ouvrir et se fermer (roue d'actions, compétences, gradients, cible) et sa sélection active, sans pouvoir y toucher *(prochaine mise à jour)*
+- [x] Menus synchronisés : on voit en direct les menus de l'autre joueur s'ouvrir et se fermer (roue d'actions, compétences, gradients, objets, cible) et sa sélection active, comme si c'était les siens, sans pouvoir y toucher : touches et clics d'ici sont bloqués pendant son tour
 - [ ] Bonus « parade en duo » : +1 PA si chaque joueur pare la même attaque de groupe *(à valider)*
 - [x] Vue de la visée libre de l'autre joueur depuis l'épaule de son personnage
 
@@ -106,6 +109,7 @@ Le même fichier sert à **mettre à jour**, à changer les **options** et à **
 Aucun rôle à choisir à l'avance : il se décide en jeu.
 
 1. **Inviter.** Charger sa partie, puis **F7** : la partie s'ouvre au coop et la fenêtre d'invitation Steam s'ouvre.
+   - **Nouvelle partie ensemble :** appuyer sur **F7** dès le menu principal, attendre que l'ami ait rejoint, puis lancer *Nouvelle partie*. Chacun voit l'introduction.
 2. **Rejoindre.** Au menu principal, cliquer **Rejoindre *ami*** (ou **F7**), ou accepter l'invitation Steam, jeu ouvert ou fermé. On entre dans la partie de l'ami au prochain moment calme : hors combat, cinématique et chargement.
 3. **Fin.** Retour au menu principal : on peut à nouveau inviter ou rejoindre.
 
@@ -114,7 +118,7 @@ Une invitation acceptée en pleine partie attend le retour au menu principal, po
 | Touche | Qui | Effet |
 |---|---|---|
 | **F7** | partie chargée | Ouvrir la partie au coop, inviter des amis Steam |
-| **F7** | au menu principal | Rejoindre la partie coop d'un ami |
+| **F7** | au menu principal | Rejoindre la partie coop d'un ami ; s'il n'y en a pas, ouvrir la sienne (nouvelle partie ensemble) |
 | **F8** | tous | Prendre la main en exploration (devenir le pilote) |
 | **F5** / **F6** | hôte, hors combat | Choisir un personnage / le donner au joueur suivant |
 | **F9** / **Maj+F9** | tous | Choisir une ligne du panneau Coop (personnage ou option) / la changer |
