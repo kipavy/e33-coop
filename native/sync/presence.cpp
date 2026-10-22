@@ -76,6 +76,7 @@ void set_joining(uint8_t player, bool loading_snapshot, double now)
 }
 
 void forget(uint8_t player) { g.erase(player); }
+void reset() { g.clear(); }
 
 Activity activity(uint8_t player, double now)
 {

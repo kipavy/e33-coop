@@ -21,6 +21,8 @@
 #include "../../remote/remote.hpp"
 #include "../../sync/coop.hpp"
 #include "../../testrunner/runner.hpp"
+#include "../../sync/update.hpp"
+#include "../../ui/options.hpp"
 #include "../../ui/owners_ui.hpp"
 
 using namespace RC;
@@ -28,7 +30,10 @@ using namespace RC::Unreal;
 
 namespace {
 
-constexpr const char* kModVersion = "0.3.0";
+constexpr const char* kModVersion = E33COOP_VERSION;   // fichier VERSION
+// STR(x) colle son préfixe avant l'expansion de x : un niveau de plus.
+#define E33_STR2(x) STR(x)
+#define E33_STR(x) E33_STR2(x)
 
 void subscribe_logging_hooks()
 {
@@ -60,7 +65,7 @@ public:
     E33CoopMod() : CppUserModBase()
     {
         ModName = STR("E33Coop");
-        ModVersion = STR("0.3.0");
+        ModVersion = E33_STR(E33COOP_VERSION);
         ModDescription = STR("Coop en ligne pour Clair Obscur: Expedition 33");
         ModAuthors = STR("kipavy");
     }
@@ -117,11 +122,13 @@ private:
                 hooks_done_ = e33::HookBus::get().try_register();
                 return;
             }
-            if (!hooks_done_) {
+            if (!hooks_done_ || e33::HookBus::get().pending()) {   // abonnements ajoutés en jeu (rôle décidé, D18)
                 hook_retry_ += dt;
                 if (hook_retry_ > 1.0) { hook_retry_ = 0; hooks_done_ = e33::HookBus::get().try_register(); }
             }
             e33::coop::tick(dt);
+            e33::update::tick(dt);
+            e33::options::tick(dt);
             e33::owners_ui::tick(dt);
             e33::testrunner::tick(dt);
             e33::remote::tick(dt);

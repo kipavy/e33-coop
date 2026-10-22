@@ -1,0 +1,11 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "current",
+  "gameplay_mods": [],
+  "join": true,
+  "session": true,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "expect": { "snapshots": "1", "owner_updates": ">=1" }
+}

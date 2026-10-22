@@ -2,10 +2,11 @@ name: build
 on:
   push:
     branches: ["**"]
-    paths: ["native/**", "tools/fakepeer/**", "tools/tests/**", "tools/CMakeLists.txt", ".github/workflows/build.yml", ".gitmodules"]
+    paths: ["native/**", "tools/fakepeer/**", "tools/tests/**", "tools/installer/**", "tools/CMakeLists.txt", "VERSION", ".github/workflows/build.yml", ".gitmodules"]
   workflow_dispatch: {}
+  workflow_call: {}   # release.yml : même build, en mode release (Game__Shipping__Win64 / Release)
 permissions: { contents: read }
-concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: false }
+concurrency: { group: "build-${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: false }
 defaults: { run: { shell: pwsh } }
 
 jobs:
@@ -29,6 +30,7 @@ jobs:
           path: |
             build_tools/fakepeer.exe
             build_tools/test_protocol.exe
+            build_tools/Installer E33 Coop.exe
           retention-days: 14
 
   mod:
@@ -124,7 +126,9 @@ jobs:
           Copy-Item (& $f UE4SS.dll).FullName pkg/ue4ss/
           Copy-Item (& $f E33Coop.dll).FullName pkg/ue4ss/Mods/E33Coop/dlls/main.dll
           $pdb = & $f E33Coop.pdb; if ($pdb) { Copy-Item $pdb.FullName pkg/ue4ss/Mods/E33Coop/dlls/main.pdb }
-          "ue4ss=$(git -C native/third_party/RE-UE4SS rev-parse HEAD)`nmod=${{ github.sha }}" | Set-Content pkg/build-info.txt
+          $ver = (Get-Content VERSION -Raw).Trim()
+          [IO.File]::WriteAllText("$PWD/pkg/ue4ss/Mods/E33Coop/version.txt", $ver)
+          "version=$ver`nue4ss=$(git -C native/third_party/RE-UE4SS rev-parse HEAD)`nmod=${{ github.sha }}" | Set-Content pkg/build-info.txt
           # commit de cet état de build, pour le prochain build incrémental
           "${{ github.sha }}" | Set-Content (Join-Path $env:BUILD_DIR ".cache_commit")
           Get-ChildItem pkg -Recurse | Select-Object FullName, Length

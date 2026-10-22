@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "minijson.hpp"
+#include "release.hpp"
 #include "remotecfg.hpp"
 
 namespace e33::cmdline {
@@ -157,6 +158,57 @@ inline const std::vector<std::wstring>& test_args()
 
 inline bool test_mode() { return !test_path().empty(); }
 
+// --- Options du joueur : ue4ss/Mods/E33Coop/settings.ini (format : native/common/release.hpp) ---------------------
+// Ordre : test -> options du scénario seulement ; sinon option de lancement -e33…, puis settings.ini, puis défaut.
+inline std::filesystem::path settings_path() { return mod_dir_path() / L"settings.ini"; }
+
+inline std::map<std::string, std::string>& settings_cache()
+{
+    static std::map<std::string, std::string> m;
+    return m;
+}
+inline bool& settings_loaded()
+{
+    static bool b = false;
+    return b;
+}
+inline std::string read_settings_text()
+{
+    std::ifstream f(settings_path(), std::ios::binary);
+    if (!f) return {};
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+inline void reload_settings()
+{
+    settings_cache() = release::parse_settings(read_settings_text());
+    settings_loaded() = true;
+}
+// Valeur effective d'une option du fichier (défaut si absente). Game thread.
+inline std::string setting(const char* key)
+{
+    if (!settings_loaded()) reload_settings();
+    return release::setting_or_default(settings_cache(), key);
+}
+// Écrit une option dans settings.ini (fichier créé avec ses commentaires s'il manque), puis le relit.
+inline bool save_setting(const char* key, const std::string& value)
+{
+    std::string text = read_settings_text();
+    if (text.empty()) text = release::default_settings_text();
+    text = release::set_setting(text, key, value);
+    const std::filesystem::path p = settings_path(), tmp = p.wstring() + L".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!f) return false;
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, p, ec);
+    reload_settings();
+    return !ec;
+}
+
 inline std::wstring arg(const wchar_t* key)
 {
     if (_wcsicmp(key, L"e33test") == 0) return test_path();
@@ -164,8 +216,24 @@ inline std::wstring arg(const wchar_t* key)
         const std::wstring r = find(argv_all(), key);
         return r.empty() && find(argv_all(), L"e33test").empty() ? remote_run().run_dir : r;
     }
-    if (!test_mode()) return find(argv_all(), key);
-    return find(test_args(), key);
+    if (test_mode()) return find(test_args(), key);
+    std::wstring v = find(argv_all(), key);
+    if (!v.empty()) return v;
+    for (const auto& d : release::kSettings) {
+        if (_wcsicmp(key, widen(d.arg).c_str()) != 0) continue;
+        const std::string s = setting(d.key);
+        return s == "auto" && std::string_view(d.key) == "lang" ? std::wstring() : widen(s);
+    }
+    return v;
+}
+
+// Option venue de la ligne de commande (elle l'emporte sur settings.ini) : l'écran d'options le signale.
+inline bool from_command_line(const char* settings_key)
+{
+    if (test_mode()) return true;
+    for (const auto& d : release::kSettings)
+        if (std::string_view(d.key) == settings_key) return !find(argv_all(), widen(d.arg).c_str()).empty();
+    return false;
 }
 
 } // namespace e33::cmdline

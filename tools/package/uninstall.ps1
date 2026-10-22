@@ -1,5 +1,5 @@
 # E33 Coop - uninstall: removes dwmapi.dll and the ue4ss folder from the game's Win64 folder (saves are not touched).
-# Remember to clear the Steam launch options afterwards.
+# If you had set -e33... Steam launch options (older versions), clear them too.
 param([string]$GameDir = "")
 $ErrorActionPreference = "Stop"
 if (-not $GameDir) {
@@ -12,4 +12,4 @@ if (-not $GameDir) {
 $win64 = Join-Path $GameDir "Sandfall\Binaries\Win64"
 if (Get-Process "SandFall-Win64-Shipping" -ErrorAction SilentlyContinue) { throw "Close the game first." }
 foreach ($p in @((Join-Path $win64 "dwmapi.dll"), (Join-Path $win64 "ue4ss"))) { if (Test-Path $p) { Remove-Item $p -Recurse -Force } }
-Write-Output "E33 Coop removed from $win64. Clear the Steam launch options too."
+Write-Output "E33 Coop removed from $win64. (Clear any -e33... Steam launch options left from older versions.)"

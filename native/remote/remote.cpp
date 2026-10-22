@@ -818,7 +818,7 @@ void tick(double dt)
     if (client) client_tick();
     if (s.host_active) host_tick();
     pump_out();
-    if (!coop::active()) ui::tick(s.now);   // le coop affiche déjà les textes quand il tourne
+    if (!coop::ready()) ui::tick(s.now);   // le coop affiche déjà les textes quand il tourne (mode neutre compris)
     if (s.quit_at >= 0 && s.now >= s.quit_at) {
         s.quit_at = -1;
         quit_game();

@@ -53,8 +53,10 @@ HookBus::Entry& HookBus::entry(const std::wstring& path)
     return *entries_.back();
 }
 
-void HookBus::pre(const std::wstring& path, HookFn fn) { entry(path).pre.push_back(std::move(fn)); }
-void HookBus::post(const std::wstring& path, HookFn fn) { entry(path).post.push_back(std::move(fn)); }
+// Abonné ajouté à une fonction déjà accrochée : le dispatcher le voit tout de suite (même vecteur). Nouvelle fonction :
+// enregistrée au prochain try_register.
+void HookBus::pre(const std::wstring& path, HookFn fn) { Entry& e = entry(path); e.pre.push_back(std::move(fn)); if (!e.registered) pending_ = true; }
+void HookBus::post(const std::wstring& path, HookFn fn) { Entry& e = entry(path); e.post.push_back(std::move(fn)); if (!e.registered) pending_ = true; }
 
 bool HookBus::try_register()
 {
@@ -75,6 +77,7 @@ bool HookBus::try_register()
             all = false;
         }
     }
+    pending_ = !all;
     return all;
 }
 

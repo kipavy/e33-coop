@@ -921,6 +921,8 @@ bool mirror_release(double now)
     return true;
 }
 
+void reload_options() { g_aim_cam = cmdline::arg(L"e33aimcam") != L"0"; }
+
 void subscribe()
 {
     using game::path::fn;

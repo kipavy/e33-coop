@@ -1,7 +1,7 @@
 {
   "player_name": "AutresMods",
   "game_build": 23765773,
-  "mod_version": "0.5.0",
+  "mod_version": "current",
   "gameplay_mods": ["pak:SuperDamage_P.pak"],
   "expect_reject": "client seul=pak:SuperDamage_P.pak",
   "expect": { "rejects": "1", "welcomes": "0" }

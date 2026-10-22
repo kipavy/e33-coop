@@ -43,6 +43,7 @@ struct Copy { std::wstring stem; std::string host; int64_t saved_at = 0; std::st
 
 struct S {
     bool host = false;
+    std::function<bool()> become_host;           // mode neutre : F10 fait de ce joueur l'hôte (coop.cpp)
     std::function<void(const char*, int)> bump;
     double now = 0, next_poll = 0;
     // Partie chargée depuis l'hôte ou depuis une copie : aucune écriture dans les emplacements perso.
@@ -221,14 +222,14 @@ void title_changed(bool title)
     if (!s.latest) return;
     const std::string when = date_label(s.latest->saved_at);
     log().write("coop_copy_available", JsonObj().add("host", s.latest->host).add("saved_at", s.latest->saved_at).add("level", s.latest->level));
-    if (s.host && s.can_host) ui::set_status("copy", "copy_host_hint", {s.latest->host, when});
+    if ((s.host || s.become_host) && s.can_host) ui::set_status("copy", "copy_host_hint", {s.latest->host, when});
     else if (!s.host) ui::toast("copy_client_hint", {s.latest->host, when}, 12.0);
 }
 
 // À chaque image (un appui court tomberait entre deux relevés).
 void key_tick()
 {
-    if (!s.at_title || !s.host || !s.can_host || !s.latest || s.hosting) { s.f10_down = false; return; }
+    if (!s.at_title || !(s.host || s.become_host) || !s.can_host || !s.latest || s.hosting) { s.f10_down = false; return; }
     // F10 au menu principal (fenêtre du jeu au premier plan) : héberger la copie la plus récente.
     const bool down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
     DWORD pid = 0;
@@ -236,6 +237,7 @@ void key_tick()
     const bool pressed = down && !s.f10_down && pid == GetCurrentProcessId();
     s.f10_down = down;
     if (!pressed) return;
+    if (!s.host && !(s.become_host && s.become_host())) return;   // mode neutre : devient l'hôte (lobby créé)
     std::string err;
     if (!host_latest_copy(err)) {
         ui::toast("copy_error", {err}, 8.0);
@@ -245,10 +247,13 @@ void key_tick()
 
 } // namespace
 
-void init(bool host, std::function<void(const char*, int)> b)
+void set_host(bool host) { s.host = host; }
+
+void init(bool host, std::function<void(const char*, int)> b, std::function<bool()> become_host)
 {
     s.host = host;
     s.bump = std::move(b);
+    s.become_host = std::move(become_host);
     if (const std::wstring v = cmdline::arg(L"e33copymin"); !v.empty()) s.min_interval = _wtof(v.c_str());
     if (const std::wstring v = cmdline::arg(L"e33copyevery"); !v.empty()) s.every = _wtof(v.c_str());
     for (const char* c : {"coop_copies_saved", "coop_copies_from_host", "coop_copies_local", "coop_copy_errors", "coop_copy_hosted",

@@ -40,6 +40,7 @@ struct Net {
 };
 
 void init(const Net& net);
+void reload_options();                              // aim_cam relu (options en jeu)
 void subscribe();                                   // hooks de la roue et du ciblage
 void receive(const proto::IntentPreview& m);
 void receive(const proto::AimView& m);

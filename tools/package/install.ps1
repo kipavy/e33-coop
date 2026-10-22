@@ -1,4 +1,4 @@
-# E33 Coop - installation (player package). Run from the unzipped folder:
+# E33 Coop - installation (player package), script version of "Installer E33 Coop.exe". Run from the unzipped folder:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-GameDir "D:\SteamLibrary\steamapps\common\Expedition 33"]
 # Copies UE4SS and the E33Coop mod into the game's Win64 folder (dwmapi.dll + ue4ss\). Saves are never touched.
 # A previous dwmapi.dll / ue4ss folder is moved to Win64\e33coop-backup-<date> first.
@@ -43,6 +43,8 @@ if (Get-Process "SandFall-Win64-Shipping" -ErrorAction SilentlyContinue) { throw
 $modDir = Join-Path $win64 "ue4ss\Mods\E33Coop"
 $cfgPath = Join-Path $modDir "remotetest.txt"
 $previousCfg = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw } else { $null }
+$settingsPath = Join-Path $modDir "settings.ini"
+$previousSettings = if (Test-Path $settingsPath) { [IO.File]::ReadAllText($settingsPath) } else { $null }
 $old = @((Join-Path $win64 "dwmapi.dll"), (Join-Path $win64 "ue4ss")) | Where-Object { Test-Path $_ }
 if ($old) {
     $bak = Join-Path $win64 ("e33coop-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
@@ -59,6 +61,21 @@ if ($old) {
 }
 Copy-Item (Join-Path $here "game\dwmapi.dll") $win64 -Force
 Copy-Item (Join-Path $here "game\ue4ss") $win64 -Recurse -Force
+
+# Options du joueur (settings.ini) : gardées d'une installation à l'autre, sinon valeurs par défaut commentées.
+if ($previousSettings) { [IO.File]::WriteAllText($settingsPath, $previousSettings, (New-Object System.Text.UTF8Encoding $false)) }
+elseif (-not (Test-Path $settingsPath)) {
+    $default = "# E33 Coop - options (aussi modifiables en jeu : F9 ; ou avec l'installateur : Options).`r`n" +
+               "# Une option par ligne. Les options de lancement Steam -e33... restent prioritaires.`r`n" +
+               "# lang : auto | fr | en          langue des textes du mod`r`n" +
+               "# updates : auto | ask | off     mises a jour depuis GitHub (auto : installee a la fermeture du jeu)`r`n" +
+               "# aim_cam : 1 | 0                visee libre de l'autre joueur vue depuis son epaule`r`n" +
+               "# turndep : 1 | 0                attente du tour de l'hote sans figer le jeu`r`n" +
+               "# duo_parry : 1 | 0              (hote) bonus parade en duo`r`n" +
+               "# turn_timer_s : 0 | 30 | 60 | 90  (hote) minuteur de tour, 0 = aucun`r`n" +
+               "lang = auto`r`nupdates = auto`r`naim_cam = 1`r`nturndep = 1`r`nduo_parry = 1`r`nturn_timer_s = 0`r`n"
+    [IO.File]::WriteAllText($settingsPath, $default, (New-Object System.Text.UTF8Encoding $false))
+}
 
 # Test a distance : configuration et assistants, uniquement dans le dossier du mod.
 $cfg = $null
@@ -84,7 +101,7 @@ if ($cfg) {
 Write-Output ""
 Write-Output "Installed in $win64"
 Write-Output (Get-Content (Join-Path $here "build-info.txt") -Raw)
-Write-Output "Now set the Steam launch options (Steam > Expedition 33 > Properties > Launch options):"
-Write-Output "  host  : -e33role=host -e33transport=steam"
-Write-Output "  friend: -e33role=client -e33transport=steam -e33join=1"
-Write-Output "Uninstall: powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1"
+Write-Output "Start the game from Steam WITHOUT launch options (remove any old -e33role / -e33transport / -e33join)."
+Write-Output "  Invite: load your game, press F7.   Join: at the main menu, 'Join <friend>' or F7, or accept the Steam invite."
+Write-Output "  Options: F9 in game, or $settingsPath"
+Write-Output "Uninstall: powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 (or 'Installer E33 Coop.exe')"

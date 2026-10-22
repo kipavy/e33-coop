@@ -361,6 +361,8 @@ void econ_receive(uint8_t from, const proto::EconomyDelta& m)
 }
 } // namespace
 
+void reset() { s = S{}; }
+
 void init(bool host, const Net& net)
 {
     s.host = host;

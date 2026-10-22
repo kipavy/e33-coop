@@ -60,8 +60,11 @@ struct FriendLobby {
     uint64_t lobby = 0;
     uint64_t friend_id = 0;
     std::string name;      // nom Steam de l'ami
+    std::string mod;       // version du mod du lobby (vide si pas encore connue)
+    bool compatible = true;
 };
-std::vector<FriendLobby> friend_lobbies(const std::string& mod_version);
+// any_version : aussi les lobbies d'une autre version du mod (compatible = false).
+std::vector<FriendLobby> friend_lobbies(const std::string& mod_version, bool any_version = false);
 // Premier ami qui joue au jeu dans un lobby coop (rejoindre depuis le menu principal), 0 sinon.
 uint64_t find_friend_lobby(const std::string& mod_version);
 

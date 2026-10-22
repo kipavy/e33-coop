@@ -366,7 +366,7 @@ uint64_t command_line_lobby()
 
 uint64_t take_join_request() { return g_join_request.exchange(0); }
 
-std::vector<FriendLobby> friend_lobbies(const std::string& mod_version)
+std::vector<FriendLobby> friend_lobbies(const std::string& mod_version, bool any_version)
 {
     std::vector<FriendLobby> out;
     if (!api.ok) return out;
@@ -379,9 +379,10 @@ std::vector<FriendLobby> friend_lobbies(const std::string& mod_version)
         if (static_cast<uint32_t>(g.game_id & 0xFFFFFF) != app) continue;
         // Données du lobby d'un ami pas toujours connues avant d'y entrer : un écart de version sera refusé au Hello.
         const std::string v = lobby_data(g.lobby, "mod");
-        if (!v.empty() && v != mod_version) continue;
+        const bool compatible = v.empty() || v == mod_version;
+        if (!compatible && !any_version) continue;
         const char* name = api.friend_persona(api.friends, f);
-        out.push_back({g.lobby, f, name ? name : ""});
+        out.push_back({g.lobby, f, name ? name : "", v, compatible});
     }
     return out;
 }

@@ -18,7 +18,7 @@ Chacun joue sur son PC, avec son propre jeu. Pas de streaming vidéo : les parti
 </div>
 
 > [!WARNING]
-> **En développement.** Le mod est testé automatiquement sur un PC et en vraies parties à deux PC entre amis. Il n'est publié nulle part, il n'y a pas encore de version stable, et des bugs sont attendus. Mod non officiel, sans lien avec Sandfall Interactive ni Kepler Interactive.
+> **En développement.** Le mod est testé automatiquement sur un PC et en vraies parties à deux PC entre amis. Les versions sont publiées dans les [releases](https://github.com/kipavy/e33-coop/releases) de ce dépôt ; il n'y a pas encore de version stable, et des bugs sont attendus. Mod non officiel, sans lien avec Sandfall Interactive ni Kepler Interactive.
 
 ---
 
@@ -76,52 +76,68 @@ Les cases cochées passent les tests automatiques. « À valider » signifie : �
 - [x] Steam Networking Messages : P2P avec relais Steam, lobby « amis seulement », invitation par l'overlay
 - [x] Vérification des versions du jeu, du mod et du protocole, avec un message clair en cas d'écart
 - [ ] Mode test à distance pour le développement : commandes en liste fermée, journaux renvoyés par Steam *(à valider)*
+- [ ] Sans option de lancement : on invite (F7) ou on rejoint depuis le jeu *(à valider)*
+- [ ] Installateur en un seul fichier, mises à jour depuis les releases GitHub avec vérification SHA-256 *(à valider)*
+- [ ] Options en jeu (F9) et panneau Coop interactif : répartition des personnages au clavier *(à valider)*
 
 ## Installer
 
-Il faut **la même version du jeu** (Steam) et **la même version du mod** chez tous les joueurs.
+Il faut **la même version du jeu** (Steam) chez tous les joueurs. La version du mod se met à jour toute seule.
 
-1. Récupérer le paquet joueur `e33coop-player.zip` et le décompresser.
-2. Jeu fermé, dans le dossier décompressé :
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-   ```
-   Le script installe UE4SS et le mod dans le dossier `Win64` du jeu. Rien d'autre n'est modifié.
-3. Options de lancement Steam (*Propriétés › Options de lancement*) :
+1. Télécharger **`Installer.E33.Coop.exe`** depuis la [dernière release](https://github.com/kipavy/e33-coop/releases/latest). Un seul fichier, rien à décompresser.
+2. Double-cliquer dessus, jeu fermé, puis cliquer **Installer**.
+   - L'installateur trouve le jeu tout seul, même dans une autre bibliothèque Steam (par exemple `E:\SteamLibrary`). Sinon, *Choisir le dossier du jeu…*.
+   - Il télécharge le paquet de la release depuis GitHub, vérifie son **empreinte SHA-256**, puis installe UE4SS et le mod dans le dossier `Sandfall\Binaries\Win64` du jeu. Rien d'autre n'est modifié. L'ancien contenu est gardé dans `Win64\e33coop-backup-<date>`.
+3. Lancer le jeu normalement par Steam, **sans option de lancement**.
 
-   | Rôle | Options |
-   |---|---|
-   | Hôte | `-e33role=host -e33transport=steam` |
-   | Ami | `-e33role=client -e33transport=steam -e33join=1` |
+> [!NOTE]
+> L'installateur n'est pas signé. La première fois, Windows peut afficher « Windows a protégé votre ordinateur ». Cliquer *Informations complémentaires*, puis *Exécuter quand même*.
 
-Pour désinstaller, lancer `uninstall.ps1` depuis le même dossier, puis vider les options de lancement.
+Le même fichier sert à **mettre à jour**, à changer les **options** et à **désinstaller** (les sauvegardes ne sont jamais touchées). Sans Internet : poser `e33coop-player.zip` et `SHA256SUMS` de la release à côté de l'installateur. Les scripts `install.ps1` / `uninstall.ps1` du zip restent disponibles.
+
+**Mises à jour.** Au menu principal, le mod regarde s'il existe une nouvelle release. Par défaut, il la télécharge, vérifie son empreinte et l'installe **à la fermeture du jeu** : jamais de redémarrage en pleine partie. Si l'on rejoint un ami qui a une version plus récente, la mise à jour se fait tout de suite, le jeu redémarre et rejoint la partie de l'ami.
 
 ## Jouer
 
-1. **L'hôte** charge sa partie. Un message indique que la partie est ouverte au coop. **F7** ouvre l'invitation Steam.
-2. **L'ami** accepte l'invitation, ou appuie sur **F7** au menu principal. Il entre dans la partie au prochain moment calme : hors combat, cinématique et chargement.
+Aucun rôle à choisir à l'avance : il se décide en jeu.
+
+1. **Inviter.** Charger sa partie, puis **F7** : la partie s'ouvre au coop et la fenêtre d'invitation Steam s'ouvre.
+2. **Rejoindre.** Au menu principal, cliquer **Rejoindre *ami*** (ou **F7**), ou accepter l'invitation Steam, jeu ouvert ou fermé. On entre dans la partie de l'ami au prochain moment calme : hors combat, cinématique et chargement.
+3. **Fin.** Retour au menu principal : on peut à nouveau inviter ou rejoindre.
+
+Une invitation acceptée en pleine partie attend le retour au menu principal, pour ne pas perdre la progression.
 
 | Touche | Qui | Effet |
 |---|---|---|
-| **F7** | hôte | Inviter des amis Steam |
-| **F7** | ami, au menu | Rejoindre la partie coop d'un ami |
+| **F7** | partie chargée | Ouvrir la partie au coop, inviter des amis Steam |
+| **F7** | au menu principal | Rejoindre la partie coop d'un ami |
 | **F8** | tous | Prendre la main en exploration (devenir le pilote) |
-| **F5** | hôte, hors combat | Choisir un personnage |
-| **F6** | hôte, hors combat | Donner ce personnage au joueur suivant |
-| **F10** | au menu, rôle hôte | Héberger la copie coop gardée par le client |
+| **F5** / **F6** | hôte, hors combat | Choisir un personnage / le donner au joueur suivant |
+| **F9** / **Maj+F9** | tous | Choisir une ligne du panneau Coop (personnage ou option) / la changer |
+| **F10** | au menu principal | Héberger la copie coop gardée lors des parties chez un ami |
+| **U** | au menu principal | Installer la mise à jour proposée (option `updates = ask`) |
 
-Les raccourcis sont aussi rappelés dans le menu pause.
+Les raccourcis sont rappelés dans le panneau **Coop** du menu pause.
+
+## Options
+
+Les options se changent en jeu (**F9** puis **Maj+F9**, dans le panneau Coop du menu pause), dans l'installateur (*Options*), ou à la main dans `Sandfall\Binaries\Win64\ue4ss\Mods\E33Coop\settings.ini` :
+
+| Option | Valeurs | Effet |
+|---|---|---|
+| `lang` | `auto` · `fr` · `en` | Langue des textes du mod (`auto` : celle de Windows) |
+| `updates` | `auto` · `ask` · `off` | Mises à jour : à la fermeture du jeu, sur demande (touche **U**), ou jamais |
+| `aim_cam` | `1` · `0` | Vue de la visée libre de l'autre joueur depuis son épaule |
+| `turndep` | `1` · `0` | Attente du tour de l'hôte sans figer le jeu (`0` : ancienne attente bloquante) |
+| `duo_parry` | `1` · `0` | Bonus « parade en duo » (réglage de l'hôte, valable pour tous) |
+| `turn_timer_s` | `0` · `30` · `60` · `90` | Minuteur de tour en secondes (réglage de l'hôte, `0` : aucun) |
+
+Les options de l'hôte s'appliquent à toute la partie ; chez un client, elles s'affichent en lecture seule.
 
 <details>
-<summary>Options avancées</summary>
+<summary>Options de lancement (développement)</summary>
 
-| Option | Effet |
-|---|---|
-| `-e33lang=fr` / `en` | Langue des textes du mod (par défaut : celle de Windows) |
-| `-e33turndep=0` | Revenir à l'ancienne attente bloquante en début de tour |
-| `-e33duoparry=0` | Désactiver le bonus « parade en duo » (côté hôte) |
-| `-e33aimcam=0` | Désactiver la vue de visée libre depuis l'épaule |
-| `-e33turntimer=N` | Minuteur de tour de N secondes (désactivé par défaut) |
+Les options `-e33…` gardent la priorité sur `settings.ini` : `-e33lang`, `-e33updates`, `-e33aimcam`, `-e33turndep`, `-e33duoparry`, `-e33turntimer`. Avec `-e33role=host|client`, le mod reprend l'ancien fonctionnement : rôle fixé au lancement, `-e33transport=steam` pour Steam, UDP sinon (`-e33port`, `-e33connect`), `-e33join=1` pour rejoindre. Les scénarios de test ne lisent que leurs propres `launch_args`.
 
 </details>
 
@@ -139,11 +155,13 @@ native/
 tools/
   fakepeer/    faux hôte ou faux client qui rejoue des parties enregistrées
   run-scenario/ lancement d'un scénario, batterie de non-régression
-  package/     paquet joueur, installation et désinstallation
+  installer/   « Installer E33 Coop.exe » : installation, mises à jour, options, désinstallation
+  package/     paquet joueur, scripts d'installation et de désinstallation
 ```
 
 - **Pas de compilation locale.** Chaque push est compilé par GitHub Actions (mod, outils, tests unitaires).
 - **Tests en vrai jeu.** Un scénario lance le jeu, un faux joueur rejoue une partie enregistrée, et le joueur automatique combat, pare, vise et explore. Le scénario vérifie ensuite des dizaines de compteurs : écarts d'état, tirages aléatoires, récompenses, attentes. La batterie compte plus de 40 scénarios.
+- **Publier une version.** Mettre le numéro dans `VERSION`, committer, puis pousser le tag `vX.Y.Z` correspondant. La CI compile en mode release, fait le paquet et publie la release (zip, installateur, `SHA256SUMS`). Détails : [`docs/RELEASE.md`](docs/RELEASE.md).
 - **Documentation :**
   - [`docs/PROGRESS.md`](docs/PROGRESS.md) : l'état du projet ;
   - [`docs/DECISIONS.md`](docs/DECISIONS.md) : les décisions ;
