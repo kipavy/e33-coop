@@ -1063,9 +1063,11 @@ bool confirm_must_block()
     if (!g_guard) return false;
     const int spot = remote_turn_spot();
     if (spot < 0) return false;
-    const BattleRef b = battle();
-    if (g_net.action_known && g_net.action_known(b.turn, spot)) return false;   // commande arrivée : le rejeu confirme
     if (g_net.remote_aim_active && g_net.remote_aim_active()) return false;     // visée libre rejouée
+    // Commande arrivée : seul le rejeu du mod (ses propres appels) peut confirmer. Entre l'arrivée de la commande et son
+    // rejeu (~1 s, le temps de refermer les menus du miroir), un clic d'ici confirmait encore (p7_menumirror_host, 2 fuites).
+    const BattleRef b = battle();
+    if (g_net.action_known && g_net.action_known(b.turn, spot)) return game::mod_call_depth() == 0;
     return true;
 }
 
