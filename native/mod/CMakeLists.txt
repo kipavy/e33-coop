@@ -12,12 +12,14 @@ add_library(${TARGET} SHARED
     ../sync/explore.cpp
     ../sync/builds.cpp
     ../sync/state.cpp
+    ../sync/presence.cpp
     ../protocol/messages.cpp
     ../net/link.cpp
     ../net/udp.cpp
     ../net/steam.cpp
     ../ui/ui.cpp
     ../ui/overlay.cpp
+    ../ui/joinbutton.cpp
 )
 
 target_compile_features(${TARGET} PRIVATE cxx_std_23)

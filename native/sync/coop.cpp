@@ -30,9 +30,11 @@
 #include "../net/steam.hpp"
 #include "../net/transport.hpp"
 #include "../protocol/messages.hpp"
+#include "../ui/joinbutton.hpp"
 #include "../ui/ui.hpp"
 #include "builds.hpp"
 #include "explore.hpp"
+#include "presence.hpp"
 #include "state.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -1456,6 +1458,7 @@ void end_session(const std::string& key, const std::string& detail)
     explore::on_session_end();
     ui::clear_status("turn");
     ui::clear_status("wait");
+    ui::clear_status("peer");
     if (key == "rejected") ui::set_status("session", "rejected", {detail});
     else ui::set_status("session", key);
     log().write("session_end", JsonObj().add("key", key).add("detail", detail).add("text", ui::statuses().count("session") ? ui::statuses().at("session") : ""));
@@ -2312,7 +2315,9 @@ void steam_tick()
         uint64_t id = s.lobby_wanted;
         if (!id) id = net::steam::command_line_lobby();
         if (!id) id = net::steam::take_join_request();
-        if (!id && f7) {
+        const bool clicked = ui::joinbutton::take_click();   // bouton « Rejoindre <ami> » du menu principal
+        if (!id && (f7 || clicked)) {
+            if (clicked) log().write("coop_join_button_clicked", JsonObj());
             id = net::steam::find_friend_lobby(kModVersion);
             if (!id) ui::toast("steam_no_friend_lobby", {}, 8.0);
         }
@@ -2472,6 +2477,7 @@ void init()
     subscribe();
     explore::subscribe();
     subscribe_session();
+    if (s.role == Role::Client && s.steam) ui::joinbutton::subscribe();   // bouton « Rejoindre <ami> » du menu principal
 }
 
 // Client : lance le combat reçu de l'hôte quand le monde local est chargé et stable depuis quelques secondes.
@@ -2670,6 +2676,50 @@ void run_remote_action()
                                          .raw("targets", ts + "]").add("auto_target", auto_target), b.turn);
 }
 
+// Activité des autres joueurs (écrans d'attente) : chargement (battements « occupé ») et silence du lien, par pair
+// direct. Ligne d'information quand un joueur charge sans qu'on l'attende (« TOTOFF charge votre partie… 12 s »).
+static void peer_activity_tick()
+{
+    std::vector<uint8_t> ids;
+    for (auto& p : s.peers) {
+        if (!p.link || !p.accepted || !p.drop.empty()) continue;
+        const double heard = p.link->last_heard();
+        presence::set_link(p.player_id, p.link->busy(s.now), heard >= 0 ? s.now - heard : 0.0, s.now);
+        ids.push_back(p.player_id);
+    }
+    // Client pas encore entré : son écran d'attente est déjà la ligne « session ».
+    const bool show = !ui::statuses().count("wait") && (s.role == Role::Host || explore::joined());
+    ui::set_status_text("peer", "peer_loading", show ? presence::loading_text(ids, s.now, player_name) : std::string());
+}
+
+// Client Steam au menu principal : bouton « Rejoindre <ami> » quand un ami a ouvert une partie coop (liste d'amis
+// relue toutes les 5 s, seulement au menu). Le clic passe par le même chemin que F7 (steam_tick).
+static void join_button_tick()
+{
+    static double next_menu_check = 0, next_scan = 0;
+    static bool at_menu = false;
+    static std::string friend_name;
+    const bool eligible = s.role == Role::Client && s.steam && s.steam_lobby && s.transport && s.peers.empty() &&
+                          s.lobby.state == net::steam::LobbyState::None && !s.lobby_wanted;
+    if (!eligible) { friend_name.clear(); at_menu = false; }
+    else if (s.now >= next_menu_check) {
+        next_menu_check = s.now + 0.5;   // FindFirstOf : pas à chaque image
+        at_menu = game::main_menu() != nullptr;
+        if (!at_menu) friend_name.clear();
+        else if (s.now >= next_scan) {
+            next_scan = s.now + 5.0;
+            const auto lobbies = net::steam::friend_lobbies(kModVersion);
+            const std::string n = lobbies.empty() ? std::string() : lobbies.front().name;
+            if (n != friend_name) log().write("coop_friend_lobby", JsonObj().add("friend", n).add("count", static_cast<int64_t>(lobbies.size())));
+            friend_name = n;
+        }
+    }
+    ui::joinbutton::tick(s.now, friend_name);
+    // Plan B : bouton impossible à placer dans le menu du jeu -> carte d'invitation (touche F7).
+    if (!friend_name.empty() && ui::joinbutton::failed()) ui::set_status("invite", "friend_invite", {friend_name});
+    else ui::clear_status("invite");
+}
+
 void tick(double dt)
 {
     if (s.role == Role::Solo) return;
@@ -2678,6 +2728,7 @@ void tick(double dt)
     hb.last_tick_ms = steady_ms();
     heartbeat_start();
     steam_tick();
+    join_button_tick();
     ui::tick(s.now);
     if (s.ended) {
         // Client : session finie. Message affiché, puis retour au menu principal (la partie chargée est celle de l'hôte).
@@ -2763,13 +2814,19 @@ void tick(double dt)
             if (expired) bump("battle_ready_timeouts");
             bump("battle_holds_released");
             log().write("coop_battle_hold_release", JsonObj().add("waited_s", s.now - b.hold_since).add("timeout", expired), b.turn);
-        } else if (!explore::pause_held("battle_start")) {
-            explore::hold_pause("battle_start", true);
-            ui::set_status("wait", "waiting_players");
-            bump("battle_holds");
-            log().write("coop_battle_hold", JsonObj(), b.turn);
+        } else {
+            if (!explore::pause_held("battle_start")) {
+                explore::hold_pause("battle_start", true);
+                bump("battle_holds");
+                log().write("coop_battle_hold", JsonObj(), b.turn);
+            }
+            // Qui on attend et pourquoi (chargement, cinématique, menu, reconnexion ; sinon « entre en combat »).
+            std::vector<uint8_t> who;
+            for (auto& p : s.peers) if (in_game(p) && !b.ready.count(p.player_id)) who.push_back(p.player_id);
+            ui::set_status_text("wait", "waiting_players", presence::wait_text(who, s.now, player_name, "wait_battle_prep"));
         }
     }
+    peer_activity_tick();
     if (s.battle.active && !s.battle.hold && !explore::remote_paused() && !game::pause_menu_visible()) s.battle.timer_elapsed += dt;
     if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
