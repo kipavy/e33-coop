@@ -366,6 +366,8 @@ void follow_tick()
     const std::string level = game::current_level();
     if (level != p.level) {
         // Niveau différent sans MapChange reçu (perdu, ou arrivé avant nous) : on rejoint le niveau du pilote.
+        // Seulement sur une position fraîche : un pilote qui charge n'envoie plus rien (sa dernière zone est périmée).
+        if (s.now - s.last_pilot_at > 1.5) { s.level_mismatch_since = -1; return; }
         if (s.level_mismatch_since < 0) s.level_mismatch_since = s.now;
         if (s.now - s.level_mismatch_since > 8.0) {
             s.level_mismatch_since = -1;
@@ -495,6 +497,9 @@ void on_map_change(const proto::MapChange& mc)
         log().write("coop_map_change_same_level", JsonObj().add("level", mc.level));
         return;
     }
+    // Dernière position du pilote = ancienne zone : oubliée, sinon le suiveur arrivé avant lui y retournait au bout de 8 s.
+    s.last_pilot.reset();
+    s.level_mismatch_since = -1;
     s.replaying = true;
     const bool ok = game::change_map(ue::from_utf8(mc.level), ue::from_utf8(mc.spawn_tag));
     s.replaying = false;
