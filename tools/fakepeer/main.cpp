@@ -130,7 +130,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
 
     proto::Hello hello;
     hello.game_build = static_cast<uint32_t>(script["game_build"].as_int(23765773));
-    hello.mod_version = script["mod_version"].as_string("dev");
+    hello.mod_version = script["mod_version"].as_string("current");
+    if (hello.mod_version == "current") hello.mod_version = E33COOP_VERSION;   // version de ce build (fichier VERSION)
     for (size_t i = 0; i < script["gameplay_mods"].size(); ++i) hello.gameplay_mods.push_back(script["gameplay_mods"][i].as_string());
     hello.player_name = script["player_name"].as_string("FakeClient");
     hello.instance_id = 0xFA4E;

@@ -1,7 +1,7 @@
 {
   "player_name": "TOTOFF",
   "game_build": 23765773,
-  "mod_version": "0.5.0",
+  "mod_version": "current",
   "gameplay_mods": [],
   "actions": [
     { "type": "attack" }
