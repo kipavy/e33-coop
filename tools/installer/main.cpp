@@ -557,9 +557,52 @@ fs::path pick_game_folder()
     return {};
 }
 
+// Relance détachée : Steam compte le jeu « en cours » tant qu'un processus lancé par le jeu tourne (cet installateur
+// compris quand le mod l'a lancé) : relancer d'ici donne « jeu déjà en cours d'exécution » (essai à deux PC du
+// 2026-10-23). Un petit script se recrée hors de l'arbre du jeu (WMI, Win32_Process.Create), attend que Steam voie le
+// jeu fermé (lanceur compris, Apps\1903340\Running à 0, lecture seule), puis relance ; l'installateur, lui, se termine.
+constexpr const char* kDetachedRelaunch = R"PS(param([switch]$Detached)
+$ErrorActionPreference = "SilentlyContinue"
+if (-not $Detached) {
+    $self = "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Detached"
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $self }
+    if ($r -and $r.ReturnValue -eq 0) { exit 0 }
+}
+$deadline = (Get-Date).AddSeconds(120)
+while ((Get-Date) -lt $deadline) {
+    $p = Get-Process "SandFall-Win64-Shipping", "Expedition33_Steam"
+    $run = (Get-ItemProperty "HKCU:\Software\Valve\Steam\Apps\1903340").Running
+    if (-not $p -and -not $run) { break }
+    Start-Sleep -Seconds 1
+}
+Start-Sleep -Seconds 3
+Start-Process "steam://rungameid/1903340"
+)PS";
+
+bool relaunch_detached()
+{
+    std::error_code ec;
+    fs::create_directories(temp_root(), ec);
+    const fs::path script = temp_root() / L"relaunch.ps1";
+    if (!write_file(script, kDetachedRelaunch)) return false;
+    wchar_t sys[MAX_PATH]{};
+    GetSystemDirectoryW(sys, MAX_PATH);
+    std::wstring cmd = L"\"" + std::wstring(sys) + L"\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
+                       script.wstring() + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    logline("relaunch handed to a detached script");
+    return true;
+}
+
 void relaunch_game()
 {
-    // Steam doit voir le jeu fermé (lanceur compris, Apps\1903340\Running à 0 ; lecture seule), sinon « jeu déjà en cours ».
+    if (relaunch_detached()) return;
+    // Repli : relance d'ici. Steam doit voir le jeu fermé (lanceur compris, Apps\1903340\Running à 0 ; lecture seule), sinon « jeu déjà en cours ».
     for (int i = 0; i < 90; ++i) {
         DWORD running = 0, size = sizeof running;
         const bool reg = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam\\Apps\\1903340", L"Running", RRF_RT_REG_DWORD, nullptr, &running, &size) == ERROR_SUCCESS;

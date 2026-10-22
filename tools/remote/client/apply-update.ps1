@@ -7,7 +7,7 @@
 #  4. copie, puis relance le jeu par Steam (steam://rungameid/1903340) ;
 #  5. si le mod ne demarre pas (pas de "mod_init" dans un nouveau journal en 3 min) : retour arriere automatique
 #     (rollback.ps1 -Relaunch).
-param([int]$GamePid = 0)
+param([int]$GamePid = 0, [switch]$Detached)
 $ErrorActionPreference = "Stop"
 $remote = $PSScriptRoot
 $mod = Split-Path $remote -Parent
@@ -15,6 +15,17 @@ $win64 = (Resolve-Path (Join-Path $mod "..\..\..")).Path
 $staging = Join-Path $remote "staging"
 $log = Join-Path $remote "helper.log"
 function Log([string]$m) { Add-Content -Path $log -Value ("{0} update {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m) }
+# Steam compte le jeu « en cours » tant qu'un processus lance par le jeu tourne (ce script compris, s'il n'a pas pu
+# sortir du job du jeu) : relancer d'ici donne « jeu deja en cours d'execution ». Le script se relance donc hors de
+# l'arbre du jeu (processus cree par WMI, Win32_Process.Create), puis cette copie fait le travail.
+if (-not $Detached) {
+    $self = "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -GamePid $GamePid -Detached"
+    try {
+        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $self } -ErrorAction Stop
+        if ($r.ReturnValue -eq 0) { Log "detached (pid $($r.ProcessId))"; exit 0 }
+        Log "detach failed (code $($r.ReturnValue)): continuing here"
+    } catch { Log "detach failed ($($_.Exception.Message)): continuing here" }
+}
 
 # Memes regles que update_dest_allowed (native/remote/remote_proto.cpp).
 function Test-Dest([string]$p) {
