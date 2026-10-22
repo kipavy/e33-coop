@@ -273,7 +273,7 @@ struct State {
     uint64_t rejoin_host = 0;                              // après une mise à jour : partie de cet ami rejointe au menu
     double rejoin_until = 0, next_rejoin_try = 0;
     double session_msg_until = -1;                         // message de fin de session gardé après le retour au mode neutre
-    bool at_menu = false, in_world = false;
+    bool at_menu = false, in_world = false, ready_hint_shown = false;
     double next_place_check = 0;
     bool options_dirty = false;                            // options changées en jeu : appliquées hors combat
     bool keys_shown = false;                               // rappel des touches affiché (menu pause)
@@ -2497,7 +2497,11 @@ void neutral_steam(bool f7)
         s.next_place_check = s.now + 0.5;   // FindFirstOf : pas à chaque image
         const bool menu = game::main_menu() != nullptr && !game::controller();
         const bool world = !menu && game::controller() && game::world_pawn() && !game::map_change_in_progress();
-        if (world && !s.in_world && !game::in_battle()) ui::toast("coop_ready_hint", {}, 8.0);   // partie chargée : rappel de F7
+        if (world && !s.ready_hint_shown && !game::in_battle()) {   // partie chargée : rappel de F7, une fois par partie
+            s.ready_hint_shown = true;
+            ui::toast("coop_ready_hint", {}, 8.0);
+        }
+        if (menu) s.ready_hint_shown = false;
         s.at_menu = menu;
         s.in_world = world;
     }
