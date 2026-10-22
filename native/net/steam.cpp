@@ -59,6 +59,7 @@ static_assert(sizeof(LobbyCreated) == 16 && sizeof(LobbyEnter) == 24 && sizeof(F
 constexpr int kIdentitySteamID = 16;
 constexpr int kSendUnreliableNoNagle = 1;
 constexpr int kSendAutoRestartBrokenSession = 32;
+constexpr int kSendReliable = 8;
 constexpr int kLobbyTypeFriendsOnly = 1;
 constexpr int kCallbackLobbyCreated = 513;
 constexpr int kCallbackLobbyEnter = 504;
@@ -104,6 +105,7 @@ struct Api {
     bool (*accept)(void*, const SteamNetworkingIdentity*) = nullptr;
     uint64_t (*get_steam_id)(void*) = nullptr;
     const char* (*persona)(void*) = nullptr;
+    const char* (*friend_persona)(void*, uint64_t) = nullptr;
     void (*invite)(void*, uint64_t) = nullptr;
     int (*friend_count)(void*, int) = nullptr;
     uint64_t (*friend_by_index)(void*, int, int) = nullptr;
@@ -209,6 +211,7 @@ bool load(std::string& err)
         resolve(m, "SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser", api.accept, err) &&
         resolve(m, "SteamAPI_ISteamUser_GetSteamID", api.get_steam_id, err) &&
         resolve(m, "SteamAPI_ISteamFriends_GetPersonaName", api.persona, err) &&
+        resolve(m, "SteamAPI_ISteamFriends_GetFriendPersonaName", api.friend_persona, err) &&
         resolve(m, "SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog", api.invite, err) &&
         resolve(m, "SteamAPI_ISteamFriends_GetFriendCount", api.friend_count, err) &&
         resolve(m, "SteamAPI_ISteamFriends_GetFriendByIndex", api.friend_by_index, err) &&
@@ -379,6 +382,56 @@ uint64_t find_friend_lobby(const std::string& mod_version)
         return g.lobby;
     }
     return 0;
+}
+
+uint64_t friend_lobby(uint64_t friend_id)
+{
+    if (!api.ok || !friend_id) return 0;
+    FriendGameInfo g{};
+    if (!api.friend_game(api.friends, friend_id, &g) || !g.lobby) return 0;
+    if (static_cast<uint32_t>(g.game_id & 0xFFFFFF) != api.app_id(api.utils)) return 0;
+    return g.lobby;
+}
+
+std::string friend_name(uint64_t id)
+{
+    const char* n = api.ok && id ? api.friend_persona(api.friends, id) : nullptr;
+    return n ? n : "";
+}
+
+void accept_user(uint64_t id)
+{
+    if (!api.ok || !id) return;
+    const SteamNetworkingIdentity who = identity(id);
+    api.accept(api.msgs, &who);
+}
+
+int send_raw(uint64_t to, const void* data, size_t len, bool reliable, int channel)
+{
+    if (!api.ok || !to) return 0;
+    const SteamNetworkingIdentity who = identity(to);
+    const int flags = (reliable ? kSendReliable : kSendUnreliableNoNagle) | kSendAutoRestartBrokenSession;
+    return api.send(api.msgs, &who, data, static_cast<uint32_t>(len), flags, channel);
+}
+
+bool receive_raw(int channel, std::vector<RawMessage>& out, int max)
+{
+    if (!api.ok) return false;
+    SteamNetworkingMessage* msgs[32];
+    while (max > 0) {
+        const int n = api.receive(api.msgs, channel, msgs, max < 32 ? max : 32);
+        if (n <= 0) break;
+        for (int i = 0; i < n; ++i) {
+            SteamNetworkingMessage* m = msgs[i];
+            if (m->peer.type == kIdentitySteamID && m->size > 0) {
+                const auto* p = static_cast<const uint8_t*>(m->data);
+                out.push_back({m->peer.steam_id64, std::vector<uint8_t>(p, p + m->size)});
+            }
+            if (m->release) m->release(m);
+        }
+        max -= n;
+    }
+    return true;
 }
 
 } // namespace e33::net::steam

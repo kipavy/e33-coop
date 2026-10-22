@@ -34,6 +34,7 @@
 #include "builds.hpp"
 #include "explore.hpp"
 #include "state.hpp"
+#include "../remote/remote.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -2316,6 +2317,7 @@ void steam_tick()
             id = net::steam::find_friend_lobby(kModVersion);
             if (!id) ui::toast("steam_no_friend_lobby", {}, 8.0);
         }
+        if (!id) id = remote::auto_join_lobby();   // test à distance : lobby de l'hôte de confiance, au menu principal
         if (id) {
             s.lobby_wanted = 0;
             net::steam::join_lobby(s.lobby, id);
@@ -2374,6 +2376,7 @@ void set_local_aim(const double* point)
     else s.local_aim.reset();
 }
 const std::map<std::string, int>& counters() { return s.counters; }
+const char* mod_version() { return kModVersion; }
 int counter(const std::string& name)
 {
     auto it = s.counters.find(name);
@@ -2389,7 +2392,10 @@ bool controls_spot(int spot)
 
 void init()
 {
-    const std::wstring r = arg(L"e33role");
+    std::wstring r = arg(L"e33role");
+    // Test à distance sans options de lancement : client Steam qui rejoint la partie de l'hôte de confiance.
+    const bool remote_default = r.empty() && !cmdline::test_mode() && remote::client_enabled();
+    if (remote_default) r = L"client";
     if (r == L"host") s.role = Role::Host;
     else if (r == L"client") s.role = Role::Client;
     else return;
@@ -2407,7 +2413,7 @@ void init()
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
-    if (arg(L"e33join") == L"1") s.want_join = true;
+    if (arg(L"e33join") == L"1" || remote_default) s.want_join = true;
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     s.turn_dep = arg(L"e33turndep") == L"1";
     if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
@@ -2431,7 +2437,7 @@ void init()
     std::string err;
     const std::wstring port_s = arg(L"e33port");
     const uint16_t port = static_cast<uint16_t>(port_s.empty() ? (s.role == Role::Host ? 7777 : 0) : std::stoi(port_s));
-    s.steam = arg(L"e33transport") == L"steam";
+    s.steam = arg(L"e33transport") == L"steam" || remote_default;
     if (!s.steam) {
         s.transport = net::make_udp(port, err);
         if (!s.transport) { log().write("coop_error", JsonObj().add("what", err)); s.role = Role::Solo; return; }

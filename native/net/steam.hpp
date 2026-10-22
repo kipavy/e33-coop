@@ -57,4 +57,17 @@ uint64_t take_join_request();
 // Premier ami qui joue au jeu dans un lobby coop (rejoindre depuis le menu principal), 0 sinon.
 uint64_t find_friend_lobby(const std::string& mod_version);
 
+// --- Test à distance (canal Steam à part, messages fiables de Steam ; voir native/remote) -------------------------------
+// Lobby dans lequel se trouve cet ami s'il joue au jeu, 0 sinon.
+uint64_t friend_lobby(uint64_t friend_id);
+// Nom Steam d'un ami (vide si inconnu).
+std::string friend_name(uint64_t id);
+// Accepte la session P2P en attente de cet utilisateur (et seulement lui).
+void accept_user(uint64_t id);
+// Envoi brut sur un canal ; renvoie le code EResult de Steam (1 = OK, 25 = tampon d'envoi plein : réessayer).
+int send_raw(uint64_t to, const void* data, size_t len, bool reliable, int channel);
+struct RawMessage { uint64_t from = 0; std::vector<uint8_t> data; };
+// Messages reçus sur un canal (au plus max) ; false si Steam n'est pas chargé.
+bool receive_raw(int channel, std::vector<RawMessage>& out, int max = 64);
+
 } // namespace e33::net::steam
