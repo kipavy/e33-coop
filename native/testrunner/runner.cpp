@@ -17,6 +17,7 @@
 #include "../hooks/hookbus.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
+#include "../remote/remote.hpp"
 #include "../sync/coop.hpp"
 #include "../sync/coopsave.hpp"
 #include "../sync/explore.hpp"
@@ -386,6 +387,7 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
     }
     coop::shutdown(all ? "test passed" : "test failed");
     set_phase(Phase::Done);
+    remote::on_test_exit();   // scénario reçu à distance : relance par Steam si l'ami l'a permis
     log().close();
     // Fermeture brutale mais sûre : aucune save n'est écrite (autosave coupée), le résultat est sur disque.
     TerminateProcess(GetCurrentProcess(), all ? 0 : 1);

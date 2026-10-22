@@ -15,9 +15,10 @@ add_library(e33proto STATIC
     ${NATIVE}/net/link.cpp
     ${NATIVE}/net/udp.cpp
     ${NATIVE}/net/steam.cpp
+    ${NATIVE}/remote/remote_proto.cpp
 )
-target_include_directories(e33proto PUBLIC ${NATIVE}/common ${NATIVE}/protocol ${NATIVE}/net)
-target_link_libraries(e33proto PUBLIC ws2_32 shell32)
+target_include_directories(e33proto PUBLIC ${NATIVE}/common ${NATIVE}/protocol ${NATIVE}/net ${NATIVE}/remote)
+target_link_libraries(e33proto PUBLIC ws2_32 shell32 bcrypt)
 
 add_executable(fakepeer fakepeer/main.cpp)
 target_link_libraries(fakepeer PRIVATE e33proto winmm)
@@ -26,3 +27,6 @@ enable_testing()
 add_executable(test_protocol tests/test_protocol.cpp)
 target_link_libraries(test_protocol PRIVATE e33proto)
 add_test(NAME protocol COMMAND test_protocol)
+add_executable(test_remote tests/test_remote.cpp)
+target_link_libraries(test_remote PRIVATE e33proto)
+add_test(NAME remote COMMAND test_remote)

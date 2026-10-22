@@ -18,6 +18,7 @@
 #include "../../hooks/hookbus.hpp"
 #include "../../hooks/log.hpp"
 #include "../../hooks/ue.hpp"
+#include "../../remote/remote.hpp"
 #include "../../sync/coop.hpp"
 #include "../../testrunner/runner.hpp"
 
@@ -121,6 +122,7 @@ private:
             }
             e33::coop::tick(dt);
             e33::testrunner::tick(dt);
+            e33::remote::tick(dt);
         } catch (const std::exception& ex) {
             e33::log().write("tick_exception", e33::JsonObj().add("what", ex.what()));
         } catch (...) {

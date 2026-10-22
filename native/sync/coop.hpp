@@ -38,5 +38,7 @@ void set_local_aim(const double* point);
 // Compteurs pour le test runner (desyncs, raw_hash_diffs, gameplay_draws, defense_timeouts…).
 const std::map<std::string, int>& counters();
 int counter(const std::string& name);
+// Version du mod (Hello, test à distance).
+const char* mod_version();
 
 } // namespace e33::coop

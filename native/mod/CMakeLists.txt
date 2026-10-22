@@ -20,11 +20,13 @@ add_library(${TARGET} SHARED
     ../net/steam.cpp
     ../ui/ui.cpp
     ../ui/overlay.cpp
+    ../remote/remote.cpp
+    ../remote/remote_proto.cpp
 )
 
 target_compile_features(${TARGET} PRIVATE cxx_std_23)
-target_include_directories(${TARGET} PRIVATE ../common ../hooks ../testrunner ../sync ../protocol ../net ../ui)
+target_include_directories(${TARGET} PRIVATE ../common ../hooks ../testrunner ../sync ../protocol ../net ../ui ../remote)
 if(MSVC)
     target_compile_options(${TARGET} PRIVATE /utf-8)
 endif()
-target_link_libraries(${TARGET} PUBLIC UE4SS ws2_32 shell32)
+target_link_libraries(${TARGET} PUBLIC UE4SS ws2_32 shell32 bcrypt)

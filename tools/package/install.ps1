@@ -2,8 +2,21 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-GameDir "D:\SteamLibrary\steamapps\common\Expedition 33"]
 # Copies UE4SS and the E33Coop mod into the game's Win64 folder (dwmapi.dll + ue4ss\). Saves are never touched.
 # A previous dwmapi.dll / ue4ss folder is moved to Win64\e33coop-backup-<date> first.
-param([string]$GameDir = "")
+# Remote test (docs/REMOTE-TEST.md), optional, nothing written outside the game's Win64 folder:
+#   -RemoteTest <host SteamID64>  trust this host for remote tests (ue4ss\Mods\E33Coop\remotetest.txt)
+#   -AllowRestart                 ...and let it restart the game (Steam relaunch)
+#   -AllowUpdate                  ...and let it install new versions of the mod (with automatic rollback)
+#   -NoRemoteTest                 turn remote test off (otherwise a previous setting is kept on reinstall)
+param(
+    [string]$GameDir = "",
+    [string]$RemoteTest = "",
+    [switch]$AllowRestart,
+    [switch]$AllowUpdate,
+    [switch]$NoRemoteTest
+)
 $ErrorActionPreference = "Stop"
+if ($RemoteTest -and $RemoteTest -notmatch '^7656119\d{10}$') { throw "-RemoteTest: SteamID64 expected (17 digits, 7656119...)" }
+if (($AllowRestart -or $AllowUpdate) -and -not $RemoteTest) { throw "-AllowRestart / -AllowUpdate need -RemoteTest <host SteamID64>" }
 $here = $PSScriptRoot
 
 function Find-Game {
@@ -27,6 +40,9 @@ $win64 = Join-Path $GameDir "Sandfall\Binaries\Win64"
 if (-not (Test-Path (Join-Path $win64 "SandFall-Win64-Shipping.exe"))) { throw "Not the game folder: $GameDir" }
 if (Get-Process "SandFall-Win64-Shipping" -ErrorAction SilentlyContinue) { throw "Close the game first." }
 
+$modDir = Join-Path $win64 "ue4ss\Mods\E33Coop"
+$cfgPath = Join-Path $modDir "remotetest.txt"
+$previousCfg = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw } else { $null }
 $old = @((Join-Path $win64 "dwmapi.dll"), (Join-Path $win64 "ue4ss")) | Where-Object { Test-Path $_ }
 if ($old) {
     $bak = Join-Path $win64 ("e33coop-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
@@ -43,6 +59,28 @@ if ($old) {
 }
 Copy-Item (Join-Path $here "game\dwmapi.dll") $win64 -Force
 Copy-Item (Join-Path $here "game\ue4ss") $win64 -Recurse -Force
+
+# Test a distance : configuration et assistants, uniquement dans le dossier du mod.
+$cfg = $null
+if ($NoRemoteTest) { $cfg = $null }
+elseif ($RemoteTest) {
+    $cfg = "# E33 Coop - test a distance (docs/REMOTE-TEST.md). Supprimer ce fichier desactive tout.`r`nhost=$RemoteTest`r`n" +
+           "restart=$([int][bool]$AllowRestart)`r`nupdate=$([int][bool]$AllowUpdate)`r`n"
+} elseif ($previousCfg) { $cfg = $previousCfg; Write-Output "Remote test setting kept from the previous install (-NoRemoteTest to turn it off)." }
+if ($cfg) {
+    [IO.File]::WriteAllText($cfgPath, $cfg, (New-Object System.Text.UTF8Encoding $false))
+    $restart = $cfg -match '(?m)^\s*restart\s*=\s*(1|true)\s*$'
+    $update = $cfg -match '(?m)^\s*update\s*=\s*(1|true)\s*$'
+    $helpers = Join-Path $modDir "remote"
+    New-Item -ItemType Directory -Force $helpers | Out-Null
+    $names = @()
+    if ($restart -or $update) { $names += "relaunch.ps1" }
+    if ($update) { $names += "apply-update.ps1", "rollback.ps1" }
+    foreach ($n in $names) { Copy-Item (Join-Path $here "remote-test\$n") $helpers -Force }
+    $hostId = ([regex]::Match($cfg, 'host=(\d{17})')).Groups[1].Value
+    Write-Output "Remote test ON: trusted host $hostId ; restart allowed: $restart ; mod update allowed: $update"
+    Write-Output "  Turn off: delete $cfgPath"
+}
 Write-Output ""
 Write-Output "Installed in $win64"
 Write-Output (Get-Content (Join-Path $here "build-info.txt") -Raw)
