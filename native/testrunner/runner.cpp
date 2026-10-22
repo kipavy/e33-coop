@@ -19,6 +19,7 @@
 #include "../hooks/ue.hpp"
 #include "../sync/coop.hpp"
 #include "../sync/explore.hpp"
+#include "../ui/owners_ui.hpp"
 #include "../ui/ui.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -88,6 +89,7 @@ struct Scenario {
     bool new_game = false;                // hôte : nouvelle partie (une fois "wait_players" clients connectés) au lieu de charger "save"
     double join_timeout_s = 400;          // client : délai maximal pour recevoir et charger l'instantané
     int pause_at_turn = 0;                // ouvre le menu pause au début de ce tour (3 s), puis le referme (phase 4)
+    double pause_s = 3.0;                 // durée de ce menu pause (captures du panneau Coop)
     bool end_on_battle = false;           // exploration : le test se termine (vert) quand un combat commence
     bool end_on_session_end = false;      // client : le test se termine quand la session est finie et le menu principal atteint (phase 5)
     std::vector<json::Value> explore;     // étapes d'exploration (phase 4) : voir run_explore_step
@@ -208,6 +210,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.new_game = v["new_game"].as_bool(false);
     s.join_timeout_s = v["join_timeout_s"].as_number(400);
     s.pause_at_turn = static_cast<int>(v["pause_at_turn"].as_int(0));
+    s.pause_s = v["pause_s"].as_number(3.0);
     s.end_on_battle = v["end_on_battle"].as_bool(false);
     s.end_on_session_end = v["end_on_session_end"].as_bool(false);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
@@ -248,6 +251,7 @@ struct Check { std::string name, expected, actual; bool ok; };
 int metric(const std::string& name)
 {
     if (name.rfind("ui:", 0) == 0) return ui::count(name.substr(3));   // textes affichés (phase 5)
+    if (name.rfind("owners_ui:", 0) == 0) return owners_ui::count(name.substr(10));   // losanges, panneau Coop
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
 }
@@ -608,7 +612,7 @@ void subscribe()
         if (g.sc.pause_at_turn > 0 && g.turn == g.sc.pause_at_turn && g.pause_until < 0) {
             ue::Call c(game::controller(), STR("OpenPauseMenu"));
             if (c) c.invoke();
-            g.pause_until = g.t + 3.0;
+            g.pause_until = g.t + g.sc.pause_s;
             ++g.metrics["pauses_opened"];
             log().write("tr_pause_open", JsonObj(), g.turn);
         }
