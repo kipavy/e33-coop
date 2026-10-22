@@ -46,6 +46,7 @@ bool sequence_playing();      // séquence de cinématique en cours (OnSequenceS
 double last_event_age();     // secondes depuis le dernier événement d'exploration (interaction, choix, transition, combat, narration)
 bool remote_paused();         // jeu mis en pause ici par la pause d'un autre joueur (combat)
 double follow_error();        // suiveur : dernier écart au pilote (u), -1 si inconnu
+bool local_moving();          // pion local (pilote ou suiveur) en mouvement (> 150 u/s) : tâches lourdes reportées
 bool calm(double secs);       // point sûr sans événement d'exploration depuis secs (copie coop, coopsave)
 // Dernier ennemi du monde qui a lancé un combat ici (nom d'acteur, engagement), pour BattleStart.
 std::string take_world_enemy();   // vide si le combat n'a pas été lancé par un ennemi du monde à l'instant

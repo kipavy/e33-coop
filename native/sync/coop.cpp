@@ -21,6 +21,7 @@
 
 #include "../common/cmdline.hpp"
 #include "../common/jsonlog.hpp"
+#include "../common/prof.hpp"
 #include "../hooks/game.hpp"
 #include "../hooks/hookbus.hpp"
 #include "../hooks/log.hpp"
@@ -3160,6 +3161,85 @@ static void neutral_tick(double dt)
     if (s.session_msg_until >= 0 && s.now > s.session_msg_until) { s.session_msg_until = -1; ui::clear_status("session"); }
 }
 
+// À-coups d'image hors combat (2026-10-22 : « freeze » chez le client quand l'hôte court, sans journal en exploration).
+// Une ligne par à-coup (> 80 ms, au plus une par seconde) avec le travail du mod dans l'image en cause (étapes de
+// l'image précédente, contenue dans ce dt), et un résumé toutes les 30 s (pas une ligne par image).
+struct ExploreFrames {
+    double since = -1;
+    int frames = 0;
+    double dt_sum = 0, dt_max = 0;
+    int h50 = 0, h80 = 0, h150 = 0, h300 = 0;
+    double mod_sum = 0, mod_max = 0;
+    std::vector<std::pair<const char*, double>> step_max;
+    double last_line = -10;
+    int suppressed = 0;
+};
+static ExploreFrames ef;
+
+static std::string steps_json(const prof::Frame& f, double min_ms, size_t max)
+{
+    auto v = f.steps;
+    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    JsonObj o;
+    size_t n = 0;
+    for (auto& [name, ms] : v) {
+        if (ms < min_ms || n++ >= max) break;
+        o.add(name, std::round(ms * 100.0) / 100.0);
+    }
+    return o.str();
+}
+
+static void explore_frames_tick(double dt)
+{
+    if (s.battle.active) { ef = ExploreFrames{}; return; }   // combat : frame_hitch (plus haut)
+    const prof::Frame& last = prof::last();
+    if (ef.since < 0) ef.since = s.now;
+    ++ef.frames;
+    ef.dt_sum += dt;
+    ef.dt_max = std::max(ef.dt_max, dt);
+    if (dt > 0.05) ++ef.h50;
+    if (dt > 0.08) ++ef.h80;
+    if (dt > 0.15) ++ef.h150;
+    if (dt > 0.30) ++ef.h300;
+    ef.mod_sum += last.total_ms;
+    ef.mod_max = std::max(ef.mod_max, last.total_ms);
+    for (auto& [name, ms] : last.steps) {
+        bool found = false;
+        for (auto& [n, m] : ef.step_max) if (n == name) { m = std::max(m, ms); found = true; break; }
+        if (!found) ef.step_max.emplace_back(name, ms);
+    }
+    if (dt > 0.08 && dt < 3.0) {   // au-delà : chargement (écran figé attendu)
+        bump("explore_frame_hitches");
+        if (s.now - ef.last_line < 1.0) ++ef.suppressed;
+        else if (!game::map_change_in_progress()) {
+            ef.last_line = s.now;
+            log().write("frame_hitch_explore", JsonObj().add("dt_ms", static_cast<int64_t>(dt * 1000.0))
+                                                   .add("mod_ms", std::round(last.total_ms * 100.0) / 100.0)
+                                                   .raw("steps", steps_json(last, 0.2, 8))
+                                                   .add("heavy", prof::last_heavy())
+                                                   .add("pilot", explore::is_pilot())
+                                                   .add("follow_error", static_cast<int64_t>(explore::follow_error()))
+                                                   .add("suppressed", ef.suppressed));
+            ef.suppressed = 0;
+        }
+    }
+    if (s.now - ef.since >= 30.0) {
+        prof::Frame mx;
+        mx.steps = ef.step_max;
+        log().write("explore_frame_stats", JsonObj().add("s", std::round((s.now - ef.since) * 10.0) / 10.0).add("frames", ef.frames)
+                                               .add("dt_avg_ms", std::round(ef.dt_sum / ef.frames * 10000.0) / 10.0)
+                                               .add("dt_max_ms", static_cast<int64_t>(ef.dt_max * 1000.0))
+                                               .add("over_50ms", ef.h50).add("over_80ms", ef.h80).add("over_150ms", ef.h150).add("over_300ms", ef.h300)
+                                               .add("mod_avg_ms", std::round(ef.mod_sum / ef.frames * 1000.0) / 1000.0)
+                                               .add("mod_max_ms", std::round(ef.mod_max * 100.0) / 100.0)
+                                               .raw("step_max_ms", steps_json(mx, 0.5, 12))
+                                               .add("pilot", explore::is_pilot()));
+        const double keep_line = ef.last_line;
+        ef = ExploreFrames{};
+        ef.last_line = keep_line;
+    }
+}
+
 void tick(double dt)
 {
     if (s.role == Role::Solo) { if (s.neutral) neutral_tick(dt); return; }
@@ -3167,10 +3247,11 @@ void tick(double dt)
     s.now += dt;
     hb.last_tick_ms = steady_ms();
     heartbeat_start();
-    steam_tick();
-    join_button_tick();
-    ui::tick(s.now);
-    coopsave::tick(s.now, !s.ended);   // copie coop (D15) : aussi après la fin de session (retour au menu)
+    if (!s.ended) explore_frames_tick(dt);
+    { prof::Scope p("steam"); steam_tick(); }
+    { prof::Scope p("join_button"); join_button_tick(); }
+    { prof::Scope p("ui"); ui::tick(s.now); }
+    { prof::Scope p("coopsave"); coopsave::tick(s.now, !s.ended); }   // copie coop (D15) : aussi après la fin de session (retour au menu)
     apply_options();
     if (s.ended) {
         // Client : session finie. Message affiché, puis retour au menu principal (la partie chargée est celle de l'hôte).
@@ -3192,14 +3273,17 @@ void tick(double dt)
         bump("frame_hitches");
         log().write("frame_hitch", JsonObj().add("dt_ms", static_cast<int64_t>(dt * 1000.0)).add("in_combo_window", !s.battle.windows.empty()), s.battle.turn);
     }
-    pump_network();
+    { prof::Scope p("net"); pump_network(); }
     if (s.ended) return;
     // Client : les ennemis de la carte ne détectent, ne poursuivent ni n'engagent plus personne ici. Le combat ne part
     // que de l'hôte (BattleStart), avec son équipe et son engagement. Vu le 2026-10-21 : l'ennemi du client fonçait sur
     // le pion suiveur et lançait le combat 3,5 s avant l'attaque surprise de l'hôte (« pris par surprise » chez le client).
-    if (static double next_passive = 0; s.role == Role::Client && s.now >= next_passive) {
-        next_passive = s.now + 2.0;
-        if (game::world_pawn() && game::controller() && !game::in_battle() && !game::map_change_in_progress() && !game::main_menu()) {
+    // Toutes les 3 s (FindAllOf parcourt tous les objets), seule tâche lourde de son image ; pion pris par le contrôleur
+    // (avant : deux FindFirstOf de plus, pion du monde et menu principal, à chaque passage).
+    if (static double next_passive = 0; s.role == Role::Client && s.now >= next_passive && prof::claim_heavy("passive_enemies")) {
+        next_passive = s.now + 3.0;
+        prof::Scope p("passive_enemies");
+        if (game::explore_pawn() && !game::in_battle() && !game::map_change_in_progress()) {
             const int n = game::passive_world_enemies();
             static int last_n = -1;
             if (n != last_n) { last_n = n; log().write("coop_world_enemies_passive", JsonObj().add("count", n)); }
@@ -3276,11 +3360,11 @@ void tick(double dt)
     if (s.battle.active && !s.battle.hold && !explore::remote_paused() && !game::pause_menu_visible()) s.battle.timer_elapsed += dt;
     if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
-    explore::tick(s.now);
-    builds::tick(s.now);
+    { prof::Scope p("explore"); explore::tick(s.now); }
+    { prof::Scope p("builds"); builds::tick(s.now); }
     run_remote_action();
     // Aperçu de ce que préparent les joueurs, caméra de la visée libre (envoyée par le propriétaire, rejouée ailleurs).
-    intent::tick(s.now);
+    { prof::Scope p("intent"); intent::tick(s.now); }
     if (s.fa_own.active && s.battle.active)
         intent::aim_owner_tick(s.now, s.fa_own.spot, static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - s.fa_own.t0).count()));
     {

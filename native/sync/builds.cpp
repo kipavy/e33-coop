@@ -9,10 +9,12 @@
 #include <vector>
 
 #include "../common/jsonlog.hpp"
+#include "../common/prof.hpp"
 #include "../hooks/game.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
 #include "../ui/ui.hpp"
+#include "explore.hpp"
 
 using RC::Unreal::UObject;
 
@@ -296,6 +298,8 @@ void econ_resample()
 void econ_tick()
 {
     if (s.now < e.next) return;
+    if (!prof::claim_heavy("economy")) return;   // pas dans la même image qu'une autre tâche lourde
+    prof::Scope p("economy");
     e.next = s.now + 2.0;
     if (!game::controller() || game::in_battle() || game::map_change_in_progress() || !game::explore_pawn()) { e.prev_at = -1; return; }
     const double age = s.net.last_event_age ? s.net.last_event_age() : 1e9;
@@ -420,8 +424,16 @@ void tick(double now)
     s.now = now;
     econ_tick();
     if (now < s.next_check) return;
+    // Empreinte des builds : SaveCharacterState + réflexion de chaque personnage, coûteux. Seule tâche lourde de son
+    // image, et pas pendant que le pion court (les builds ne changent que dans les menus, pion arrêté) sauf toutes
+    // les 20 s au plus (2026-10-22 : à-coups en exploration quand l'hôte court).
+    static double last_done = -1000;
+    if (explore::local_moving() && now - last_done < 20.0) { s.next_check = now + 0.5; return; }
+    if (!prof::claim_heavy("builds")) return;   // réessai à l'image suivante
     s.next_check = now + kCheckPeriod;
     if (!can_check()) return;
+    last_done = now;
+    prof::Scope p("build_check");
     check_builds();
 }
 
