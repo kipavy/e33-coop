@@ -330,7 +330,9 @@ void tick(double now, const std::string& friend_name)
         DWORD pid = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &pid);
         const bool fg = pid == GetCurrentProcessId();
-        if (fg && ((enter && !g.enter_down && g.has_focus) || (mouse && !g.mouse_down && g.hovered))) g_clicked = true;
+        // Front montant : focus / survol relus à l'instant (l'état mis en cache peut dater de 0,25 s).
+        if (fg && enter && !g.enter_down && g.has_focus && call_bool(g.btn, STR("HasAnyUserFocus"))) g_clicked = true;
+        if (fg && mouse && !g.mouse_down && g.hovered && call_bool(g.btn, STR("IsHovered"))) g_clicked = true;
         g.enter_down = enter;
         g.mouse_down = mouse;
     }

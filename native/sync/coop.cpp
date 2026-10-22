@@ -2701,7 +2701,7 @@ static void join_button_tick()
     static std::string friend_name;
     const bool eligible = s.role == Role::Client && s.steam && s.steam_lobby && s.transport && s.peers.empty() &&
                           s.lobby.state == net::steam::LobbyState::None && !s.lobby_wanted;
-    if (!eligible) { friend_name.clear(); at_menu = false; }
+    if (!eligible) { friend_name.clear(); at_menu = false; (void)ui::joinbutton::take_click(); }   // pas de clic en attente
     else if (s.now >= next_menu_check) {
         next_menu_check = s.now + 0.5;   // FindFirstOf : pas à chaque image
         at_menu = game::main_menu() != nullptr;
