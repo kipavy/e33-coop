@@ -74,6 +74,7 @@ public:
     ~E33CoopMod() override
     {
         e33::HookBus::get().unregister_all();
+        e33::log().write("mod_unload", e33::JsonObj());   // diagnostic : sortie propre (absent : processus tué ou planté)
         e33::log().close();
     }
 

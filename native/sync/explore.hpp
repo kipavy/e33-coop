@@ -17,6 +17,9 @@ struct Net {
     std::function<void(const proto::Message&, uint8_t origin, bool reliable)> relay;   // hôte : à tous sauf origin
     std::function<void(const char* counter, int n)> bump;
     std::function<std::string(uint8_t player)> name_of;                          // nom affiché d'un joueur
+    // Combat coop engagé ici (client : BattleStart de l'hôte reçu ou combat en cours ; hôte : combat en cours). La
+    // barrière narrative ne tient plus : le démarrage coordonné (BattleReady) prend le relais.
+    std::function<bool()> battle_engaged;
 };
 
 void init(bool host, bool want_join, const Net& net);   // want_join : client qui rejoint la partie de l'hôte

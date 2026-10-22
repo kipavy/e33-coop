@@ -205,6 +205,7 @@ struct Battle {
     std::set<uint8_t> ready;
     bool hold = false;
     double hold_since = 0;
+    double hold_logged_at = 0;                             // hôte : dernier journal « on attend encore » (diagnostic)
     bool ready_sent = false;                               // client
     // Minuteur de tour (option, 0 = aucun)
     uint16_t turn_timer_s = 0;
@@ -434,6 +435,7 @@ struct Heartbeat {
     std::vector<std::pair<std::string, uint32_t>> targets;   // adresse, époque de notre lien vers elle
     std::atomic<int64_t> last_tick_ms{0};
     std::atomic<bool> started{false};
+    std::atomic<int64_t> stall_of{0};   // diagnostic : last_tick_ms du gel du thread de jeu déjà journalisé (0 : aucun)
 } hb;
 
 int64_t steady_ms() { return std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count(); }
@@ -453,6 +455,12 @@ void heartbeat_start()
             Sleep(250);
             const int64_t last = hb.last_tick_ms.load();
             if (last == 0 || steady_ms() - last < 750) continue;   // thread de jeu vivant : rien à faire
+            // Diagnostic (essai à deux PC du 2026-10-22 : journal du client coupé net) : un gel du thread de jeu est journalisé
+            // d'ici ; un journal qui s'arrête sans « game_thread_stall » ni « mod_unload » = processus tué ou planté.
+            if (const int64_t age = steady_ms() - last; age >= 5000 && hb.stall_of.load() != last) {
+                hb.stall_of = last;
+                log().write("game_thread_stall", JsonObj().add("ms", age));
+            }
             std::vector<std::pair<std::string, uint32_t>> t;
             { std::lock_guard lk(hb.mu); t = hb.targets; }
             for (auto& [peer, epoch] : t) {
@@ -1205,7 +1213,6 @@ void host_turn_start(UObject* actor)
             b.owner_by_spot[spot] = owner;
             bs.owners.push_back({static_cast<uint8_t>(spot), game::char_class(ps[i]), owner});
         }
-        broadcast(bs);
         // Démarrage coordonné : personne ne commence un combat avant les autres. Les clients de la partie lancent le même
         // combat dès qu'ils peuvent (BattleStart) ; ce premier tour attend, jeu en pause, qu'ils y soient tous (BattleReady).
         for (auto& p : s.peers) if (in_game(p)) b.hold = true;
@@ -2911,6 +2918,7 @@ void start_session(Role r, const char* why)
     net.relay = [](const proto::Message& m, uint8_t origin, bool reliable) { for (auto& p : s.peers) if (p.accepted && p.player_id != origin) send_to(p, m, reliable); };
     net.bump = [](const char* c, int n) { s.counters[c] += n; };
     net.name_of = [](uint8_t id) { return player_name(id); };
+    net.battle_engaged = [] { return s.pending_start.has_value() || (s.battle.active && !s.battle.finalized); };
     explore::init(r == Role::Host, s.want_join, net);
     {
         builds::Net bn;
@@ -3420,6 +3428,7 @@ void tick(double dt)
     if (s.role == Role::Solo) { if (s.neutral) neutral_tick(dt); return; }
     s.game_thread = GetCurrentThreadId();
     advance_clock(dt);
+    if (const int64_t st = hb.stall_of.exchange(0); st) log().write("game_thread_resumed", JsonObj().add("stalled_ms", steady_ms() - st));
     hb.last_tick_ms = steady_ms();
     heartbeat_start();
     if (!s.ended) explore_frames_tick(dt);
@@ -3528,6 +3537,12 @@ void tick(double dt)
             // Qui on attend et pourquoi (chargement, cinématique, menu, reconnexion ; sinon « entre en combat »).
             std::vector<uint8_t> who;
             for (auto& p : s.peers) if (in_game(p) && !b.ready.count(p.player_id)) who.push_back(p.player_id);
+            if (s.now - std::max(b.hold_since, b.hold_logged_at) >= 15.0) {
+                b.hold_logged_at = s.now;
+                std::string ids;
+                for (uint8_t w : who) { if (!ids.empty()) ids += ","; ids += std::to_string(w); }
+                log().write("coop_battle_hold_waiting", JsonObj().add("waited_s", s.now - b.hold_since).add("players", ids), b.turn);
+            }
             ui::set_status_text("wait", "waiting_players", presence::wait_text(who, s.now, player_name, "wait_battle_prep"));
         }
     }
