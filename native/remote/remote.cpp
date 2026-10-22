@@ -100,6 +100,7 @@ struct State {
     InUpdate upd;
     double quit_at = -1;
     int dropped_untrusted = 0;
+    bool snapshot_loaded = false;   // save coop chargée à distance (autosave coupée) : quitter reste sans risque
     // envois en cours
     std::deque<OutXfer> out;
     // hôte
@@ -113,7 +114,6 @@ struct State {
 const remotecfg::Config& cfg() { return cmdline::remote_config(); }
 fs::path mod_dir() { return cmdline::mod_dir_path(); }
 fs::path remote_dir() { return mod_dir() / L"remote"; }
-fs::path win64_dir() { return mod_dir().parent_path().parent_path().parent_path(); }   // …/Win64/ue4ss/Mods/E33Coop
 fs::path saves_dir()
 {
     const wchar_t* la = _wgetenv(L"LOCALAPPDATA");
@@ -133,10 +133,10 @@ std::string read_text(const fs::path& p, size_t max = 1u << 20)
 {
     std::ifstream f(p, std::ios::binary);
     if (!f) return {};
-    std::string s(max, '\0');
-    f.read(s.data(), static_cast<std::streamsize>(max));
-    s.resize(static_cast<size_t>(f.gcount()));
-    return s;
+    std::string text(max, '\0');
+    f.read(text.data(), static_cast<std::streamsize>(max));
+    text.resize(static_cast<size_t>(f.gcount()));
+    return text;
 }
 
 bool write_text(const fs::path& p, const std::string& text)
@@ -179,8 +179,8 @@ void reply_error(uint32_t req, const std::string& why) { reply(req, false, JsonO
 // Quitter sans risque pour les sauvegardes de l'ami : menu principal, test, ou partie coop (autosave coupée).
 bool quit_allowed(std::string& why)
 {
-    if (cmdline::test_mode() || s.at_menu || !game::controller()) return true;
-    if (coop::active() && coop::role() == coop::Role::Client) return true;
+    if (cmdline::test_mode() || s.at_menu || s.snapshot_loaded || !game::controller()) return true;
+    if (coop::active() && coop::role() == coop::Role::Client && explore::joined()) return true;   // partie de l'hôte chargée
     why = "partie solo en cours chez l'ami : refusé (ses sauvegardes passent avant)";
     return false;
 }
@@ -213,7 +213,11 @@ void quit_game()
     log().write("remote_quit", JsonObj());
     if (coop::active()) coop::shutdown("remote quit");
     // Sortie normale du moteur ; filet : fin forcée 15 s plus tard (aucune save écrite : voir quit_allowed).
-    UObject* pc = RC::Unreal::UObjectGlobals::FindFirstOf(STR("PlayerController"));
+    UObject* pc = game::controller();
+    if (!pc && game::gi()) {
+        ue::Call g(ue::find_object(STR("/Script/Engine.Default__GameplayStatics")), STR("GetPlayerController"));
+        if (g && g.set_object(STR("WorldContextObject"), game::gi()).set_int(STR("PlayerIndex"), 0).invoke()) pc = g.out_object(STR("ReturnValue"));
+    }
     ue::Call c(ue::find_object(STR("/Script/Engine.Default__KismetSystemLibrary")), STR("QuitGame"));
     if (c && pc) c.set_object(STR("WorldContextObject"), pc).set_object(STR("SpecificPlayer"), pc).set_int(STR("QuitPreference"), 0)
                      .set_bool(STR("bIgnorePlatformRestrictions"), true).invoke();
@@ -302,6 +306,8 @@ std::vector<Item> fetch_items(int count, std::vector<std::string>& notes)
     }
     // 2. Journal d'UE4SS.
     add_file(items, mod_dir().parent_path().parent_path() / L"UE4SS.log", "UE4SS.log", total, notes);
+    // Journal des assistants (relance, mise à jour, retour arrière).
+    add_file(items, remote_dir() / L"helper.log", "remote/helper.log", total, notes);
     // 3. Saves coop seulement (SaveGames\e33coop\*.sav), jamais les saves perso (SaveGames\<SteamID>\…).
     if (const fs::path sd = saves_dir(); !sd.empty()) {
         for (auto it = fs::directory_iterator(sd / L"e33coop", ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
@@ -492,6 +498,7 @@ void client_command(const Packet& p)
     }
     if (c == "menu") {
         if (s.at_menu) { reply(p.req, true, JsonObj().add("already", true).str()); return; }
+        if (!quit_allowed(why)) { reply_error(p.req, why); return; }
         const bool ok = game::controller() && game::back_to_title();
         if (ok) reply(p.req, true, "{}");
         else reply_error(p.req, "retour au menu impossible ici");
@@ -503,6 +510,7 @@ void client_command(const Packet& p)
         std::error_code ec;
         if (!fs::exists(saves_dir() / L"e33coop" / L"host.sav", ec)) { reply_error(p.req, "pas d'instantané coop (SaveGames\\e33coop\\host.sav)"); return; }
         if (!game::load_save_slot(L"e33coop/host", err)) { reply_error(p.req, err); return; }   // autosave coupée
+        s.snapshot_loaded = true;
         reply(p.req, true, "{}");
         return;
     }
@@ -792,7 +800,11 @@ void tick(double dt)
         s.next_menu_check = s.now + 1.0;
         std::error_code ec;
         s.host_active = fs::is_directory(remote_dir() / L"inbox", ec);
-        if (client) s.at_menu = game::main_menu() != nullptr;   // FindFirstOf parcourt tous les objets : une fois par seconde
+        if (client) {
+            const bool menu = game::main_menu() != nullptr;   // FindFirstOf parcourt tous les objets : une fois par seconde
+            if (menu && !s.at_menu) s.snapshot_loaded = false;   // retour au menu : la partie suivante peut être la sienne
+            s.at_menu = menu;
+        }
     }
     if (!client && !s.host_active) return;
     if (!s.steam_ok) {
