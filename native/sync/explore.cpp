@@ -873,6 +873,15 @@ void init(bool host, bool want_join, const Net& net)
         bump(c, 0);
 }
 
+void reset()
+{
+    // Gardés : suivis par les hooks hors session (cinématique, question en cours).
+    S fresh;
+    fresh.sequence_playing = s.sequence_playing;
+    fresh.choice_pending = s.choice_pending;
+    s = std::move(fresh);
+}
+
 void set_player_id(uint8_t id) { s.me = id; }
 
 void on_peer_accepted(uint8_t player, bool wants_join)

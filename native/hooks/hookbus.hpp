@@ -28,6 +28,8 @@ public:
     // Renvoie true quand tout est enregistré.
     bool try_register();
     void unregister_all();
+    // Abonnements pas encore enregistrés (ajoutés après coup : rôle décidé en jeu, D17).
+    bool pending() const { return pending_; }
 
     struct Entry {
         std::wstring path;
@@ -40,6 +42,7 @@ public:
 private:
     Entry& entry(const std::wstring& path);
     std::vector<std::unique_ptr<Entry>> entries_;
+    bool pending_ = false;
 };
 
 } // namespace e33

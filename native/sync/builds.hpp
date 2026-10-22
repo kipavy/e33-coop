@@ -29,6 +29,7 @@ struct Net {
 };
 
 void init(bool host, const Net& net);
+void reset();               // retour au mode neutre : inactif, état remis à zéro
 void set_player_id(uint8_t id);
 bool handle(uint8_t from, const proto::Message& m);   // true si consommé
 void tick(double now);

@@ -20,6 +20,7 @@ void set_narrative(uint8_t player, bool active, bool cinematic, double now);
 void set_menu(uint8_t player, bool open, double now);
 void set_joining(uint8_t player, bool loading_snapshot, double now);    // hôte : instantané envoyé, JoinReady attendu
 void forget(uint8_t player);
+void reset();                                                          // retour au mode neutre
 
 Activity activity(uint8_t player, double now);
 const char* activity_name(Activity a);

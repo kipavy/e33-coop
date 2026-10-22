@@ -20,6 +20,7 @@ struct Net {
 };
 
 void init(bool host, bool want_join, const Net& net);   // want_join : client qui rejoint la partie de l'hôte
+void reset();                                           // retour au mode neutre (D17) : inactif, état remis à zéro
 void set_player_id(uint8_t id);
 void on_peer_accepted(uint8_t player, bool wants_join);   // hôte
 void on_peer_left(uint8_t player);                        // hôte

@@ -38,6 +38,7 @@
 #include "explore.hpp"
 #include "intent.hpp"
 #include "presence.hpp"
+#include "update.hpp"
 #include "state.hpp"
 #include "../remote/remote.hpp"
 
@@ -54,7 +55,7 @@ namespace e33::coop {
 
 namespace {
 
-constexpr const char* kModVersion = "0.5.0";
+constexpr const char* kModVersion = E33COOP_VERSION;   // fichier VERSION (CMake)
 constexpr double kDefenseTimeout = 3.0;
 constexpr double kComboTimeout = 3.0;
 // Parade en duo : PA gagnés par héros qui a paré, et raison passée à GainAP (EAPChangeReason, libellés non dumpés :
@@ -261,6 +262,21 @@ struct State {
     bool steam_lobby = true;                               // -e33steamlobby=0 : pas de lobby (auto-test sans toucher au compte)
     bool steam_selftest = false;                           // -e33steamselftest=1 : messages Steam envoyés à soi-même
     uint32_t selftest_seq = 0;
+    // Sans -e33role (partie normale) : « prêt au coop », rôle décidé en jeu (D17)
+    bool neutral = false;                                  // mode par défaut : Steam, aucun rôle tant que rien n'est décidé
+    bool runtime_session = false;                          // session ouverte en jeu : retour au mode neutre à la fin
+    bool hooks_subscribed = false;
+    std::map<std::string, uint8_t> owner_overrides_arg;    // -e33owners (rétabli au retour au mode neutre)
+    bool invite_on_ready = false;                          // hôte ouvert par F7 : fenêtre d'invitation dès le lobby prêt
+    uint64_t pending_lobby = 0;                            // invitation acceptée en pleine partie : rejointe au menu principal
+    bool cmdline_lobby_used = false;
+    uint64_t rejoin_host = 0;                              // après une mise à jour : partie de cet ami rejointe au menu
+    double rejoin_until = 0, next_rejoin_try = 0;
+    double session_msg_until = -1;                         // message de fin de session gardé après le retour au mode neutre
+    bool at_menu = false, in_world = false;
+    double next_place_check = 0;
+    bool options_dirty = false;                            // options changées en jeu : appliquées hors combat
+    bool keys_shown = false;                               // rappel des touches affiché (menu pause)
 };
 
 State s;
@@ -548,6 +564,8 @@ void pump_network()
                     s.transport->send(d.peer, pkt.data(), pkt.size());
                     if (s.version_rejected.insert(d.peer).second) {
                         bump("sessions_rejected");
+                        const std::string who = s.steam ? net::steam::friend_name(net::steam::id_of(d.peer)) : std::string();
+                        update::on_version_mismatch(pv > proto::kProtocolVersion, who.empty() ? ui::text("a_player") : who, "", false, 0);
                         log().write("session_reject", JsonObj().add("peer", d.peer).add("reason", static_cast<int>(proto::RejectReason::ProtocolMismatch))
                                                          .add("detail", "protocole hôte " + std::to_string(proto::kProtocolVersion) + " / client " + std::to_string(pv)));
                     }
@@ -735,7 +753,14 @@ void handle(Peer& p, proto::Message& m)
                 for (auto& x : h->gameplay_mods) if (std::find(s.gameplay_mods.begin(), s.gameplay_mods.end(), x) == s.gameplay_mods.end()) diff += " client seul=" + x;
             }
             if (diff.empty() && free_player_id() == 0xFF) { reason = proto::RejectReason::SessionFull; diff = "partie complète (3 joueurs)"; }
-            if (!diff.empty()) { reject(p, reason, diff); return; }
+            if (!diff.empty()) {
+                reject(p, reason, diff);
+                // Écart de version du mod : le côté le plus ancien est invité à mettre à jour (native/sync/update).
+                if (reason == proto::RejectReason::ModVersionMismatch)
+                    update::on_version_mismatch(release::compare_versions(kModVersion, h->mod_version) < 0,
+                                                h->player_name.empty() ? ui::text("a_player") : h->player_name, h->mod_version, false, 0);
+                return;
+            }
             p.accepted = true;
             p.player_id = free_player_id();
             p.wants_join = h->join;
@@ -776,7 +801,16 @@ void handle(Peer& p, proto::Message& m)
     if (auto* r = std::get_if<proto::Reject>(&m)) {
         s.rejected = true;
         log().write("session_rejected", JsonObj().add("reason", static_cast<int>(r->reason)).add("detail", r->detail));
+        // Version de l'hôte : données du lobby Steam (lues avant de le quitter), sinon le détail (« … hôte X / client Y »).
+        std::string hv = s.steam && s.lobby.id ? net::steam::lobby_data(s.lobby.id, "mod") : std::string();
+        if (hv.empty()) {
+            const auto a = r->detail.find("hôte "), b = r->detail.find(" /");
+            if (a != std::string::npos && b != std::string::npos && b > a) hv = r->detail.substr(a + 6, b - a - 6);
+        }
+        const uint64_t owner = s.lobby.owner;
         end_session("rejected", r->reason == proto::RejectReason::SessionFull ? ui::text("reject_full") : r->detail);
+        if (r->reason == proto::RejectReason::ModVersionMismatch)
+            update::on_version_mismatch(release::compare_versions(kModVersion, hv) < 0, player_name(0), hv, true, owner);
         return;
     }
     if (auto* bye = std::get_if<proto::Bye>(&m)) {
@@ -2310,7 +2344,11 @@ void connect_to_host(const std::string& addr)
     wire_link(*host.link);
     // Hôte d'une autre version de protocole : il nous répond avec sa version, on l'affiche.
     host.link->on_protocol_mismatch = [](uint16_t v) {
+        const bool first = !s.ended;
+        const std::string hv = s.steam && s.lobby.id ? net::steam::lobby_data(s.lobby.id, "mod") : std::string();
+        const uint64_t owner = s.lobby.owner;
         end_session("rejected", ui::text("reject_protocol", {std::to_string(v), std::to_string(proto::kProtocolVersion)}));
+        if (first) update::on_version_mismatch(v > proto::kProtocolVersion, player_name(0), hv, true, owner);
     };
     s.peers.push_back(std::move(host));
     proto::Hello h;
@@ -2331,6 +2369,10 @@ void connect_to_host(const std::string& addr)
 // que Steam accepte leurs messages. Client : lobby donné par -e33lobby, par Steam (+connect_lobby, invitation acceptée
 // jeu fermé), par une invitation acceptée pendant que le jeu tourne, ou F7 au menu principal (lobby coop d'un ami) ;
 // une fois dedans, connexion au propriétaire du lobby (son SteamID) comme en UDP.
+void start_session(Role r, const char* why);
+void neutral_steam(bool f7);
+void back_to_neutral(const char* why);
+
 bool key_pressed(int vk, bool& was_down)
 {
     const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
@@ -2381,12 +2423,18 @@ void steam_tick()
         log().write("coop_steam_lobby_failed", JsonObj().add("what", s.lobby.error));
     }
     const bool f7 = key_pressed(VK_F7, s.f7_down);
+    if (s.role == Role::Solo) { neutral_steam(f7); return; }   // mode neutre : rôle décidé ici
     if (s.role == Role::Host) {
         if (s.lobby.state == net::steam::LobbyState::None) net::steam::create_lobby(s.lobby, kModVersion, proto::kProtocolVersion);
         if (s.lobby.state == net::steam::LobbyState::Ready && !s.lobby_announced) {
             s.lobby_announced = true;
             ui::toast("session_open_steam", {}, 10.0);
             log().write("coop_steam_lobby", JsonObj().add("lobby", std::to_string(s.lobby.id)));
+        }
+        if (s.invite_on_ready && s.lobby.state == net::steam::LobbyState::Ready) {   // ouvert par F7 : l'invitation suit
+            s.invite_on_ready = false;
+            net::steam::invite_dialog(s.lobby);
+            bump("steam_invite_dialogs");
         }
         if (f7) {
             if (s.lobby.state == net::steam::LobbyState::Ready) { net::steam::invite_dialog(s.lobby); bump("steam_invite_dialogs"); }
@@ -2428,6 +2476,7 @@ void steam_tick()
         s.lobby = {};   // F7 ou une nouvelle invitation pour réessayer
         s.lobby_error_shown = false;
         ui::clear_status("session");
+        if (s.runtime_session) back_to_neutral("lobby failed");
         return;
     }
     if (s.lobby.state == net::steam::LobbyState::Ready && s.lobby.owner) {
@@ -2436,9 +2485,139 @@ void steam_tick()
         log().write("coop_steam_connect", JsonObj().add("host", std::to_string(s.lobby.owner)));
     }
 }
+
+// --- Mode neutre (D17) -----------------------------------------------------------------------------------------------
+// Partie normale sans -e33role : personne n'a de rôle. Au menu principal, une invitation acceptée, +connect_lobby, F7 ou
+// le bouton « Rejoindre <ami> » font de ce joueur un client ; dans une partie chargée, F7 l'ouvre au coop (hôte : lobby
+// créé alors, fenêtre d'invitation dès qu'il est prêt) ; F10 au menu héberge la copie coop (coopsave). Fin de session
+// (retour au menu principal) : retour au mode neutre.
+void neutral_steam(bool f7)
+{
+    if (s.now >= s.next_place_check) {
+        s.next_place_check = s.now + 0.5;   // FindFirstOf : pas à chaque image
+        const bool menu = game::main_menu() != nullptr && !game::controller();
+        const bool world = !menu && game::controller() && game::world_pawn() && !game::map_change_in_progress();
+        if (world && !s.in_world && !game::in_battle()) ui::toast("coop_ready_hint", {}, 8.0);   // partie chargée : rappel de F7
+        s.at_menu = menu;
+        s.in_world = world;
+    }
+    uint64_t id = 0;
+    const char* why = "";
+    if (!s.cmdline_lobby_used) {   // une seule fois : -e33lobby, ou « +connect_lobby » (invitation acceptée jeu fermé)
+        s.cmdline_lobby_used = true;
+        id = s.lobby_wanted ? s.lobby_wanted : net::steam::command_line_lobby();
+        s.lobby_wanted = 0;
+        why = "command line lobby";
+    }
+    if (const uint64_t req = net::steam::take_join_request()) {
+        // En pleine partie : rien n'est quitté sans le joueur (sauvegardes) ; la partie de l'ami sera rejointe au menu.
+        if (s.in_world) { s.pending_lobby = req; ui::toast("invite_in_game", {}, 10.0); log().write("coop_invite_pending", JsonObj().add("lobby", std::to_string(req))); }
+        else { id = req; why = "steam invite"; }
+    }
+    if (!id && s.pending_lobby && s.at_menu) { id = s.pending_lobby; s.pending_lobby = 0; why = "pending invite"; }
+    if (!id && s.rejoin_host && s.at_menu && s.now >= s.next_rejoin_try) {   // relance après une mise à jour
+        s.next_rejoin_try = s.now + 3.0;
+        if (s.now > s.rejoin_until) s.rejoin_host = 0;
+        else if (const uint64_t l = net::steam::friend_lobby(s.rejoin_host)) { id = l; why = "rejoin after update"; s.rejoin_host = 0; }
+    }
+    const bool clicked = ui::joinbutton::take_click();
+    if (!id && ((f7 && s.at_menu) || clicked)) {
+        why = clicked ? "join button" : "F7 menu";
+        if (clicked) log().write("coop_join_button_clicked", JsonObj());
+        id = net::steam::find_friend_lobby(kModVersion);
+        if (!id) {   // partie d'un ami avec une autre version : refus clair, puis proposition de mise à jour
+            const auto any = net::steam::friend_lobbies(kModVersion, true);
+            if (!any.empty()) id = any.front().lobby;
+        }
+        if (!id) ui::toast("steam_no_friend_lobby", {}, 8.0);
+    }
+    if (id) {
+        start_session(Role::Client, why);
+        net::steam::join_lobby(s.lobby, id);
+        ui::set_status("session", "joining");
+        log().write("coop_steam_join", JsonObj().add("lobby", std::to_string(id)).add("why", why));
+        return;
+    }
+    if (f7 && s.in_world) {
+        if (game::in_battle()) { ui::toast("open_not_in_battle", {}, 6.0); return; }
+        start_session(Role::Host, "F7");
+        s.invite_on_ready = true;
+        bump("coop_opened");
+    }
+}
+
+// Session ouverte en jeu terminée, joueur revenu au menu principal : tout ce qui dépend du rôle est remis à zéro. Les
+// hooks restent abonnés (ils ne font rien sans rôle) ; le transport Steam est gardé.
+void back_to_neutral(const char* why)
+{
+    log().write("coop_back_to_neutral", JsonObj().add("why", why ? why : "").add("role", s.role == Role::Host ? "host" : s.role == Role::Client ? "client" : "solo"));
+    if (s.steam) net::steam::leave_lobby(s.lobby);
+    s.peers.clear();
+    heartbeat_targets();
+    explore::reset();
+    builds::reset();
+    presence::reset();
+    coopsave::set_host(false);
+    s.role = Role::Solo;
+    s.runtime_session = false;
+    s.my_player_id = 0;
+    s.session_id = GetTickCount();
+    s.connect_to.clear();
+    s.accepted = s.rejected = false;
+    s.battle = Battle{};
+    s.owner_overrides = s.owner_overrides_arg;
+    s.pending_start.reset();
+    s.last_start.reset();
+    s.early_start.reset();
+    s.early_start_at = -1;
+    s.world_ready_s = 0;
+    s.next_trigger_try = 0;
+    s.imposing = false;
+    s.want_join = false;
+    s.input_enabled = true;
+    s.input_sub = nullptr;
+    s.removed_contexts.clear();
+    s.fa_own = FreeAimOwner{};
+    s.fa_rep = FreeAimReplay{};
+    s.local_aim.reset();
+    s.roster.clear();
+    s.ended = false;
+    s.end_key.clear();
+    s.ended_at = -1;
+    s.title_requested = false;
+    s.hello_at = 0;
+    s.takeover = false;
+    s.version_rejected.clear();
+    s.tombstones.clear();
+    s.lobby = {};
+    s.lobby_announced = s.lobby_error_shown = false;
+    s.next_punch = 0;
+    s.invite_on_ready = false;
+    s.keys_shown = false;
+    s.in_world = false;
+    for (const char* slot : {"turn", "pause", "wait", "waited", "peer", "keys", "invite"}) ui::clear_status(slot);
+    if (ui::statuses().count("session")) s.session_msg_until = s.now + 12.0;   // message de fin encore lisible un moment
+    bump("back_to_neutral");
+}
+
+// Options changées en jeu (options.cpp) : réglages d'hôte relus ; l'attente sans blocage seulement hors combat.
+void apply_options()
+{
+    if (!s.options_dirty) return;
+    s.duo_parry = arg(L"e33duoparry") != L"0";
+    const std::wstring t = arg(L"e33turntimer");
+    s.turn_timer_s = static_cast<uint16_t>(t.empty() ? 0 : std::wcstoul(t.c_str(), nullptr, 10));
+    if (s.battle.active) return;
+    s.turn_dep = arg(L"e33turndep") != L"0";
+    s.options_dirty = false;
+    log().write("coop_options", JsonObj().add("duo_parry", s.duo_parry).add("turn_timer_s", static_cast<int>(s.turn_timer_s)).add("turndep", s.turn_dep));
+}
 } // namespace
 
 void reassign_character(size_t index) { if (s.role == Role::Host) cycle_owner(index); }
+bool neutral() { return s.neutral && s.role == Role::Solo; }
+bool ready() { return s.neutral || s.role != Role::Solo; }
+void reload_options() { s.options_dirty = true; }
 
 Role role() { return s.role; }
 bool active() { return s.role != Role::Solo; }
@@ -2505,16 +2684,11 @@ bool controls_spot(int spot)
     return controls(spot);
 }
 
-void init()
-{
-    std::wstring r = arg(L"e33role");
-    // Test à distance sans options de lancement : client Steam qui rejoint la partie de l'hôte de confiance.
-    const bool remote_default = r.empty() && !cmdline::test_mode() && remote::client_enabled();
-    if (remote_default) r = L"client";
-    if (r == L"host") s.role = Role::Host;
-    else if (r == L"client") s.role = Role::Client;
-    else return;
+namespace {
 
+// Réglages lus une fois au démarrage (indépendants du rôle).
+void read_settings()
+{
     for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages",
                           "session_ended", "players_left", "heroes_taken_over", "peer_timeouts", "sessions_rejected", "battle_ready_timeouts", "turn_timer_expired",
                           "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
@@ -2528,14 +2702,12 @@ void init()
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
-    if (arg(L"e33join") == L"1" || remote_default) s.want_join = true;
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     s.turn_dep = arg(L"e33turndep") != L"0";   // attente sans figer le jeu, par défaut depuis le 2026-10-22 (-e33turndep=0 : attente bloquante)
     if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
     s.duo_parry = arg(L"e33duoparry") != L"0";
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
-    if (s.my_name.empty()) s.my_name = s.role == Role::Host ? "Hôte" : "Joueur";
     ui::init();
     {
         std::stringstream ds(ue::to_utf8(arg(L"e33draws")));
@@ -2549,35 +2721,59 @@ void init()
             const auto c = part.find(':');
             if (c != std::string::npos) s.owner_overrides[part.substr(0, c)] = static_cast<uint8_t>(std::atoi(part.substr(c + 1).c_str()));
         }
+        s.owner_overrides_arg = s.owner_overrides;
     }
-    std::string err;
-    const std::wstring port_s = arg(L"e33port");
-    const uint16_t port = static_cast<uint16_t>(port_s.empty() ? (s.role == Role::Host ? 7777 : 0) : std::stoi(port_s));
-    s.steam = arg(L"e33transport") == L"steam" || remote_default;
-    if (!s.steam) {
-        s.transport = net::make_udp(port, err);
-        if (!s.transport) { log().write("coop_error", JsonObj().add("what", err)); s.role = Role::Solo; return; }
-    }
-    // Steam : transport et lobby créés au premier tick (rien dans les 10 premières secondes, voir dllmain), steam_tick.
     if (const std::wstring l = arg(L"e33lobby"); !l.empty()) s.lobby_wanted = std::wcstoull(l.c_str(), nullptr, 10);
     if (arg(L"e33steamlobby") == L"0") s.steam_lobby = false;
     if (arg(L"e33steamselftest") == L"1") s.steam_selftest = true;
-    s.recorder.open(ue::to_utf8((std::filesystem::path(launch_args().run_dir) / (s.role == Role::Host ? L"recording-host.jsonl" : L"recording-client.jsonl")).wstring()));
-    log().set_role(s.role == Role::Host ? "host" : "client");
+}
+
+void coopsave_init(bool host)
+{
+    // Mode neutre : F10 au menu principal fait de ce joueur l'hôte de la copie (become_host).
+    std::function<bool()> become;
+    if (s.neutral) become = [] {
+        if (s.role == Role::Host) return true;
+        if (s.role != Role::Solo) return false;
+        start_session(Role::Host, "F10 copy");
+        return s.role == Role::Host;
+    };
+    coopsave::init(host, [](const char* c, int n) { s.counters[c] += n; }, become);
+}
+
+// Rôle décidé (option de lancement, ou en jeu en mode neutre) : modules initialisés pour ce rôle, hooks abonnés une
+// fois. En mode neutre, les hooks du coop ne sont abonnés qu'ici (partie solo sans session : rien d'accroché).
+void start_session(Role r, const char* why)
+{
+    s.role = r;
+    s.my_player_id = 0;
+    s.runtime_session = s.neutral;
+    if (r == Role::Client && s.neutral) s.want_join = true;   // en jeu, un client rejoint toujours la partie de l'hôte
+    if (!s.name_from_arg && (s.my_name.empty() || s.my_name == "Hôte" || s.my_name == "Joueur")) {
+        const std::string pn = s.steam && net::steam::loaded() ? net::steam::persona_name() : std::string();
+        s.my_name = !pn.empty() ? pn : r == Role::Host ? "Hôte" : "Joueur";
+    }
+    static bool recorder_open = false;
+    if (!recorder_open) {
+        recorder_open = true;
+        s.recorder.open(ue::to_utf8((std::filesystem::path(launch_args().run_dir) / (r == Role::Host ? L"recording-host.jsonl" : L"recording-client.jsonl")).wstring()));
+    }
+    log().set_role(r == Role::Host ? "host" : "client");
 
     std::string mods = "[";
     for (auto& m : s.gameplay_mods) { if (mods.size() > 1) mods += ","; mods += "\"" + json_escape(m) + "\""; }
-    log().write("coop_init", JsonObj().add("role", s.role == Role::Host ? "host" : "client").add("local", s.transport ? s.transport->local_address() : std::string("steam (pending)"))
-                                 .add("game_build", s.game_build).add("mod_version", kModVersion).add("duo_parry", s.duo_parry).raw("gameplay_mods", mods + "]"));
+    log().write("coop_init", JsonObj().add("role", r == Role::Host ? "host" : "client").add("local", s.transport ? s.transport->local_address() : std::string("steam (pending)"))
+                                 .add("game_build", s.game_build).add("mod_version", kModVersion).add("duo_parry", s.duo_parry).raw("gameplay_mods", mods + "]")
+                                 .add("why", why ? why : "").add("runtime", s.runtime_session));
 
-    if (s.role == Role::Client && !s.steam) connect_to_host(ue::to_utf8(arg(L"e33connect")));
+    if (r == Role::Client && !s.steam) connect_to_host(ue::to_utf8(arg(L"e33connect")));
     explore::Net net;
     net.publish = [](const proto::Message& m, bool reliable) { publish(m, nullptr, reliable); };
     net.send_to = [](uint8_t player, const proto::Message& m) { for (auto& p : s.peers) if (p.accepted && p.player_id == player) send_to(p, m); };
     net.relay = [](const proto::Message& m, uint8_t origin, bool reliable) { for (auto& p : s.peers) if (p.accepted && p.player_id != origin) send_to(p, m, reliable); };
     net.bump = [](const char* c, int n) { s.counters[c] += n; };
     net.name_of = [](uint8_t id) { return player_name(id); };
-    explore::init(s.role == Role::Host, s.want_join, net);
+    explore::init(r == Role::Host, s.want_join, net);
     {
         builds::Net bn;
         bn.publish = [](const proto::Message& m) { publish(m); };
@@ -2589,9 +2785,10 @@ void init()
         bn.sharing = [] { if (s.role == Role::Client) return explore::joined() && s.accepted; for (auto& p : s.peers) if (in_game(p)) return true; return false; };
         bn.last_event_age = [] { return explore::last_event_age(); };
         bn.request_resync = [](const std::string& why) { publish(proto::ResyncRequest{why}); };
-        builds::init(s.role == Role::Host, bn);
+        builds::init(r == Role::Host, bn);
     }
-    coopsave::init(s.role == Role::Host, [](const char* c, int n) { s.counters[c] += n; });
+    if (s.neutral) coopsave::set_host(r == Role::Host);   // déjà initialisé au démarrage (F10 peut appeler d'ici)
+    else coopsave_init(r == Role::Host);
     {
         intent::Net in;
         in.publish = [](const proto::Message& m, bool reliable) { publish(m, nullptr, reliable); };
@@ -2604,12 +2801,61 @@ void init()
         in.battle = [] { return intent::BattleRef{s.battle.id, s.battle.turn, s.battle.active}; };
         intent::init(in);
     }
-    subscribe();
-    intent::subscribe();
-    explore::subscribe();
-    coopsave::subscribe();
-    subscribe_session();
-    if (s.role == Role::Client && s.steam) ui::joinbutton::subscribe();   // bouton « Rejoindre <ami> » du menu principal
+    if (!s.hooks_subscribed) {
+        s.hooks_subscribed = true;
+        subscribe();
+        intent::subscribe();
+        explore::subscribe();
+        if (!s.neutral) {   // mode neutre : déjà abonnés au démarrage
+            coopsave::subscribe();
+            subscribe_session();
+            if (r == Role::Client && s.steam) ui::joinbutton::subscribe();   // bouton « Rejoindre <ami> » du menu principal
+        } else {
+            HookBus::get().try_register();   // en pleine partie : classes déjà chargées, accrochées tout de suite
+        }
+    }
+}
+
+} // namespace
+
+void init()
+{
+    std::wstring r = arg(L"e33role");
+    // Test à distance sans options de lancement : client Steam qui rejoint la partie de l'hôte de confiance.
+    const bool remote_default = r.empty() && !cmdline::test_mode() && remote::client_enabled();
+    if (remote_default) r = L"client";
+    Role role = Role::Solo;
+    if (r == L"host") role = Role::Host;
+    else if (r == L"client") role = Role::Client;
+    // En test sans rôle : solo pur, comme avant (aucune lecture, aucun hook).
+    if (role == Role::Solo && cmdline::test_mode()) return;
+
+    read_settings();
+    update::init();
+    if (role == Role::Solo) {
+        // Partie normale sans option -e33role : prêt au coop par Steam ; le rôle se décide en jeu (D17).
+        s.neutral = true;
+        s.steam = true;
+        s.rejoin_host = update::take_rejoin();
+        s.rejoin_until = s.rejoin_host ? 180.0 : 0;
+        coopsave_init(false);
+        coopsave::subscribe();
+        subscribe_session();
+        ui::joinbutton::subscribe();
+        log().write("coop_neutral", JsonObj().add("mod_version", kModVersion).add("rejoin", std::to_string(s.rejoin_host)));
+        return;
+    }
+    if (role == Role::Client && (arg(L"e33join") == L"1" || remote_default)) s.want_join = true;
+    std::string err;
+    const std::wstring port_s = arg(L"e33port");
+    const uint16_t port = static_cast<uint16_t>(port_s.empty() ? (role == Role::Host ? 7777 : 0) : std::stoi(port_s));
+    s.steam = arg(L"e33transport") == L"steam" || remote_default;
+    if (!s.steam) {
+        s.transport = net::make_udp(port, err);
+        if (!s.transport) { log().write("coop_error", JsonObj().add("what", err)); return; }
+    }
+    // Steam : transport et lobby créés au premier tick (rien dans les 10 premières secondes, voir dllmain), steam_tick.
+    start_session(role, "launch option");
 }
 
 // Client : lance le combat reçu de l'hôte quand le monde local est chargé et stable depuis quelques secondes.
@@ -2838,7 +3084,7 @@ static void join_button_tick()
     static double next_menu_check = 0, next_scan = 0;
     static bool at_menu = false;
     static std::string friend_name;
-    const bool eligible = s.role == Role::Client && s.steam && s.steam_lobby && s.transport && s.peers.empty() &&
+    const bool eligible = (s.role == Role::Client || (s.role == Role::Solo && s.neutral)) && s.steam && s.steam_lobby && s.transport && s.peers.empty() &&
                           s.lobby.state == net::steam::LobbyState::None && !s.lobby_wanted;
     if (!eligible) { friend_name.clear(); at_menu = false; (void)ui::joinbutton::take_click(); }   // pas de clic en attente
     else if (s.now >= next_menu_check) {
@@ -2847,7 +3093,9 @@ static void join_button_tick()
         if (!at_menu) friend_name.clear();
         else if (s.now >= next_scan) {
             next_scan = s.now + 5.0;
-            const auto lobbies = net::steam::friend_lobbies(kModVersion);
+            // Mode neutre : aussi la partie d'un ami d'une autre version (le refus dira qui doit mettre à jour).
+            auto lobbies = net::steam::friend_lobbies(kModVersion, s.neutral);
+            std::stable_sort(lobbies.begin(), lobbies.end(), [](const auto& a, const auto& b) { return a.compatible && !b.compatible; });
             const std::string n = lobbies.empty() ? std::string() : lobbies.front().name;
             if (n != friend_name) log().write("coop_friend_lobby", JsonObj().add("friend", n).add("count", static_cast<int64_t>(lobbies.size())));
             friend_name = n;
@@ -2859,9 +3107,24 @@ static void join_button_tick()
     else ui::clear_status("invite");
 }
 
+// Mode neutre (aucun rôle) : Steam prêt, bouton « Rejoindre », F7 / F10, copie coop. Le rôle décidé, tick() prend la suite.
+static void neutral_tick(double dt)
+{
+    s.game_thread = GetCurrentThreadId();
+    s.now += dt;
+    hb.last_tick_ms = steady_ms();
+    steam_tick();
+    if (s.role != Role::Solo) return;
+    join_button_tick();
+    ui::tick(s.now);
+    coopsave::tick(s.now, true);
+    apply_options();
+    if (s.session_msg_until >= 0 && s.now > s.session_msg_until) { s.session_msg_until = -1; ui::clear_status("session"); }
+}
+
 void tick(double dt)
 {
-    if (s.role == Role::Solo) return;
+    if (s.role == Role::Solo) { if (s.neutral) neutral_tick(dt); return; }
     s.game_thread = GetCurrentThreadId();
     s.now += dt;
     hb.last_tick_ms = steady_ms();
@@ -2870,6 +3133,7 @@ void tick(double dt)
     join_button_tick();
     ui::tick(s.now);
     coopsave::tick(s.now, !s.ended);   // copie coop (D15) : aussi après la fin de session (retour au menu)
+    apply_options();
     if (s.ended) {
         // Client : session finie. Message affiché, puis retour au menu principal (la partie chargée est celle de l'hôte).
         if (!s.title_requested && s.now - s.ended_at > 6.0 && game::controller() && !game::main_menu()) {
@@ -2878,6 +3142,11 @@ void tick(double dt)
             log().write("session_back_to_title", JsonObj().add("ok", ok));
         }
         if (s.title_requested && game::main_menu() && s.now - s.ended_at > 20.0) ui::clear_status("session");
+        // Session ouverte en jeu : de retour au menu principal, le joueur redevient « prêt au coop » (mode neutre).
+        if (s.runtime_session && s.now - s.ended_at > 3.0 && s.now >= s.next_place_check) {
+            s.next_place_check = s.now + 0.5;
+            if (!game::controller() && game::main_menu()) back_to_neutral(s.end_key.empty() ? "quit to title" : s.end_key.c_str());
+        }
         return;
     }
     // À-coups d'image en combat (> 50 ms) : un appui de QTE peut sembler « raté d'emblée » si le jeu saccade.
@@ -2900,10 +3169,9 @@ void tick(double dt)
     }
     // Rappel des touches du mod tant que le menu pause est ouvert.
     {
-        static bool keys_shown = false;
         const bool show = game::pause_menu_visible() && !owners_ui::shows_key_hints();   // panneau Coop : il porte déjà les touches
-        if (show != keys_shown) {
-            keys_shown = show;
+        if (show != s.keys_shown) {
+            s.keys_shown = show;
             if (show) ui::set_status("keys", s.role == Role::Host ? "keys_host" : "keys_client");
             else ui::clear_status("keys");
         }

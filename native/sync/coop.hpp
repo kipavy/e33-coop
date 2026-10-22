@@ -1,6 +1,7 @@
 // Session coop dans le mod : réseau (UDP derrière net::Transport) + synchro du combat (D8, D10, D11) + robustesse
 // (phase 5 : départs et retours de joueurs, fin de session, démarrage de combat coordonné, minuteur de tour).
-// Activée par -e33role=host|client (+ -e33port=7777, -e33connect=ip:port, -e33name=, -e33turntimer=N, -e33lang=fr|en).
+// Sans option : mode neutre par Steam, rôle décidé en jeu (D17). -e33role=host|client (+ -e33transport=steam,
+// -e33port=7777, -e33connect=ip:port, -e33name=…) garde l'ancien fonctionnement (tests, développement).
 #pragma once
 
 #include <cstdint>
@@ -17,6 +18,11 @@ void init();                 // on_unreal_init : lit les arguments, ouvre le tra
 void tick(double dt);        // game thread
 Role role();
 bool active();
+// Partie normale sans -e33role (D17) : « prêt au coop » par Steam, rôle décidé en jeu (F7 dans une partie chargée :
+// hôte ; invitation, F7 ou « Rejoindre » au menu : client ; F10 au menu : hôte de la copie). Fin de session : neutre.
+bool neutral();              // mode neutre, aucun rôle pour l'instant
+bool ready();                // neutre ou session en cours (le module coop affiche les textes)
+void reload_options();       // options changées en jeu : duo_parry, turn_timer_s, turndep relus
 // Le héros de cet emplacement est-il contrôlé par CETTE instance ? (solo : toujours vrai)
 bool controls_spot(int spot);
 int connected_players();     // hôte : clients acceptés ; client : 1 si accepté

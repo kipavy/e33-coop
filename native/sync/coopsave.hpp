@@ -10,7 +10,9 @@
 
 namespace e33::coopsave {
 
-void init(bool host, std::function<void(const char* counter, int n)> bump);
+// become_host (mode neutre, D17) : F10 au menu fait de ce joueur l'hôte de la copie ; renvoie true si c'est fait.
+void init(bool host, std::function<void(const char* counter, int n)> bump, std::function<bool()> become_host = {});
+void set_host(bool host);         // retour au mode neutre : plus hôte
 void subscribe();                 // garde-fous sur les sauvegardes du jeu (BP_SaveManager_C)
 void tick(double now, bool can_host);   // game thread : menu principal (F10 si can_host), garde autosave, copie de l'hôte-copie
 

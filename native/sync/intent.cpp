@@ -361,6 +361,8 @@ void init(const Net& net)
     g_aim_cam = cmdline::arg(L"e33aimcam") != L"0";
 }
 
+void reload_options() { g_aim_cam = cmdline::arg(L"e33aimcam") != L"0"; }
+
 void subscribe()
 {
     using game::path::fn;
