@@ -9,7 +9,7 @@
     { "do": "wait", "s": 3 }
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33copymin=5"],
-  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p5_resync_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p5_resync_snapshot.sav", "--paced", "1", "--timeout", "600"] },
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p5_resync_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p5_resync_snapshot.sav", "--paced", "1", "--timeout", "600"] },
   "expect": { "snapshots_received": "1", "joins_completed": "1", "coop_copies_from_host": "1", "coop_copies_local": ">=1", "coop_copy_errors": "0",
               "coop_personal_saves_blocked": "0", "world_hash_diffs": "0", "coop_autosave_reenabled": "any", "coop_save_requests": "any" }
 }

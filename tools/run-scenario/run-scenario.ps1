@@ -171,6 +171,8 @@ if ($status -eq "finished") {
     $res = Get-Content (Join-Path $run "result.json") -Raw | ConvertFrom-Json
     $ok = ($res.status -eq "pass")
 }
+# "stop_ok": true dans la spec du faux pair : son arrêt forcé (rejeu plus long que le test) ne compte pas comme échec.
+for ($i = 0; $i -lt $peerCodes.Count; $i++) { if ($peerCodes[$i] -eq -1 -and $peerSpecs[$i].stop_ok) { $peerCodes[$i] = 0 } }
 if (@($peerCodes | Where-Object { $_ -ne 0 }).Count -gt 0) { $ok = $false }
 $dur = [int]((Get-Date) - $t0).TotalSeconds
 $report = @("# Run $stamp — $Name", "", "- Verdict : **$(if ($ok) { 'PASS' } else { 'FAIL' })** (état : $status, durée : $dur s)")
