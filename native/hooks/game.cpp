@@ -747,6 +747,29 @@ bool teleport_pawn(UObject* pawn, const double pos[3], double yaw)
     return c.invoke();
 }
 
+int pawn_gait(UObject* pawn, bool desired)
+{
+    ue::Call c(pawn, desired ? STR("GetDesiredGait") : STR("GetGait"));
+    if (!c || !c.invoke()) return -1;
+    return static_cast<int>(c.out_int(STR("ReturnValue"), -1));
+}
+
+bool pawn_sprint_action(UObject* pawn, bool on)
+{
+    ue::Call c(pawn, STR("SprintAction"));
+    if (!c) return false;
+    c.set_bool(STR("bValue"), on);
+    return c.invoke();
+}
+
+bool set_pawn_desired_gait(UObject* pawn, int gait)
+{
+    ue::Call c(pawn, STR("SetDesiredGait"));
+    if (!c) return false;
+    c.set_int(STR("NewGait"), gait);
+    return c.invoke();
+}
+
 bool map_destination(std::string& level, std::string& spawn_tag)
 {
     UObject* g = gi();

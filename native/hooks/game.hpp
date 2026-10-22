@@ -140,6 +140,11 @@ struct PawnState { double pos[3]{}; double yaw = 0; double vel[3]{}; };
 bool pawn_state(UObject* pawn, PawnState& out);
 bool move_pawn(UObject* pawn, double dir_x, double dir_y, double scale);   // AddMovementInput (monde)
 bool teleport_pawn(UObject* pawn, const double pos[3], double yaw);
+// Allure ALS du pion d'exploration (0 marche, 1 course, 2 sprint) : réelle (GetGait) ou voulue (GetDesiredGait) ; -1 si
+// inconnue. Sprint : SprintAction(bValue), comme la touche du joueur ; SetDesiredGait en repli.
+int pawn_gait(UObject* pawn, bool desired = false);
+bool pawn_sprint_action(UObject* pawn, bool on);
+bool set_pawn_desired_gait(UObject* pawn, int gait);
 // Destination d'un changement de niveau en cours (GI : LevelDestinationAssetName, SpawnPointTag).
 bool map_destination(std::string& level, std::string& spawn_tag);
 bool change_map(const std::wstring& level, const std::wstring& spawn_tag);   // FL_jRPG_CustomFunctionLibrary_C:ChangeMapByAssetName

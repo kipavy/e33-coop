@@ -320,7 +320,8 @@ void tick(double now, bool can_host)
         }
     }
     // Hôte d'une copie : la progression va dans la copie (après une demande de sauvegarde du jeu, ou périodiquement).
-    if (s.hosting && ctrl && explore::calm(8.0)) {
+    // Pas pendant que le pion court (courir compte comme « calme ») : écrire une save fige l'image.
+    if (s.hosting && ctrl && explore::calm(8.0) && !explore::local_moving()) {
         const double since = now - s.last_copy_at;
         if ((s.save_wanted && since >= s.min_interval) || since >= s.every) {
             s.save_wanted = false;

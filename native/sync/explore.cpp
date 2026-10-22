@@ -18,6 +18,7 @@
 
 #include "../common/cmdline.hpp"
 #include "../common/jsonlog.hpp"
+#include "../common/prof.hpp"
 #include "../hooks/game.hpp"
 #include "../hooks/hookbus.hpp"
 #include "../hooks/reflect.hpp"
@@ -101,6 +102,19 @@ struct S {
     bool follow_have_target = false;
     double follow_target[3]{};
     double follow_last_t = -1;
+    // Sprint du suiveur (2026-10-22 : le pilote sprinte à ~720 u/s, le suiveur restait en course à ~350 u/s et était
+    // téléporté toutes les ~2,2 s à 800 u d'écart : les « freeze » vus quand l'hôte court).
+    bool follow_sprint = false;                   // sprint demandé au pion suiveur
+    bool sprint_touched = false;                  // le mod a déjà changé l'allure de ce pion
+    int sprint_method = 0;                        // 1 SprintAction, 2 SetDesiredGait (repli)
+    int gait_before = -1;                         // allure voulue avant le sprint (rendue ensuite)
+    double sprint_since = -1;
+    double next_gait_check = 0;
+    bool sprint_logged = false;
+    bool sprint_needs_gait = false;               // SprintAction seul n'a pas suffi : SetDesiredGait aussi
+    // Vitesse du pion local (pilote ou suiveur), pour reporter les tâches lourdes pendant le mouvement
+    double local_speed = 0;
+    double local_speed_at = -1;
     double level_mismatch_since = -1;
     bool f8_down = false;
     // Interactions, dialogues, transitions (rejoués chez les suiveurs)
@@ -148,7 +162,73 @@ struct S {
     int perturb_gold = 0;                         // -e33perturbworld=N (test)
     double cj_joined_at = 0;
     double waited_since = -1;                     // joueur en retard : les autres ont fini depuis
+    double last_world_compute = -1000;            // dernière lecture de l'état d'exploration (hôte et client)
+    std::vector<proto::HashPart> last_world_parts; // hôte : dernière empreinte envoyée
+    uint64_t copy_ok_hash = 0;                    // client : empreinte vérifiée égale à celle de l'hôte, copie coop à faire
+    double copy_ok_at = -1;
 } s;
+
+// Statistiques du suivi, journalisées toutes les 15 s (coop_follow_stats), pas une ligne par image.
+struct FollowStats {
+    double since = -1;
+    // PilotState reçus (chez le suiveur)
+    int rx = 0, rx_same_frame = 0, rx_gap_100 = 0, rx_gap_250 = 0, rx_gap_500 = 0, seq_lost = 0, rx_old = 0;
+    double rx_gap_sum = 0, rx_gap_max = 0, last_rx = -1;
+    uint32_t last_seq = 0;
+    // Conduite du pion
+    int ticks = 0, starts = 0, stops = 0, teleports = 0, sprints = 0, sprint_fallbacks = 0;
+    double err_sum = 0, err_max = 0, age_max = 0, pilot_speed_max = 0, own_speed_sum = 0, own_speed_max = 0;
+    int own_speed_n = 0;
+    double sprint_s = 0, sprint_gait_ok_s = 0, last_t = -1;
+};
+FollowStats fstats;
+
+void follow_stats_flush(bool force)
+{
+    auto& f = fstats;
+    if (f.since < 0) return;
+    if (!force && s.now - f.since < 15.0) return;
+    if (f.rx > 0 || f.ticks > 0) {
+        auto r1 = [](double v) { return std::round(v * 10.0) / 10.0; };
+        log().write("coop_follow_stats", JsonObj().add("s", r1(s.now - f.since))
+            .add("rx", f.rx).add("rx_gap_avg_ms", f.rx > 1 ? r1(f.rx_gap_sum / (f.rx - 1) * 1000.0) : 0.0)
+            .add("rx_gap_max_ms", static_cast<int64_t>(f.rx_gap_max * 1000.0)).add("rx_same_frame", f.rx_same_frame)
+            .add("rx_gap_100", f.rx_gap_100).add("rx_gap_250", f.rx_gap_250).add("rx_gap_500", f.rx_gap_500)
+            .add("seq_lost", f.seq_lost).add("rx_old", f.rx_old).add("age_max_ms", static_cast<int64_t>(f.age_max * 1000.0))
+            .add("ticks", f.ticks).add("starts", f.starts).add("stops", f.stops).add("teleports", f.teleports)
+            .add("err_avg", f.ticks ? r1(f.err_sum / f.ticks) : 0.0).add("err_max", r1(f.err_max))
+            .add("pilot_speed_max", r1(f.pilot_speed_max))
+            .add("own_speed_avg", f.own_speed_n ? r1(f.own_speed_sum / f.own_speed_n) : 0.0).add("own_speed_max", r1(f.own_speed_max))
+            .add("sprints", f.sprints).add("sprint_s", r1(f.sprint_s)).add("sprint_gait_ok_s", r1(f.sprint_gait_ok_s))
+            .add("sprint_fallbacks", f.sprint_fallbacks).add("sprint_method", s.sprint_method));
+    }
+    const double last_rx = f.last_rx;
+    const uint32_t last_seq = f.last_seq;
+    f = FollowStats{};
+    f.since = s.now;
+    f.last_rx = last_rx;
+    f.last_seq = last_seq;
+}
+
+void follow_stats_rx(const proto::PilotState& p)
+{
+    auto& f = fstats;
+    if (f.since < 0) f.since = s.now;
+    ++f.rx;
+    if (f.last_rx >= 0) {
+        const double gap = s.now - f.last_rx;   // horloge de l'image : deux messages lus dans la même image -> écart nul
+        f.rx_gap_sum += gap;
+        f.rx_gap_max = std::max(f.rx_gap_max, gap);
+        if (gap < 0.001) ++f.rx_same_frame;
+        if (gap > 0.1) ++f.rx_gap_100;
+        if (gap > 0.25) ++f.rx_gap_250;
+        if (gap > 0.5) ++f.rx_gap_500;
+    }
+    if (f.last_seq && p.seq > f.last_seq + 1 && p.seq - f.last_seq < 1000) f.seq_lost += static_cast<int>(p.seq - f.last_seq - 1);
+    if (f.last_seq && p.seq <= f.last_seq) ++f.rx_old;
+    f.last_rx = s.now;
+    if (p.seq > f.last_seq || p.seq + 1000 < f.last_seq) f.last_seq = p.seq;
+}
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
 
@@ -346,13 +426,17 @@ void on_chunk(const proto::SaveChunk& c)
 void pilot_tick()
 {
     if (s.now < s.next_pilot_send) return;
-    s.next_pilot_send = s.now + kPilotPeriod;
+    // Échéance cumulée : avec « maintenant + 50 ms », un envoi partait toutes les 4 images à 60 i/s (~15 par seconde,
+    // mesuré le 2026-10-22 : écarts de 60-70 ms à la réception).
+    s.next_pilot_send = std::max(s.next_pilot_send + kPilotPeriod, s.now - kPilotPeriod);
     if (s.host && joined_players() == 0) return;
     if (!s.host && s.cj != S::ClientJoin::Joined && s.want_join) return;
     UObject* pawn = game::explore_pawn();
     if (!pawn || game::map_change_in_progress()) return;
     game::PawnState ps;
     if (!game::pawn_state(pawn, ps)) return;
+    s.local_speed = std::hypot(ps.vel[0], ps.vel[1]);
+    s.local_speed_at = s.now;
     proto::PilotState m;
     m.pilot = s.me;
     m.seq = ++s.pilot_seq;
@@ -362,11 +446,50 @@ void pilot_tick()
     s.net.publish(m, false);
 }
 
+// Sprint du suiveur : demandé comme la touche du joueur (SprintAction), SetDesiredGait en repli si l'allure ne suit pas.
+void sprint_start(UObject* pawn)
+{
+    s.gait_before = s.sprint_touched ? s.gait_before : game::pawn_gait(pawn, true);
+    s.sprint_touched = true;
+    s.follow_sprint = true;
+    s.sprint_since = s.now;
+    s.sprint_method = game::pawn_sprint_action(pawn, true) ? 1 : 0;
+    if ((!s.sprint_method || s.sprint_needs_gait) && game::set_pawn_desired_gait(pawn, 2)) s.sprint_method = 2;
+    s.next_gait_check = s.now + 0.6;
+    ++fstats.sprints;
+    bump("follow_sprints");
+    if (!s.sprint_logged) {   // une fois par session (le résumé compte les suivants)
+        s.sprint_logged = true;
+        log().write("coop_follow_sprint", JsonObj().add("method", s.sprint_method).add("gait_before", s.gait_before)
+                                             .add("gait", game::pawn_gait(pawn)));
+    }
+}
+
+void sprint_off(UObject* pawn)
+{
+    game::pawn_sprint_action(pawn, false);
+    if (game::pawn_gait(pawn, true) == 2) game::set_pawn_desired_gait(pawn, s.gait_before >= 0 && s.gait_before != 2 ? s.gait_before : 1);
+}
+
+void sprint_stop(UObject* pawn)
+{
+    if (!s.follow_sprint) return;
+    s.follow_sprint = false;
+    if (pawn) sprint_off(pawn);
+}
+
+// Plus suiveur (pilote, combat, chargement, fin) : sprint rendu au pion s'il est encore là.
+void sprint_release()
+{
+    if (!s.follow_sprint) return;
+    sprint_stop(game::in_battle() ? nullptr : game::explore_pawn());
+}
+
 void follow_tick()
 {
-    if (!s.last_pilot || s.last_pilot->pilot != s.pilot) return;
+    if (!s.last_pilot || s.last_pilot->pilot != s.pilot) { sprint_release(); return; }
     if (!s.host && s.want_join && s.cj != S::ClientJoin::Joined) return;
-    if (game::map_change_in_progress() || game::in_battle()) return;
+    if (game::map_change_in_progress() || game::in_battle()) { s.follow_sprint = false; return; }
     UObject* pawn = game::explore_pawn();
     if (!pawn) return;
     const auto& p = *s.last_pilot;
@@ -387,7 +510,11 @@ void follow_tick()
     s.level_mismatch_since = -1;
     game::PawnState me;
     if (!game::pawn_state(pawn, me)) return;
-    const double age = std::min(0.25, std::max(0.0, s.now - s.last_pilot_at));
+    const double own_speed = std::hypot(me.vel[0], me.vel[1]);
+    s.local_speed = own_speed;
+    s.local_speed_at = s.now;
+    const double real_age = std::max(0.0, s.now - s.last_pilot_at);
+    const double age = std::min(0.25, real_age);
     const double raw[3] = {p.x + p.vx * age, p.y + p.vy * age, p.z + p.vz * age};
     // Cible lissée (~0,12 s) : les positions reçues par Steam arrivent par à-coups ; un saut net (> 3 m) est pris tel quel.
     const double dt = s.follow_last_t < 0 ? 0.0 : std::clamp(s.now - s.follow_last_t, 0.0, 0.25);
@@ -399,18 +526,57 @@ void follow_tick()
     const double dx = tx - me.pos[0], dy = ty - me.pos[1], dz = tz - me.pos[2];
     const double d = std::sqrt(dx * dx + dy * dy);
     s.follow_error = std::sqrt(d * d + dz * dz);
+    const double sp = std::hypot(p.vx, p.vy);
+    // Statistiques (résumé toutes les 15 s)
+    auto& f = fstats;
+    if (f.since < 0) f.since = s.now;
+    const double fdt = f.last_t < 0 ? 0.0 : std::clamp(s.now - f.last_t, 0.0, 0.25);
+    f.last_t = s.now;
+    ++f.ticks;
+    f.err_sum += s.follow_error;
+    f.err_max = std::max(f.err_max, s.follow_error);
+    f.age_max = std::max(f.age_max, real_age);
+    f.pilot_speed_max = std::max(f.pilot_speed_max, sp);
+    if (s.follow_moving) { f.own_speed_sum += own_speed; ++f.own_speed_n; }
+    f.own_speed_max = std::max(f.own_speed_max, own_speed);
     if (d > kTeleportDistance || std::fabs(dz) > 400) {
         const double pos[3] = {tx, ty, tz};
         game::teleport_pawn(pawn, pos, p.yaw);
         bump("follower_teleports");
-        log().write("coop_follower_teleport", JsonObj().add("distance", d).add("dz", dz));
+        ++f.teleports;
+        log().write("coop_follower_teleport", JsonObj().add("distance", d).add("dz", dz).add("pilot_speed", sp).add("own_speed", own_speed)
+                                                 .add("gait", game::pawn_gait(pawn)).add("sprint", s.follow_sprint).add("age_ms", static_cast<int64_t>(real_age * 1000.0)));
         return;
     }
     // Arrêt seulement quand le pilote s'arrête vraiment et qu'on est arrivé ; reprise dès qu'il bouge ou s'éloigne
     // (avant : un seul seuil à 60 u, donc arrêt-redémarrage plusieurs fois par seconde quand il court).
-    const double sp = std::hypot(p.vx, p.vy);
-    if (!s.follow_moving && (d > 120 || sp > 80)) { s.follow_moving = true; bump("follow_starts"); }
-    else if (s.follow_moving && d < 40 && sp < 30) s.follow_moving = false;
+    if (!s.follow_moving && (d > 120 || sp > 80)) { s.follow_moving = true; bump("follow_starts"); ++f.starts; }
+    else if (s.follow_moving && d < 40 && sp < 30) { s.follow_moving = false; ++f.stops; }
+    // Allure : sprint quand le pilote sprinte (course ~350 u/s, sprint ~720 u/s mesurés le 2026-10-22) ou pour
+    // rattraper un retard pendant qu'il court ; rendu quand il ralentit et qu'on l'a rattrapé.
+    const bool want_sprint = s.follow_moving && (sp > 450 || (sp > 200 && d > 300));
+    const bool drop_sprint = !s.follow_moving || (sp < 400 && d < 150);
+    if (want_sprint && !s.follow_sprint) sprint_start(pawn);
+    else if (s.follow_sprint && drop_sprint) sprint_stop(pawn);
+    if (s.follow_sprint) {
+        f.sprint_s += fdt;
+        if (own_speed > 500) f.sprint_gait_ok_s += fdt;
+    }
+    if (s.sprint_touched && s.now >= s.next_gait_check) {
+        s.next_gait_check = s.now + 0.5;
+        const int gait = game::pawn_gait(pawn);
+        if (s.follow_sprint && gait >= 0 && gait != 2 && s.sprint_method == 1 && s.now - s.sprint_since > 0.6 && own_speed < 450) {
+            // SprintAction sans effet (pion sans entrée du joueur ?) : allure voulue imposée.
+            if (game::set_pawn_desired_gait(pawn, 2)) s.sprint_method = 2;
+            ++f.sprint_fallbacks;
+            bump("follow_sprint_fallbacks");
+            if (!s.sprint_needs_gait)   // une fois : les sprints suivants passent directement par SetDesiredGait
+                log().write("coop_follow_sprint_fallback", JsonObj().add("gait", gait).add("own_speed", own_speed).add("ok", s.sprint_method == 2));
+            s.sprint_needs_gait = true;
+        } else if (!s.follow_sprint && gait == 2) {
+            sprint_off(pawn);   // sprint resté après un combat ou un chargement
+        }
+    }
     if (!s.follow_moving || d < 1) return;
     // Direction : vers la cible, mêlée à la direction du pilote quand on est tout près (pas de demi-tours sur place).
     double ux = dx / d, uy = dy / d;
@@ -742,16 +908,40 @@ constexpr WorldPart kWorldParts[] = {
     {"flags", L"NamedIDsStates"}, {"gpe", L"GPE_States"}, {"cinematics", L"InteractedCinematics"}, {"dialogs", L"InteractedDialogs"},
 };
 
+// Inventaire résumé : quantité totale par objet et niveau de chaque équipement (comme les ressources communes, D13),
+// trié par nom. Avant : réflexion brute de GI.Inventory (~11 700 feuilles : ordre des piles, données statiques
+// recopiées, pointeurs d'objets) ; l'hôte en avait 11 741 et le client 11 342 juste après avoir chargé l'instantané de
+// l'hôte (2026-10-22) : écart permanent, donc nouvel instantané (rechargement de 5-6 s) toutes les 1 à 2 min.
+reflect::Leaves inventory_leaves()
+{
+    std::map<std::string, int64_t> eco;
+    game::economy_sample(eco);
+    reflect::Leaves l;
+    for (auto& [k, v] : eco)
+        if (k != "gold" && v != 0) l.emplace_back(k, std::to_string(v));
+    return l;
+}
+
 std::vector<proto::HashPart> world_parts(std::map<std::string, reflect::Leaves>* leaves = nullptr)
 {
     std::vector<proto::HashPart> out;
     UObject* gi = game::gi();
     if (!gi) return out;
+    prof::Scope prof_scope("world_parts");
+    s.last_world_compute = s.now;
     for (const auto& p : kWorldParts) {
-        reflect::Leaves l = reflect::field(gi, p.field);
+        reflect::Leaves l = std::string_view(p.name) == "inventory" ? inventory_leaves() : reflect::field(gi, p.field);
         out.push_back({p.name, reflect::hash(l)});
         if (leaves) (*leaves)[p.name] = std::move(l);
     }
+    return out;
+}
+
+// Inventaire résumé en une ligne de journal ("objet=quantité,…"), pour comparer hôte et client quand il diffère.
+std::string leaves_line(const reflect::Leaves& l)
+{
+    std::string out;
+    for (auto& [k, v] : l) { if (!out.empty()) out += ","; out += k + "=" + v; }
     return out;
 }
 
@@ -762,19 +952,42 @@ bool quiet(double secs)
     return safe_point() && s.interactions.empty() && s.choices.empty() && !s.choice_pending && s.now - s.last_event_at >= secs;
 }
 
+// Client : copie coop après une empreinte égale à celle de l'hôte, pion arrêté (au plus 60 s après la vérification, et
+// seulement sans événement depuis : sinon l'état n'est plus celui vérifié).
+void copy_tick()
+{
+    if (s.host || s.copy_ok_at < 0) return;
+    if (s.last_event_at > s.copy_ok_at || s.now - s.copy_ok_at > 60.0) { s.copy_ok_at = -1; return; }
+    if (local_moving() || !quiet(3.0) || !prof::claim_heavy("coop_copy")) return;
+    s.copy_ok_at = -1;
+    prof::Scope p("coop_copy");
+    coopsave::on_world_ok(s.copy_ok_hash, s.net.name_of ? s.net.name_of(0) : std::string());
+}
+
 void world_hash_tick()
 {
     if (game::in_battle() || game::map_change_in_progress() || s.local_narr) touch();
+    copy_tick();
     if (s.now < s.next_world_check) return;
+    // Lecture de l'état : seule tâche lourde de son image, et pas pendant que le pion court (sauf toutes les 30 s au
+    // plus) : l'hôte la faisait toutes les 5 s en courant (courir compte comme « calme »). false : réessai bientôt.
+    auto may_read = [] {
+        if (local_moving() && s.now - s.last_world_compute < 30.0) { s.next_world_check = s.now + 0.5; return false; }
+        if (!prof::claim_heavy("world_hash")) { s.next_world_check = s.now; return false; }   // image suivante
+        return true;
+    };
     s.next_world_check = s.now + (s.host ? 5.0 : 1.0);   // hôte : lecture de tout l'état, pas à chaque seconde
     if (s.host) {
         if (!sharing() || !quiet(8.0)) return;
+        if (!may_read()) return;
         std::map<std::string, reflect::Leaves> leaves;
         auto parts = world_parts(&leaves);
         if (parts.empty()) return;
         uint64_t all = 0;
         for (auto& p : parts) all = all * 31 + p.value;
         if (all == s.last_world_sent && s.now - s.last_world_sent_at < 60.0) return;
+        uint64_t prev_inventory = 0;
+        for (auto& p : s.last_world_parts) if (p.name == "inventory") prev_inventory = p.value;
         s.last_world_sent = all;
         s.last_world_sent_at = s.now;
         proto::WorldHash wh{++s.world_seq, game::current_level(), parts};
@@ -782,7 +995,12 @@ void world_hash_tick()
         bump("world_hashes_sent");
         std::string sizes = "{";
         for (auto& [k, l] : leaves) { if (sizes.size() > 1) sizes += ","; sizes += "\"" + k + "\":" + std::to_string(l.size()); }
-        log().write("coop_world_hash", JsonObj().raw("msg", proto::to_json(wh)).raw("leaves", sizes + "}"));
+        JsonObj o;
+        o.raw("msg", proto::to_json(wh)).raw("leaves", sizes + "}");
+        // Inventaire résumé quand il change (à comparer à celui d'un client en écart).
+        for (auto& p : parts) if (p.name == "inventory" && p.value != prev_inventory) o.add("inventory", leaves_line(leaves["inventory"]));
+        s.last_world_parts = parts;
+        log().write("coop_world_hash", o);
         return;
     }
     // Client : comparer la dernière empreinte de l'hôte une fois calme ici aussi.
@@ -795,6 +1013,8 @@ void world_hash_tick()
         return;
     }
     if (!quiet(3.0)) return;
+    if (s.now - s.pending_world_at < 20.0) { if (!may_read()) return; }
+    else (void)prof::claim_heavy("world_hash");   // empreinte reçue depuis 20 s : comparée même en courant
     const proto::WorldHash host = *s.pending_world;
     s.pending_world.reset();
     if (host.level != game::current_level()) { log().write("coop_world_hash_skipped", JsonObj().add("seq", host.seq).add("why", "level")); return; }
@@ -810,7 +1030,9 @@ void world_hash_tick()
         log().write("coop_world_hash_ok", JsonObj().add("seq", host.seq));
         uint64_t all = 0;
         for (auto& p : host.parts) all = all * 31 + p.value;
-        coopsave::on_world_ok(all, s.net.name_of ? s.net.name_of(0) : std::string());   // état vérifié : copie coop (D15)
+        // État vérifié : copie coop (D15). Écrire une save fige l'image : reportée si le pion court (copy_tick).
+        s.copy_ok_hash = all;
+        s.copy_ok_at = s.now;
         return;
     }
     ++s.world_mismatch_streak;
@@ -826,8 +1048,10 @@ void world_hash_tick()
         for (size_t i = 0; i < l.size() && i < 12; ++i) { if (first.size() > 1) first += ","; first += JsonObj().add("p", l[i].first).add("v", l[i].second).str(); }
         detail += "\"" + k + "\":" + first + "]";
     }
-    log().write("coop_world_hash_diff", JsonObj().add("seq", host.seq).add("parts", differ).add("streak", s.world_mismatch_streak)
-                                           .raw("leaves", sizes + "}").raw("mine", detail + "}"));
+    JsonObj diff_log;
+    diff_log.add("seq", host.seq).add("parts", differ).add("streak", s.world_mismatch_streak).raw("leaves", sizes + "}").raw("mine", detail + "}");
+    if (differ.find("inventory") != std::string::npos) diff_log.add("inventory", leaves_line(leaves["inventory"]));   // à comparer au coop_world_hash de l'hôte
+    log().write("coop_world_hash_diff", diff_log);
     if (s.world_mismatch_streak >= 2) {
         s.world_mismatch_streak = 0;
         bump("world_resyncs");
@@ -880,6 +1104,7 @@ void reset()
     fresh.sequence_playing = s.sequence_playing;
     fresh.choice_pending = s.choice_pending;
     s = std::move(fresh);
+    fstats = FollowStats{};
 }
 
 void set_player_id(uint8_t id) { s.me = id; }
@@ -908,6 +1133,8 @@ void on_session_end()
     s.interactions.clear();
     s.choices.clear();
     s.last_pilot.reset();
+    sprint_release();
+    follow_stats_flush(true);
     s.pilot = s.me;            // plus de pilote distant : le déplacement local est rendu (movement_lock_tick)
     movement_lock_tick();
     ui::clear_status("pause");
@@ -995,6 +1222,7 @@ bool handle(uint8_t from, const proto::Message& m)
             s.net.relay(m, from, false);
         }
         if (p->pilot == s.me) return true;
+        follow_stats_rx(*p);
         if (!s.last_pilot || p->seq > s.last_pilot->seq || p->pilot != s.last_pilot->pilot) { s.last_pilot = *p; s.last_pilot_at = s.now; }
         return true;
     }
@@ -1053,10 +1281,11 @@ void tick(double now)
     if (s.host) host_join_tick();
     else client_join_tick();
     key_tick();
-    if (is_pilot()) pilot_tick();
-    else follow_tick();
+    if (is_pilot()) { sprint_release(); pilot_tick(); }
+    else { prof::Scope p("follow"); follow_tick(); }
+    follow_stats_flush(false);
     replay_tick();
-    poll_tick();
+    { prof::Scope p("explore_poll"); poll_tick(); }
     world_hash_tick();
     if (!s.host) perturb_world_tick();
 }
@@ -1186,6 +1415,7 @@ bool sequence_playing() { return s.sequence_playing; }
 double last_event_age() { return s.now - s.last_event_at; }
 bool remote_paused() { return s.remote_paused_game; }
 double follow_error() { return s.follow_error; }
+bool local_moving() { return s.active && !s.ended && s.local_speed_at >= 0 && s.now - s.local_speed_at < 1.0 && s.local_speed > 150; }
 bool calm(double secs) { return s.active && !s.ended && quiet(secs); }
 std::string take_world_enemy()
 {

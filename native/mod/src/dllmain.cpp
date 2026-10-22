@@ -14,6 +14,7 @@
 #include <Unreal/UObjectGlobals.hpp>
 
 #include "../../common/jsonlog.hpp"
+#include "../../common/prof.hpp"
 #include "../../hooks/game.hpp"
 #include "../../hooks/hookbus.hpp"
 #include "../../hooks/log.hpp"
@@ -126,12 +127,15 @@ private:
                 hook_retry_ += dt;
                 if (hook_retry_ > 1.0) { hook_retry_ = 0; hooks_done_ = e33::HookBus::get().try_register(); }
             }
-            e33::coop::tick(dt);
-            e33::update::tick(dt);
-            e33::options::tick(dt);
-            e33::owners_ui::tick(dt);
-            e33::testrunner::tick(dt);
-            e33::remote::tick(dt);
+            // Durées par étape (diagnostic des à-coups d'image : coop::tick journalise celles de l'image précédente).
+            e33::prof::frame_begin();
+            { e33::prof::Scope p("coop"); e33::coop::tick(dt); }
+            { e33::prof::Scope p("update"); e33::update::tick(dt); }
+            { e33::prof::Scope p("options"); e33::options::tick(dt); }
+            { e33::prof::Scope p("owners_ui"); e33::owners_ui::tick(dt); }
+            { e33::prof::Scope p("testrunner"); e33::testrunner::tick(dt); }
+            { e33::prof::Scope p("remote"); e33::remote::tick(dt); }
+            e33::prof::frame_end();
         } catch (const std::exception& ex) {
             e33::log().write("tick_exception", e33::JsonObj().add("what", ex.what()));
         } catch (...) {
