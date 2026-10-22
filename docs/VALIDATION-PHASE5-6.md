@@ -15,28 +15,24 @@ messages P2P à son propre compte) ; lobby, invitation et liaison entre deux com
 ```powershell
 powershell -NoProfile -File tools/reset-env/vanilla.ps1
 ```
-Cela rend tes saves modifiables et retire l'environnement de test. Puis envoie à ton ami le fichier
-`.tools\e33coop-player.zip` (≈ 14 Mo).
+Cela rend tes saves modifiables et retire l'environnement de test.
 
-**Toi et ton ami** — dézipper `e33coop-player.zip`, puis dans le dossier dézippé :
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-```
-Le script trouve le jeu tout seul (sinon : `-GameDir "<...>\steamapps\common\Expedition 33"`). Il copie UE4SS et le mod dans
-le dossier du jeu. Il ne touche à aucune save.
+**Toi et ton ami** — télécharger `Installer.E33.Coop.exe` depuis la dernière release
+(github.com/kipavy/e33-coop/releases/latest), double-clic, **Installer**. Il trouve le jeu tout seul (sinon *Choisir le
+dossier du jeu…*), télécharge le paquet, vérifie son empreinte SHA-256 et copie UE4SS et le mod dans le dossier du jeu.
+Il ne touche à aucune save. Avant la première release : prendre l'artefact `release-dry-run` (workflow `release` lancé
+à blanc) et poser `e33coop-player.zip` + `SHA256SUMS` à côté de l'exe (installation hors ligne).
 
-Ensuite, options de lancement Steam (Steam > Expedition 33 > Propriétés > Options de lancement) :
-- toi : `-e33role=host -e33transport=steam`
-- ton ami : `-e33role=client -e33transport=steam -e33join=1`
-
-Les deux installations doivent être identiques : le jeu refuse la connexion sinon, avec un message qui dit ce qui diffère.
+**Plus d'option de lancement** : vider celles d'avant (`-e33role…`) dans Steam > Expedition 33 > Propriétés.
+Les deux installations doivent être de la même version : sinon le refus dit qui doit mettre à jour (touche **U** au
+menu, ou mise à jour automatique).
 
 ## 1. Inviter et rejoindre (≈ 3 min)
-- [ ] **Toi** : lance le jeu et charge ta partie. Une dizaine de secondes après, un bandeau en haut indique « Partie ouverte au
-      coop : F7 pour inviter un ami ».
-- [ ] **Toi** : **F7**. La fenêtre d'invitation de Steam s'ouvre : invite ton ami.
-- [ ] **Ton ami** : accepte l'invitation, jeu fermé ou ouvert. Autre possibilité : il lance le jeu et appuie sur **F7** au menu
-      principal (il rejoint la partie coop d'un ami).
+- [ ] **Toi** : lance le jeu et charge ta partie. Un message rappelle « Coop : F7 pour ouvrir votre partie à vos amis Steam ».
+- [ ] **Toi** : **F7**. Bandeau « Partie ouverte au coop », puis la fenêtre d'invitation de Steam s'ouvre : invite ton ami.
+- [ ] **Ton ami** : accepte l'invitation, jeu fermé ou ouvert (au menu principal). Autres possibilités : bouton
+      **Rejoindre <toi>** au menu principal, ou **F7** au menu. Invitation acceptée en pleine partie : message « revenez au
+      menu principal », puis il rejoint seul en y revenant.
 - [ ] Chez lui : « Connexion à la partie de l'hôte… », puis « Chargement de la partie de l'hôte… ». Sa partie se charge
       seule, il apparaît à côté de toi.
 - [ ] Chez toi : « <son nom Steam> a rejoint la partie ».
@@ -63,23 +59,32 @@ Les deux installations doivent être identiques : le jeu refuse la connexion sin
 - [ ] Il relance le jeu et rejoint (F7 au menu) : « **En attente de la fin du combat de l'hôte…** », puis il rentre dans la
       partie à la fin du combat.
 - [ ] **Toi** : menu pause > Écran titre. Chez lui : « L'hôte a quitté la partie. Session terminée. », puis retour au menu
-      principal.
+      principal. Ensuite, chacun de vous peut de nouveau inviter (F7 en partie) ou rejoindre (menu) sans relancer le jeu.
 
 ## 5. Copie coop chez ton ami (≈ 5 min)
 - [ ] Après quelques minutes de partie ensemble, chez **ton ami** : le dossier
       `%LOCALAPPDATA%\Sandfall\Saved\SaveGames\e33coop\copies\` contient `<ton nom>.sav` et `.json` (date récente).
       Ses saves perso (`SaveGames\<17 chiffres>\`) n'ont pas changé de date.
-- [ ] Toi : menu pause > Écran titre. Lui : options de lancement `-e33role=host -e33transport=steam`, relance le jeu.
-      Au menu principal : « Coop : F10 pour héberger la partie coop de <toi> (copie du JJ/MM HH:MM) ». **F10** : la partie
-      se charge à l'endroit où vous étiez.
+- [ ] Toi : menu pause > Écran titre. Lui, sans rien relancer : au menu principal, « Coop : F10 pour héberger la partie
+      coop de <toi> (copie du JJ/MM HH:MM) ». **F10** : la partie se charge à l'endroit où vous étiez.
 - [ ] Il joue 2 minutes (un coffre, un combat), revient au menu principal par le menu pause, relance F10 : le coffre est
       ouvert, le combat gagné. Ses saves perso n'ont toujours pas changé.
-- [ ] Optionnel : toi en `-e33role=client`, F7 au menu : tu rejoins sa partie (la copie).
-- Puis remettre ses options de lancement client.
+- [ ] Optionnel : toi, au menu, **Rejoindre <lui>** (ou F7) : tu rejoins sa partie (la copie).
+
+## 6. Panneau Coop, options, mises à jour (≈ 5 min)
+- [ ] **Toi**, en partie avec ton ami, hors combat : Échap. Panneau « Expédition coop » à droite, avec une section
+      **Options**. **F9** : la première ligne (un personnage) est surlignée ; **Maj+F9** : le personnage passe à ton ami
+      (chez lui : « … est maintenant contrôlé par … »). **F9** encore : on descend jusqu'aux options ; **Maj+F9** change la
+      valeur (enregistrée dans `ue4ss\Mods\E33Coop\settings.ini`). Les flèches et Entrée du menu pause marchent comme avant.
+- [ ] **Ton ami** : même panneau, options « Parade en duo (hôte) » et « Minuteur de tour (hôte) » en « choisi par l'hôte ».
+- [ ] Hors du menu pause, **F9** : une carte montre la ligne choisie ; elle disparaît seule après 20 s.
+- [ ] Mise à jour (si une release plus récente que la vôtre existe) : au menu principal, rien à faire en `updates = auto`
+      (message « Mise à jour X prête : installée à la fermeture du jeu ») ; après avoir quitté le jeu, l'installateur la
+      pose seul ; au lancement suivant, `ue4ss\Mods\E33Coop\version.txt` porte la nouvelle version. En `updates = ask` :
+      carte « … U pour mettre à jour », U : le jeu se ferme, l'installateur met à jour et relance le jeu.
 
 ## Après
-- Chacun : `powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1` dans le dossier dézippé, puis vider les options
-  de lancement Steam.
+- Chacun, pour désinstaller : `Installer.E33.Coop.exe` > **Désinstaller** (ou `uninstall.ps1` du zip).
 - Journaux, si quelque chose cloche : `<jeu>\Sandfall\Binaries\Win64\ue4ss\Mods\E33Coop\logs\<date-heure>\`, un dossier par
   lancement. Envoie-moi les deux dossiers de la session, le tien et celui de ton ami.
 

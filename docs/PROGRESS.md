@@ -89,6 +89,15 @@
 - Client : rejoint seul le lobby de l'hôte de confiance au menu principal (amis Steam) ; sans options de lancement, le mode vaut `-e33role=client -e33transport=steam -e33join=1`.
 - Non testé en vrai (un seul jeu par compte Steam ici) : tout ce qui passe par Steam entre deux comptes, la relance par Steam (fenêtre de confirmation possible la 1re fois), `QuitGame`, les assistants PowerShell lancés depuis le jeu (job Steam), l'auto-jonction par `GetFriendGamePlayed`.
 
+### Installation facile (branche `feat/easy-install`, 2026-10-22, D17) — écrit, compilé ; à tester en jeu
+- **Plus d'option de lancement** : mode neutre par défaut (Steam) ; F7 en partie = hôte, invitation / F7 / « Rejoindre » au menu = client, F10 au menu = hôte de la copie ; retour au menu = neutre. Hooks du coop abonnés au choix du rôle. `-e33role` et les autres options gardent l'ancien comportement (tests inchangés).
+- **Version unique** : fichier `VERSION` (0.6.0) ; fakeclients en `"mod_version": "current"`.
+- **Installateur** `Installer E33 Coop.exe` (`tools/installer`) : trouve le jeu par Steam, télécharge la dernière release, vérifie le SHA-256, installe / met à jour / désinstalle, écran d'options. Tests unitaires `test_release` (versions, tags, SHA256SUMS, VDF, recherche du jeu, settings.ini).
+- **Release** : `.github/workflows/release.yml` sur tag `vX.Y.Z` (= `VERSION`) ; essai à blanc par workflow_dispatch. Procédure : `docs/RELEASE.md`. Aucune release publiée encore.
+- **Mises à jour** (`native/sync/update.cpp`) : `updates = auto` (défaut, installée à la fermeture du jeu), `ask` (U au menu), `off`. Écart de version à la jonction : le plus ancien est prévenu (auto : mise à jour, relance, nouvelle jonction).
+- **Options** : `settings.ini` du mod ; F9 / Maj+F9 dans le panneau Coop (aussi répartition des personnages par l'hôte) ; carte hors menu pause. Scénario `p6_panel_host` (ajouté à la batterie, pas encore lancé).
+- À repasser : batterie complète (le chemin `-e33role` a été réorganisé : `start_session`), `p6_panel_host` ; puis essai à deux PC sans options de lancement (`docs/VALIDATION-PHASE5-6.md` §1, §5, §6).
+
 ### Limites connues (phase 5)
 - Une dépense faite dans les 2 s d'un événement rejoué (coffre, combat) est absorbée dans la référence : le hash d'exploration la détecte et la resynchro reprend l'état de l'hôte (dépense perdue).
 - Réattribution des personnages : touche F6 de l'hôte (hors combat), pas de vrai menu.
