@@ -106,7 +106,6 @@ struct Api {
     uint64_t (*get_steam_id)(void*) = nullptr;
     const char* (*friend_persona)(void*, uint64_t) = nullptr;
     const char* (*persona)(void*) = nullptr;
-    const char* (*friend_persona)(void*, uint64_t) = nullptr;
     void (*invite)(void*, uint64_t) = nullptr;
     int (*friend_count)(void*, int) = nullptr;
     uint64_t (*friend_by_index)(void*, int, int) = nullptr;
