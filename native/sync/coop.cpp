@@ -1730,6 +1730,9 @@ void subscribe()
         // Le OnTurnStart de ce tour est-il déjà passé ? (l'ordre varie selon les tours)
         const uint32_t turn = b.ots_seq == b.sct_seq ? b.turn : b.turn + 1;
         if (turn <= 1 || b.dep_active || b.host_sync.count(turn) || b.host_end >= 0) return;
+        // OnTurnStart déjà passé et tour déjà vérifié (état de l'hôte arrivé avant, puis consommé) : rien à attendre.
+        // Sinon la dépendance attendait un état déjà retiré et retenait le tour jusqu'au suivant (p6_turndep, tour 4).
+        if (turn == b.turn && !(b.dep_finish_pending && b.dep_turn == turn)) return;
         ue::Call reg(ctx.Context, STR("Register Dependency"));
         if (!reg) return;
         reg.set_object(STR("Dependency"), game::save_manager()).invoke();
