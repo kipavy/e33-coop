@@ -33,6 +33,7 @@ constexpr Entry kTexts[] = {
     {"keys_client", "Coop : F8 prendre la main", "Coop: F8 take control"},
     {"your_turn", "À vous de jouer", "Your turn"},
     {"turn_timer", "Tour de {0} : {1} s", "{0}'s turn: {1} s"},
+    {"duo_parry", "Parade en duo ! +{1} PA ({0})", "Duo parry! +{1} AP ({0})"},
     {"turn_forced", "Temps écoulé : {0} attaque automatiquement", "Time is up: {0} attacks automatically"},
     {"paused_by", "Pause demandée par {0}", "Paused by {0}"},
     {"waiting_players", "En attente des autres joueurs…", "Waiting for the other players…"},

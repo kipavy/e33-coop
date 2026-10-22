@@ -1,0 +1,16 @@
+{
+  "name": "p6_duoparry_client",
+  "description": "Parade en duo côté client : vrai jeu client (Verso) face au faux hôte qui rejoue p6_duoparry_host. Le client calcule le même bonus que l'hôte au même moment (début du tour suivant, avant la photo d'état) : PA identiques sans correction.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Eveque*1",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 900,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [ { "hero": "Verso", "type": "attack" } ],
+  "defense": ["parry"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p6_duoparry_host.jsonl", "--timeout", "900"] },
+  "expect": { "battle_end": "any", "remote_actions": ">=1", "duo_parries": ">=1", "ui:duo_parry": ">=1" },
+  "note": "Nécessite tests/recordings/p6_duoparry_host.jsonl : copie de runs/<…>-p6_duoparry_host/recording-fakeclient.jsonl d'un passage vert."
+}

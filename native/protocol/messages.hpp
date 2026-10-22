@@ -77,6 +77,7 @@ struct BattleStart {
     std::string enemy_global_id;          // EnemyGlobalID des paramètres de combat
     uint8_t engage = 0;                   // E_jRPG_EngageTypes
     uint16_t turn_timer_s = 0;            // v6 : minuteur de tour (0 = aucun, réglage par défaut)
+    uint8_t duo_parry = 0;                // bonus « parade en duo » choisi par l'hôte (champ final facultatif : absent = 0)
 };
 struct TurnStart {
     uint32_t battle_id = 0;

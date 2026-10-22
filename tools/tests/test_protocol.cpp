@@ -33,6 +33,7 @@ static std::vector<proto::Message> samples()
     h.join = true;
     proto::ActionCommand forced = ac; forced.forced = true;
     bs.turn_timer_s = 60;
+    bs.duo_parry = 1;
     proto::BattleStart wb = bs; wb.world_enemy = "BP_EnemyWorld_SpringMeadowElementalGrunt_C_UAID_18C04D921BE3793601_2147027147";
     wb.enemy_global_id = "ObjectID_Enemy_Level_SpringMeadows_Main_V2_X"; wb.engage = 2;
     proto::SaveChunk ch; ch.xfer = 3; ch.offset = 16000; ch.data = {0x47, 0x56, 0x41, 0x53, 0, 255};
