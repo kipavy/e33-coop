@@ -230,3 +230,14 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 - Option de l'hôte, active par défaut, `-e33duoparry=0` pour la couper ; envoyée dans `BattleStart.duo_parry` (champ final facultatif : absent = coupé, donc les anciens enregistrements rejouent sans bonus). Les clients suivent toujours le réglage de l'hôte.
 
 **Remise en cause si** : la raison 0 de `GainAP` déclenche un effet indésirable (pictos liés à une raison précise) ; ou si `duo_parry_ap` montre un gain différent de 1 (journal `coop_duo_parry` : PA avant/après).
+
+## D17 — Miroir des menus de combat (2026-10-22, demande de Killian)
+
+**Décision** :
+- Pendant le tour du héros d'un autre joueur, l'observateur voit les **menus du jeu** de ce joueur (roue, compétences, objets, gradient, colonne, ciblage et curseur) au lieu d'une ligne de texte. Le propriétaire envoie son état (`MenuState`, type 36, fiable, à chaque changement, 15 fois/s au plus) ; l'observateur appelle les fonctions de l'interface du jeu (pages de `WBP_HUD_WheelsContainer`, `BM.SelectAction` / `SelectSecondaryAction` pour ouvrir le ciblage, groupes du `AC_jRPG_TargetingManager` pour le curseur, `BM.OnCancelTargeting` pour le retour).
+- **Jamais de confirmation par le miroir** : ni `RequestActionExecution`, ni `ConfirmTarget`, ni `StartFreeAimFromUI`. L'action part toujours par `ActionCommand` (inchangé) ; juste avant son exécution (et avant le rejeu d'une visée libre), le miroir referme tout (ciblage annulé, roue revenue à sa page du début du tour) : l'exécution part du même état qu'avant le miroir. `SelectAction` / `SelectSecondaryAction` sont les appels que l'exécution fait de toute façon.
+- Entrées d'ici pendant ces tours : en plus des contextes Enhanced Input retirés (phase 5), navigation d'interface du jeu coupée (`BP_UINavigationComponent.DisableNavigation`) et clics sur la roue 3D coupés (`LGUIWorldSpaceRaycaster.DeactivateRaycaster`), rendus en fin de tour ou quand le menu pause est ouvert (`-e33inputguard=0` pour revenir à avant).
+- Une partie impossible à rejouer (fonction introuvable, refus du jeu 3 fois) : ligne de texte pour ce tour. `-e33menumirror=0` : ligne de texte seulement. Visée libre : ligne de texte puis caméra rejouée (inchangé).
+- Preuve : scénarios `p7_menumirror_host` (captures chaque seconde ; entrées d'ici injectées, `spam_local_input`, `local_input_leaks` = 0) et `p7_menumirror_off_host` (témoin sans miroir).
+
+**Remise en cause si** : un appel du miroir change un état comparé par le hash (écart au tour suivant), déclenche une exécution (`tr_input_leak`, `menu_drift`), ou si les fonctions des pages ne font rien sans entrées enregistrées (`menu_mirror_gave_up`).
