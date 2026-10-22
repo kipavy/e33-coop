@@ -34,7 +34,7 @@ Dans Expedition 33, le combat au tour par tour repose sur des **réflexes** : pa
 <table>
 <tr>
 <td width="72%"><img src="docs/img/combat-repartition.jpg" alt="Combat à deux joueurs"></td>
-<td><img src="docs/img/ordre-des-tours.png" alt="Ordre des tours avec l'initiale du joueur"><br><sub>Dans l'ordre des tours, un losange porte l'initiale du joueur qui contrôle chaque héros : <b>K</b> pour l'hôte, <b>T</b> pour l'ami.</sub></td>
+<td><img src="docs/img/ordre-des-tours.png" alt="Ordre des tours avec l'initiale du joueur"><br><sub>Dans l'ordre des tours, un losange porte l'initiale du pseudo du joueur qui contrôle chaque héros (ici <b>K</b>illian et <b>T</b>OTOFF), avec une couleur par joueur.</sub></td>
 </tr>
 </table>
 
