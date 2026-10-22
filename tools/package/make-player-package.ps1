@@ -23,6 +23,9 @@ $lines = @("CheatManagerEnablerMod : 1", "ConsoleCommandsMod : 1", "ConsoleEnabl
 Set-Content (Join-Path $game "ue4ss\Mods\mods.txt") $lines -Encoding ascii
 Copy-Item (Join-Path $PSScriptRoot "install.ps1") $stage
 Copy-Item (Join-Path $PSScriptRoot "uninstall.ps1") $stage
+# Assistants du test à distance (copiés par install.ps1 seulement avec -AllowRestart / -AllowUpdate).
+New-Item -ItemType Directory -Force (Join-Path $stage "remote-test") | Out-Null
+Copy-Item (Join-Path $repo "tools\remote\client\*.ps1") (Join-Path $stage "remote-test")
 Copy-Item (Join-Path $Package "build-info.txt") $stage
 if (Test-Path $Out) { Remove-Item $Out -Force }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $Out
