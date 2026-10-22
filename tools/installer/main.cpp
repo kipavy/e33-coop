@@ -383,13 +383,13 @@ bool install_package(const fs::path& win64, const Package& pkg, Progress* pr, st
             return false;
         };
         const bool restart = flag("restart"), update = flag("update");
-        std::vector<const wchar_t*> names;
-        if (restart || update) names.push_back(L"relaunch.ps1");
-        if (update) { names.push_back(L"apply-update.ps1"); names.push_back(L"rollback.ps1"); }
-        fs::create_directories(md / L"remote", ec);
-        for (auto* n : names) fs::copy_file(pkg.dir / L"remote-test" / n, md / L"remote" / n, fs::copy_options::overwrite_existing, ec);
         logline("remote test kept (restart " + std::to_string(restart) + ", update " + std::to_string(update) + ")");
     }
+    // Assistants du test à distance toujours posés : inertes sans remotetest.txt (le mod vérifie les droits du fichier
+    // avant de les lancer). Un remotetest.txt créé à la main après l'installation suffit donc.
+    fs::create_directories(md / L"remote", ec);
+    for (const wchar_t* n : {L"relaunch.ps1", L"apply-update.ps1", L"rollback.ps1"})
+        fs::copy_file(pkg.dir / L"remote-test" / n, md / L"remote" / n, fs::copy_options::overwrite_existing, ec);
     prune_backups(win64);
     logline("installed " + pkg.version + " in " + utf8(win64.wstring()) + (moved.empty() ? "" : " (backup " + utf8(bak.wstring()) + ")"));
     return true;

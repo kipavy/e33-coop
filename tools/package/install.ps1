@@ -88,16 +88,15 @@ if ($cfg) {
     [IO.File]::WriteAllText($cfgPath, $cfg, (New-Object System.Text.UTF8Encoding $false))
     $restart = $cfg -match '(?m)^\s*restart\s*=\s*(1|true)\s*$'
     $update = $cfg -match '(?m)^\s*update\s*=\s*(1|true)\s*$'
-    $helpers = Join-Path $modDir "remote"
-    New-Item -ItemType Directory -Force $helpers | Out-Null
-    $names = @()
-    if ($restart -or $update) { $names += "relaunch.ps1" }
-    if ($update) { $names += "apply-update.ps1", "rollback.ps1" }
-    foreach ($n in $names) { Copy-Item (Join-Path $here "remote-test\$n") $helpers -Force }
     $hostId = ([regex]::Match($cfg, 'host=(\d{17})')).Groups[1].Value
     Write-Output "Remote test ON: trusted host $hostId ; restart allowed: $restart ; mod update allowed: $update"
     Write-Output "  Turn off: delete $cfgPath"
 }
+# Assistants du test a distance toujours poses : inertes sans remotetest.txt (le mod verifie les droits du fichier
+# avant de les lancer). Un remotetest.txt cree a la main apres l'installation suffit donc.
+$helpers = Join-Path $modDir "remote"
+New-Item -ItemType Directory -Force $helpers | Out-Null
+foreach ($n in "relaunch.ps1", "apply-update.ps1", "rollback.ps1") { Copy-Item (Join-Path $here "remote-test\$n") $helpers -Force }
 Write-Output ""
 Write-Output "Installed in $win64"
 Write-Output (Get-Content (Join-Path $here "build-info.txt") -Raw)
