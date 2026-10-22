@@ -408,21 +408,28 @@ bool uninstall(const fs::path& win64, Progress* pr, std::string& err)
     return true;
 }
 
-// Paquet à installer : zip local vérifié à côté de l'exe, sinon dernière release.
+// Paquet à installer : dernière release (téléchargée, vérifiée) ; hors ligne seulement, zip posé à côté de l'exe avec
+// son SHA256SUMS (vérifié aussi).
 bool obtain_package(const std::string& tag, Package& pkg, Progress* pr, std::string& err)
 {
     std::string zip, sums;
-    const fs::path here = self_path().parent_path();
-    std::string lerr;
-    if (verified_local_zip(here / L"e33coop-player.zip", here / L"SHA256SUMS", zip, lerr)) logline("using local zip next to the installer");
-    else {
-        if (tag.empty()) { err = "dernière version inconnue (hors ligne ?)"; return false; }
-        if (!download_release(tag, zip, sums, pr, err)) return false;
+    bool downloaded = false;
+    if (!tag.empty()) downloaded = download_release(tag, zip, sums, pr, err);
+    if (!downloaded) {
+        if (pr && pr->cancel) return false;
+        const fs::path here = self_path().parent_path();
+        std::string lerr;
+        if (!verified_local_zip(here / L"e33coop-player.zip", here / L"SHA256SUMS", zip, lerr)) {
+            if (tag.empty()) err = "dernière version inconnue (hors ligne ?) et pas de zip vérifiable à côté de l'installateur (" + lerr + ")";
+            return false;
+        }
+        logline("using the local zip next to the installer (" + (tag.empty() ? std::string("offline") : err) + ")");
+        err.clear();
     }
     if (pr) pr->set(T(L"Décompression…", L"Unpacking…"));
     if (!extract_zip(zip, pkg, err)) return false;
-    if (!tag.empty() && !pkg.version.empty() && release::compare_versions(pkg.version, tag) != 0 && !zip.empty() && sums.size()) {
-        err = "version du paquet (" + pkg.version + ") différente du tag " + tag;
+    if (downloaded && release::compare_versions(pkg.version, tag) != 0) {
+        err = "version du paquet (" + pkg.version + ") différente de la release " + tag;
         return false;
     }
     return true;
@@ -714,9 +721,11 @@ int mode_interactive(fs::path win64)
             if (ok) message(T(L"Mod coop installé", L"Coop mod installed"),
                             std::wstring(T(L"Version ", L"Version ")) + wide(pkg.version) +
                             T(L" installée.\n\nLancez le jeu normalement par Steam, sans option de lancement.\n• Pour inviter : chargez votre partie, puis F7.\n"
-                              L"• Pour rejoindre : au menu principal, « Rejoindre <ami> » ou F7, ou acceptez l'invitation Steam.\n• Options en jeu : F9.",
+                              L"• Pour rejoindre : au menu principal, « Rejoindre <ami> » ou F7, ou acceptez l'invitation Steam.\n• Options en jeu : F9.\n\n"
+                              L"Si vous aviez mis des options de lancement -e33… (anciennes versions), retirez-les dans Steam.",
                               L" installed.\n\nStart the game normally from Steam, without launch options.\n• To invite: load your game, then F7.\n"
-                              L"• To join: at the main menu, \"Join <friend>\" or F7, or accept the Steam invite.\n• In-game options: F9."));
+                              L"• To join: at the main menu, \"Join <friend>\" or F7, or accept the Steam invite.\n• In-game options: F9.\n\n"
+                              L"If you had set -e33… launch options (older versions), remove them in Steam."));
             else if (err != "annulé") message(T(L"Installation impossible", L"Install failed"), wide(err) + T(L"\n\nRien n'a été changé dans le dossier du jeu.", L"\n\nNothing was changed in the game folder."), true);
         } else if (b == 11) {
             options_screen(win64);
