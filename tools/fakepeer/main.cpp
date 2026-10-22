@@ -335,6 +335,27 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     later.emplace_back(at, p);
                     ++counts["intent_previews_sent"];
                 };
+                // "intent_preview": {"menus": true | {"targets": ["enemy:0", …], "item_targets": ["hero:Lune", …]}} : état des menus (MenuState)
+                // comme un joueur qui fouille la roue avant d'agir (miroir des menus chez l'hôte).
+                const json::Value& mv = ip.is_object() ? ip["menus"] : json::Value();
+                const bool menus = mv.is_object() || mv.as_bool(false);
+                uint16_t menu_seq = 0;
+                auto menu = [&](double at, proto::MenuPage page, uint8_t col, int8_t hover, uint8_t type, const std::string& sec, bool tgt,
+                                std::vector<proto::Unit> targets) {
+                    if (!menus) return;
+                    proto::MenuState s;
+                    s.battle_id = ts->battle_id; s.turn = ts->turn; s.spot = ts->index; s.seq = ++menu_seq;
+                    s.page = page; s.column = col; s.hover = hover; s.action_type = type; s.secondary = sec; s.targeting = tgt;
+                    s.targeting_type = tgt ? (targets.empty() || targets[0].kind == proto::ActorKind::Enemy ? 1 : 4) : 0;
+                    s.targets = std::move(targets);
+                    later.emplace_back(at, s);
+                    ++counts["menu_states_sent"];
+                };
+                auto unit_of = [&](const std::string& t) -> std::optional<proto::Unit> {
+                    if (t.rfind("enemy:", 0) == 0) return proto::Unit{proto::ActorKind::Enemy, static_cast<uint8_t>(std::atoi(t.c_str() + 6))};
+                    if (t.rfind("hero:", 0) == 0) { const int sp = spot_of_hero(t.substr(5)); if (sp >= 0) return proto::Unit{proto::ActorKind::Hero, static_cast<uint8_t>(sp)}; }
+                    return std::nullopt;
+                };
                 if (!candidates.empty()) {
                     const json::Value* actp = &actions[candidates[action_index[cls]++ % candidates.size()]];
                     // Visée libre : même chronologie que le test runner (tirs à 1,5 s puis toutes les 1,2 s sur le premier
@@ -349,6 +370,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                         };
                         ev(proto::FreeAimKind::Start, 0, 0);
                         preview(now_s(), 0, "", true, {});
+                        menu(now_s(), proto::MenuPage::FreeAim, 0, -1, 0, "", false, {});
                         const uint32_t end_ms = 1500 + static_cast<uint32_t>(shots) * 1200;
                         // "aim_points" : point visé (relatif au premier ennemi) toutes les 250 ms, qui balaie autour de lui.
                         if ((*actp)["aim_points"].as_bool(false)) {
@@ -389,6 +411,39 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     const double d = act_at - now_s();
                     preview(now_s() + d * 0.3, ac.action_type, ac.secondary, false, {});
                     preview(now_s() + d * 0.6, ac.action_type, ac.secondary, false, shown);
+                    if (menus && ac.action_type != 6 && ac.action_type != 4) {
+                        // Fouille de la roue : compétences (deux colonnes, survol), objets, gradient, retours ; puis le choix
+                        // de l'action, son ciblage (annulé une fois, puis repris), le curseur sur chaque cible de "targets",
+                        // et enfin la cible de l'action (l'action part à act_at par ActionCommand).
+                        using P = proto::MenuPage;
+                        const double t0 = now_s();
+                        auto at = [&](double f) { return t0 + d * f; };
+                        menu(at(0.02), P::Actions, 0, -1, 0, "", false, {});
+                        menu(at(0.08), P::Skills, 0, -1, 5, "", false, {});
+                        menu(at(0.14), P::Skills, 0, 1, 5, "", false, {});
+                        menu(at(0.20), P::Skills, 1, -1, 5, "", false, {});
+                        menu(at(0.26), P::Skills, 0, -1, 5, "", false, {});
+                        menu(at(0.31), P::Actions, 0, -1, 0, "", false, {});
+                        menu(at(0.36), P::Items, 0, -1, 3, "", false, {});
+                        menu(at(0.41), P::Actions, 0, -1, 0, "", false, {});
+                        menu(at(0.46), P::Gradient, 0, -1, 0, "", false, {});
+                        menu(at(0.51), P::Actions, 0, -1, 0, "", false, {});
+                        const P page = ac.action_type == 5 ? P::Skills : ac.action_type == 3 ? P::Items : P::Actions;
+                        std::vector<proto::Unit> cursor;
+                        if (mv.is_object()) {
+                            const json::Value& list = ac.action_type == 3 && mv["item_targets"].size() > 0 ? mv["item_targets"] : mv["targets"];
+                            for (size_t k = 0; k < list.size(); ++k) if (auto u = unit_of(list[k].as_string(""))) cursor.push_back(*u);
+                        }
+                        if (cursor.empty()) cursor = shown;
+                        if (cursor.empty()) cursor = {{proto::ActorKind::Enemy, 0}};
+                        if (page != P::Actions) menu(at(0.55), page, 0, -1, ac.action_type, "", false, {});
+                        menu(at(0.60), page, 0, -1, ac.action_type, ac.secondary, true, {cursor.front()});
+                        menu(at(0.65), page, 0, -1, ac.action_type, "", false, {});   // retour : ciblage annulé
+                        menu(at(0.70), page, 0, -1, ac.action_type, ac.secondary, true, {cursor.front()});
+                        for (size_t k = 0; k < cursor.size(); ++k)
+                            menu(at(0.74 + 0.16 * static_cast<double>(k) / static_cast<double>(cursor.size())), page, 0, -1, ac.action_type, ac.secondary, true, {cursor[k]});
+                        menu(at(0.93), page, 0, -1, ac.action_type, ac.secondary, true, shown.empty() ? std::vector<proto::Unit>{cursor.front()} : shown);
+                    }
                     later.emplace_back(act_at, ac);
                 } else {
                     lp->send(ac);
@@ -455,6 +510,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++counts["pauses"];
             } else if (std::get_if<proto::IntentPreview>(&m)) {
                 ++counts["intent_previews_received"];   // aperçu des actions des héros de l'hôte
+            } else if (std::get_if<proto::MenuState>(&m)) {
+                ++counts["menu_states_received"];
             } else if (std::get_if<proto::AimView>(&m)) {
                 ++counts["aim_views_received"];
             } else if (auto* pc = std::get_if<proto::PilotChange>(&m)) {
@@ -736,7 +793,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                 } else if (std::holds_alternative<proto::NarrativeState>(l.msg) || std::holds_alternative<proto::PauseState>(l.msg) ||
                            std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg) ||
                            std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg) ||
-                           std::holds_alternative<proto::IntentPreview>(l.msg) || std::holds_alternative<proto::AimView>(l.msg)) {
+                           std::holds_alternative<proto::IntentPreview>(l.msg) || std::holds_alternative<proto::AimView>(l.msg) ||
+                           std::holds_alternative<proto::MenuState>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;

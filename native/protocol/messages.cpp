@@ -167,6 +167,11 @@ void encode_payload(const Message& m, wire::Writer& w)
         } else if constexpr (std::is_same_v<T, AimView>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u32(x.t_ms);
             w.f64(x.x); w.f64(x.y); w.f64(x.z); w.f64(x.pitch); w.f64(x.yaw); w.f64(x.fov);
+        } else if constexpr (std::is_same_v<T, MenuState>) {
+            w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u16(x.seq); w.u8(static_cast<uint8_t>(x.page)); w.u8(x.column);
+            w.u8(static_cast<uint8_t>(x.hover)); w.u8(x.action_type); w.str(x.secondary); w.boolean(x.targeting); w.u8(x.targeting_type);
+            w.u16(static_cast<uint16_t>(x.targets.size()));
+            for (auto& u : x.targets) w_unit(w, u);
         } else {
             static_assert(always_false<T>, "message non géré");
         }
@@ -368,6 +373,17 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         if (x.fov < 0 || x.fov > 180) r.fail();
         return finish(x);
     }
+    case MsgType::MenuState: {
+        MenuState x; x.battle_id = r.u32(); x.turn = r.u32(); x.spot = r.u8(); x.seq = r.u16();
+        const uint8_t page = r.u8();
+        x.column = r.u8(); x.hover = static_cast<int8_t>(r.u8()); x.action_type = r.u8();
+        if (page > static_cast<uint8_t>(MenuPage::FreeAim) || x.column > 1 || x.hover < -1 || x.hover > 15 || x.action_type > 6) r.fail();
+        x.page = static_cast<MenuPage>(page);
+        x.secondary = r.str(128); x.targeting = r.boolean(); x.targeting_type = r.u8();
+        const uint16_t n = r.count(kMaxUnits);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) x.targets.push_back(r_unit(r));
+        return finish(x);
+    }
     }
     err = "unknown message type " + std::to_string(static_cast<unsigned>(t));
     return std::nullopt;
@@ -419,6 +435,7 @@ const char* type_name(MsgType t)
     case MsgType::EconomyDelta: return "EconomyDelta";
     case MsgType::IntentPreview: return "IntentPreview";
     case MsgType::AimView: return "AimView";
+    case MsgType::MenuState: return "MenuState";
     }
     return "?";
 }
@@ -434,7 +451,7 @@ MsgType type_of(const Message& m)
                                         MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState,
                                         MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
                                         MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta,
-                                        MsgType::IntentPreview, MsgType::AimView};
+                                        MsgType::IntentPreview, MsgType::AimView, MsgType::MenuState};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -578,6 +595,13 @@ std::string to_json(const Message& m)
         } else if constexpr (std::is_same_v<T, AimView>) {
             o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("t_ms", x.t_ms)
                 .add("x", x.x).add("y", x.y).add("z", x.z).add("pitch", x.pitch).add("yaw", x.yaw).add("fov", x.fov);
+        } else if constexpr (std::is_same_v<T, MenuState>) {
+            std::string ts = "[";
+            for (size_t i = 0; i < x.targets.size(); ++i) { if (i) ts += ","; ts += unit_json(x.targets[i]); }
+            o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("seq", static_cast<int>(x.seq))
+                .add("page", static_cast<int>(x.page)).add("column", static_cast<int>(x.column)).add("hover", static_cast<int>(x.hover))
+                .add("action", static_cast<int>(x.action_type)).add("secondary", x.secondary).add("targeting", x.targeting)
+                .add("targeting_type", static_cast<int>(x.targeting_type)).raw("targets", ts + "]");
         }
     }, m);
     return o.str();

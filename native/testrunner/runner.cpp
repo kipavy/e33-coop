@@ -96,6 +96,10 @@ struct Scenario {
     bool end_on_battle = false;           // exploration : le test se termine (vert) quand un combat commence
     bool end_on_session_end = false;      // client : le test se termine quand la session est finie et le menu principal atteint (phase 5)
     std::vector<json::Value> explore;     // étapes d'exploration (phase 4) : voir run_explore_step
+    // "spam_local_input": true : pendant le tour de chaque héros d'un autre joueur (avant son action), le « joueur » d'ici
+    // appuie sur des touches de menu et clique (vraies entrées Windows) ; tout effet est une fuite (local_input_leaks).
+    bool spam_local_input = false;
+    double spam_every_s = 0.12;
 };
 
 struct State {
@@ -144,6 +148,20 @@ struct State {
     double next_skip = 0;
     int battles = 0;
     std::vector<std::string> errors;
+    // Entrées d'ici injectées pendant les tours des héros des autres joueurs
+    struct Spam {
+        bool active = false;              // fenêtre d'injection ouverte (tour d'un autre joueur, avant son action)
+        int turn = -1;
+        double turn_t = -1;               // début du tour vu par le runner
+        size_t idx = 0;
+        double next = 0;
+        int up_kind = 0;                  // relâchement à envoyer : 1 touche, 2 clic gauche, 3 clic droit
+        unsigned up_vk = 0;
+        double up_fx = 0, up_fy = 0;
+        double ap0 = -1;
+        int drifts0 = 0;
+        bool ap_leak = false;
+    } spam;
 };
 
 State g;
@@ -218,6 +236,8 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.end_on_battle = v["end_on_battle"].as_bool(false);
     s.end_on_session_end = v["end_on_session_end"].as_bool(false);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
+    s.spam_local_input = v["spam_local_input"].as_bool(false);
+    s.spam_every_s = v["spam_every_s"].as_number(0.12);
     if (s.save.empty() && !s.join && !s.new_game) { err = "scenario needs save (or join, or new_game)"; return false; }
     if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
     return true;
@@ -334,6 +354,7 @@ void finish(bool pass_if_checks_ok, const std::string& reason)
         }
         if (coop::role() == coop::Role::Client) wants["raw_hash_diffs"] = "0";
     }
+    if (g.sc.spam_local_input) { wants["local_input_leaks"] = "0"; wants["local_inputs_injected"] = ">0"; }   // remplaçables par "expect"
     static const char* special[] = {"battle_end", "min_parries_ok", "min_defenses_ok", "defense_commands_obeyed", "min_fails_ok", "max_forced_parries", "min_player_turns"};
     for (const auto& [k, v] : ex.obj) {
         if (std::find_if(std::begin(special), std::end(special), [&](const char* x) { return k == x; }) != std::end(special)) continue;
@@ -588,10 +609,159 @@ void apply_setup()
 
 // --- Hooks -----------------------------------------------------------------------------
 
+// --- Entrées d'ici pendant le tour d'un autre joueur (spam_local_input) ------------------------
+
+// Fenêtre du jeu (UnrealWindow de ce processus).
+HWND game_window()
+{
+    static HWND cached = nullptr;
+    if (cached && IsWindow(cached)) return cached;
+    struct Ctx { DWORD pid; HWND found; } ctx{GetCurrentProcessId(), nullptr};
+    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+        auto* c = reinterpret_cast<Ctx*>(lp);
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        wchar_t cls[64]{};
+        GetClassNameW(h, cls, 64);
+        if (pid == c->pid && std::wstring(cls) == L"UnrealWindow" && IsWindowVisible(h)) { c->found = h; return FALSE; }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+    cached = ctx.found;
+    return cached;
+}
+
+// Une entrée : touche (vk) ou clic (position relative dans la zone client).
+struct Inject { int kind; unsigned vk; double fx, fy; };   // kind : 1 touche, 2 clic gauche, 3 clic droit
+
+// Touches de menu de combat (flèches, validation, Espace, roue F/E/Z/A et leurs places QWERTY, compétences 1-3, retour) et
+// clics sur la roue (gauche du héros), sur l'ennemi, sur la liste et clic droit (retour). Pas Échap ni Tab (menus du jeu).
+const std::vector<Inject>& spam_plan()
+{
+    static const std::vector<Inject> plan = {
+        {1, VK_LEFT, 0, 0}, {1, VK_RETURN, 0, 0}, {2, 0, 0.30, 0.62}, {1, 'E', 0, 0}, {1, VK_RIGHT, 0, 0}, {1, VK_SPACE, 0, 0},
+        {1, 'F', 0, 0}, {2, 0, 0.47, 0.40}, {1, VK_UP, 0, 0}, {1, 'Z', 0, 0}, {1, VK_DOWN, 0, 0}, {2, 0, 0.29, 0.58},
+        {1, 'W', 0, 0}, {1, 'A', 0, 0}, {1, 'Q', 0, 0}, {3, 0, 0.50, 0.50}, {1, '1', 0, 0}, {1, '2', 0, 0}, {1, '3', 0, 0},
+        {2, 0, 0.31, 0.70}, {1, 'R', 0, 0}, {1, VK_BACK, 0, 0}, {2, 0, 0.80, 0.60}, {1, VK_RETURN, 0, 0},
+    };
+    return plan;
+}
+
+bool extended_key(unsigned vk) { return vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN; }
+
+// Vraies entrées Windows : SendInput quand le jeu est au premier plan (chemin du clavier et de la souris réels), sinon
+// messages postés à sa fenêtre (jamais d'entrée envoyée à une autre application).
+void send_key(HWND w, unsigned vk, bool up)
+{
+    const UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    if (GetForegroundWindow() == w) {
+        INPUT in{};
+        in.type = INPUT_KEYBOARD;
+        in.ki.wVk = static_cast<WORD>(vk);
+        in.ki.wScan = static_cast<WORD>(sc);
+        in.ki.dwFlags = (extended_key(vk) ? KEYEVENTF_EXTENDEDKEY : 0) | (up ? KEYEVENTF_KEYUP : 0);
+        SendInput(1, &in, sizeof in);
+        return;
+    }
+    LPARAM lp = 1 | (static_cast<LPARAM>(sc) << 16) | (extended_key(vk) ? (1 << 24) : 0);
+    if (up) lp |= (static_cast<LPARAM>(1) << 30) | (static_cast<LPARAM>(1) << 31);
+    PostMessageW(w, up ? WM_KEYUP : WM_KEYDOWN, vk, lp);
+}
+
+void send_click(HWND w, double fx, double fy, bool right, bool up)
+{
+    RECT rc{};
+    GetClientRect(w, &rc);
+    POINT p{static_cast<LONG>(fx * rc.right), static_cast<LONG>(fy * rc.bottom)};
+    if (GetForegroundWindow() == w) {
+        if (!up) { POINT sp = p; ClientToScreen(w, &sp); SetCursorPos(sp.x, sp.y); }
+        INPUT in{};
+        in.type = INPUT_MOUSE;
+        in.mi.dwFlags = right ? (up ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_RIGHTDOWN) : (up ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN);
+        SendInput(1, &in, sizeof in);
+        return;
+    }
+    const LPARAM lp = MAKELPARAM(p.x, p.y);
+    if (!up) PostMessageW(w, WM_MOUSEMOVE, 0, lp);
+    PostMessageW(w, right ? (up ? WM_RBUTTONUP : WM_RBUTTONDOWN) : (up ? WM_LBUTTONUP : WM_LBUTTONDOWN), up ? 0 : (right ? MK_RBUTTON : MK_LBUTTON), lp);
+}
+
+void input_leak(const std::string& what)
+{
+    ++g.metrics["local_input_leaks"];
+    ++g.metrics["leak:" + what];
+    log().write("tr_input_leak", JsonObj().add("what", what).add("spot", coop::remote_turn_open()), g.turn);
+}
+
+// À chaque image en combat : fenêtre d'injection pendant le tour d'un héros d'un autre joueur (1 s après son début, jusqu'à
+// l'exécution de son action), une entrée toutes les spam_every_s, relâchée à l'image suivante. Effets surveillés : appels
+// de choix d'action non faits par le mod (hooks, voir subscribe), PA du héros, changements de menus non expliqués (miroir).
+void tick_spam()
+{
+    auto& sp = g.spam;
+    const int spot = coop::remote_turn_open();
+    HWND w = game_window();
+    // Relâchement de l'entrée précédente
+    if (sp.up_kind && w && g.t >= sp.next - g.sc.spam_every_s * 0.5) {
+        if (sp.up_kind == 1) send_key(w, sp.up_vk, true);
+        else send_click(w, sp.up_fx, sp.up_fy, sp.up_kind == 3, true);
+        sp.up_kind = 0;
+    }
+    if (spot < 0 || game::pause_menu_visible() || explore::remote_paused()) {
+        if (sp.active) { sp.active = false; log().write("tr_spam", JsonObj().add("on", false), g.turn); }
+        return;
+    }
+    if (sp.turn != g.turn) {
+        if (sp.up_kind && w) { if (sp.up_kind == 1) send_key(w, sp.up_vk, true); else send_click(w, sp.up_fx, sp.up_fy, sp.up_kind == 3, true); }
+        sp = State::Spam{};
+        sp.turn = g.turn;
+        sp.turn_t = g.t;
+    }
+    if (g.t - sp.turn_t < 1.0 || !w) return;
+    UObject* hero = game::find_unit(true, spot);
+    const double ap = ue::get_double(game::stats(hero), STR("CurrentAP"), -1);
+    if (!sp.active) {
+        sp.active = true;
+        sp.ap0 = ap;
+        sp.drifts0 = coop::counter("menu_drifts");
+        ++g.metrics["spam_turns"];
+        log().write("tr_spam", JsonObj().add("on", true).add("spot", spot).add("ap", ap).add("foreground", GetForegroundWindow() == w), g.turn);
+    }
+    if (!sp.ap_leak && sp.ap0 >= 0 && ap != sp.ap0) { sp.ap_leak = true; input_leak("ap_changed"); }
+    if (const int d = coop::counter("menu_drifts"); d > sp.drifts0) { for (int i = sp.drifts0; i < d; ++i) input_leak("menu_drift"); sp.drifts0 = d; }
+    if (g.t < sp.next || sp.up_kind) return;
+    const auto& plan = spam_plan();
+    const Inject in = plan[sp.idx++ % plan.size()];
+    if (in.kind == 1) send_key(w, in.vk, false);
+    else send_click(w, in.fx, in.fy, in.kind == 3, false);
+    sp.up_kind = in.kind;
+    sp.up_vk = in.vk;
+    sp.up_fx = in.fx;
+    sp.up_fy = in.fy;
+    sp.next = g.t + g.sc.spam_every_s;
+    ++g.metrics["local_inputs_injected"];
+}
+
 void subscribe()
 {
     using game::path::fn;
     auto& bus = HookBus::get();
+
+    // Entrées d'ici pendant le tour d'un autre joueur : tout choix d'action qui ne vient pas du mod est une fuite.
+    if (g.sc.spam_local_input) {
+        const std::pair<const wchar_t*, const wchar_t*> watched[] = {
+            {game::path::BattleMgr, L"SelectAction"}, {game::path::BattleMgr, L"SelectSecondaryAction"},
+            {game::path::BattleMgr, L"RequestActionExecution"}, {game::path::BattleMgr, L"OnSelectSkip"}, {game::path::BattleMgr, L"OnSelectFlee"},
+            {game::path::BattleMgr, L"OnSelectSkillMenu"}, {game::path::BattleMgr, L"StartFreeAimFromUI"}, {game::path::BattleMgr, L"OnComboPressed"},
+            {L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_TargetingManager.AC_jRPG_TargetingManager_C:", L"ConfirmTarget"},
+            {L"/Game/Gameplay/Battle/Targeting/BP_TargetingGroup.BP_TargetingGroup_C:", L"OnUIAction"},
+        };
+        for (const auto& [cls, name] : watched) {
+            const std::string n = ue::to_utf8(name);
+            bus.pre(fn(cls, name), [n](HookCtx&, RC::Unreal::UFunction*) {
+                if (g.spam.active && game::mod_call_depth() == 0 && coop::remote_turn_open() >= 0) input_leak(n);
+            });
+        }
+    }
 
     bus.post(fn(game::path::BattleChar, L"OnTurnStart"), [](HookCtx& ctx, RC::Unreal::UFunction*) {
         // Un client coop peut voir le combat (lancé par le module coop) démarrer avant que le runner ait fini
@@ -985,6 +1155,11 @@ void tick(float dt)
         if (g.t - g.session_end_t > 60.0) { finish(true, "session ended (title not reached)"); return; }
         return;
     }
+    // Entrée injectée encore enfoncée hors combat : relâchée.
+    if (g.spam.up_kind && g.phase != Phase::Battle) {
+        if (HWND w = game_window()) { if (g.spam.up_kind == 1) send_key(w, g.spam.up_vk, true); else send_click(w, g.spam.up_fx, g.spam.up_fy, g.spam.up_kind == 3, true); }
+        g.spam.up_kind = 0;
+    }
     // Appuis de QTE programmés (temps réel)
     if (!g.presses.empty() && Clock::now() >= g.presses.front()) {
         g.presses.erase(g.presses.begin());
@@ -1045,6 +1220,7 @@ void tick(float dt)
         break;
     case Phase::Battle:
         tick_free_aim();
+        if (g.sc.spam_local_input && coop::active()) tick_spam();
         // Menu pause que le scénario n'a pas demandé (le jeu se met en pause quand sa fenêtre perd le focus, vu le
         // 2026-10-20 sur p3_party_client) : refermé, sinon le combat reste bloqué jusqu'au délai du test.
         if (!g.sc.manual && g.pause_until <= 0 && g.frame % 15 == 0 && game::pause_menu_visible()) {

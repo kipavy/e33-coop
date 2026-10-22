@@ -63,6 +63,11 @@ bool trigger_battle(const std::wstring& encounter, const std::vector<std::wstrin
 // Dernière rencontre / équipe déclenchées par trigger_battle (vide sinon).
 const std::wstring& last_encounter();
 const std::vector<std::wstring>& last_party();
+// Appels faits par le mod (rejeu d'action, miroir des menus, visée rejouée) : pendant leur durée, mod_call_depth() > 0.
+// Sert à distinguer, dans les hooks, ce que fait le mod de ce que fait le joueur d'ici (test des entrées bloquées).
+struct ModCall { ModCall(); ~ModCall(); ModCall(const ModCall&) = delete; ModCall& operator=(const ModCall&) = delete; };
+int mod_call_depth();
+
 // Fait exécuter une action au personnage courant (type E_jRPG_ActionType, compétence ou objet, cibles).
 // combo_auto_success >= 0 : DEBUG_ComboAutoSuccessCount (réussites automatiques des QTE offensifs).
 bool perform_action(int action_type, const std::wstring& secondary, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err);

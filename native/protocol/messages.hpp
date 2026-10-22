@@ -21,7 +21,8 @@ namespace e33::proto {
 //      (Owners), démarrage de combat coordonné (BattleReady), joueurs (Roster), hash d'exploration (WorldHash) et
 //      resynchro (ResyncRequest), minuteur de tour (BattleStart.turn_timer_s, ActionCommand.forced).
 // Ajouts sans changement de version (un pair plus ancien ignore un type inconnu, le flux reste lisible) :
-//      aperçu de l'action en préparation (IntentPreview), caméra de la visée libre du propriétaire (AimView).
+//      aperçu de l'action en préparation (IntentPreview), caméra de la visée libre du propriétaire (AimView),
+//      état des menus de combat du propriétaire, rejoué dans les menus du jeu chez les autres (MenuState).
 inline constexpr uint16_t kProtocolVersion = 6;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
@@ -29,7 +30,7 @@ enum class MsgType : uint16_t {
     Hello = 1, Welcome = 2, Reject = 3, Bye = 4, Ping = 5, Pong = 6,
     BattleStart = 20, TurnStart = 21, ActionCommand = 22,
     DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, Draws = 28,
-    ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33, IntentPreview = 34, AimView = 35,
+    ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33, IntentPreview = 34, AimView = 35, MenuState = 36,
     SaveOffer = 40, SaveChunk = 41, JoinWait = 42, JoinReady = 43, PilotState = 44, PilotRequest = 45, PilotChange = 46,
     WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52,
     Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
@@ -203,6 +204,24 @@ struct AimView {
     double pitch = 0, yaw = 0;
     double fov = 0;
 };
+// Menus de combat du propriétaire pendant son tour (miroir chez les autres, affichage seulement) : page de la roue,
+// colonne de la liste, bouton survolé, action / compétence choisie, ciblage et cibles. Fiable, à chaque changement
+// (15 fois/s au plus). Rien ici ne lance l'action : elle part toujours par ActionCommand.
+enum class MenuPage : uint8_t { None = 0, Actions = 1, Skills = 2, Items = 3, Gradient = 4, FreeAim = 5 };
+struct MenuState {
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    uint8_t spot = 0;
+    uint16_t seq = 0;                     // croissant dans le tour
+    MenuPage page = MenuPage::None;
+    uint8_t column = 0;                   // liste à deux colonnes : 0 gauche, 1 droite
+    int8_t hover = -1;                    // bouton survolé dans la colonne (0..5), -1 aucun
+    uint8_t action_type = 0;              // E_jRPG_ActionType choisi (0 = rien)
+    std::string secondary;                // compétence ou objet choisi (ciblage en cours), vide sinon
+    bool targeting = false;
+    uint8_t targeting_type = 0;           // E_jRPG_TargetingType
+    std::vector<Unit> targets;
+};
 
 // --- Session et exploration (v5, D12) ----------------------------------------------------------
 // Instantané de la partie de l'hôte (save complète) : annoncé puis envoyé par morceaux, dans l'ordre.
@@ -275,7 +294,7 @@ using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStar
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
                              WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
                              Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk, EconomyDelta,
-                             IntentPreview, AimView>;
+                             IntentPreview, AimView, MenuState>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

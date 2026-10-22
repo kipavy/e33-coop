@@ -27,6 +27,9 @@ bool battle_finalized();
 bool holding();
 // Client : session terminée (hôte parti ou injoignable, refus de version) ; hôte : retour au menu principal.
 bool session_ended();
+// Tour d'un héros d'un autre joueur en cours ici, avant l'exécution de son action (test des entrées bloquées) : son
+// emplacement, -1 sinon.
+int remote_turn_open();
 // Action de ce héros pour le tour courant imposée par l'hôte (minuteur de tour écoulé) : le joueur n'agit plus.
 bool action_forced(int spot);
 // Nom affiché d'un joueur (« vous » pour soi).
