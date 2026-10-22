@@ -32,6 +32,7 @@
 #include "../protocol/messages.hpp"
 #include "../ui/ui.hpp"
 #include "builds.hpp"
+#include "coopsave.hpp"
 #include "explore.hpp"
 #include "state.hpp"
 
@@ -2197,6 +2198,7 @@ void subscribe()
 void subscribe_session()
 {
     HookBus::get().pre(game::path::fn(game::path::CtrlWorld, L"BackToTitleMenu"), [](HookCtx&, UFunction*) {
+        if (s.role != Role::Solo) coopsave::on_quit_to_title();   // hôte d'une copie : dernière copie
         if (s.role == Role::Solo || s.ended) return;
         log().write("session_quit_to_title", JsonObj().add("role", s.role == Role::Host ? "host" : "client"));
         shutdown(s.role == Role::Host ? "host quit to title" : "client quit to title");
@@ -2473,8 +2475,10 @@ void init()
         bn.request_resync = [](const std::string& why) { publish(proto::ResyncRequest{why}); };
         builds::init(s.role == Role::Host, bn);
     }
+    coopsave::init(s.role == Role::Host, [](const char* c, int n) { s.counters[c] += n; });
     subscribe();
     explore::subscribe();
+    coopsave::subscribe();
     subscribe_session();
 }
 
@@ -2683,6 +2687,7 @@ void tick(double dt)
     heartbeat_start();
     steam_tick();
     ui::tick(s.now);
+    coopsave::tick(s.now, !s.ended);   // copie coop (D15) : aussi après la fin de session (retour au menu)
     if (s.ended) {
         // Client : session finie. Message affiché, puis retour au menu principal (la partie chargée est celle de l'hôte).
         if (!s.title_requested && s.now - s.ended_at > 6.0 && game::controller() && !game::main_menu()) {

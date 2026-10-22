@@ -59,6 +59,14 @@ constexpr Entry kTexts[] = {
     {"steam_lobby_failed", "Lobby Steam impossible : {0}", "Steam lobby failed: {0}"},
     {"session_open_steam", "Partie ouverte au coop : F7 pour inviter un ami", "Game open for coop: press F7 to invite a friend"},
     {"steam_no_friend_lobby", "Aucun ami n'a ouvert de partie coop", "No friend has an open coop game"},
+    // Copie coop (D15)
+    {"copy_host_hint", "Coop : F10 pour héberger la partie coop de {0} (copie du {1})", "Coop: press F10 to host {0}'s coop game (copy from {1})"},
+    {"copy_client_hint", "Copie de la partie coop de {0} gardée (du {1}). Pour l'héberger : option de lancement -e33role=host, puis F10 au menu",
+                         "Copy of {0}'s coop game kept (from {1}). To host it: launch option -e33role=host, then F10 at the menu"},
+    {"copy_hosting", "Partie coop de {0} (copie du {1}) : la progression est enregistrée dans la copie coop, pas dans vos sauvegardes",
+                     "{0}'s coop game (copy from {1}): progress is saved in the coop copy, not in your saves"},
+    {"copy_personal_save_blocked", "Coop : écriture dans vos sauvegardes perso bloquée", "Coop: write to your personal saves blocked"},
+    {"copy_error", "Coop : copie de la partie impossible ({0})", "Coop: coop copy unavailable ({0})"},
     {"you", "vous", "you"},
     {"host", "l'hôte", "the host"},
 };

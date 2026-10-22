@@ -1,6 +1,7 @@
 #include "explore.hpp"
 
 #include "builds.hpp"
+#include "coopsave.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -175,6 +176,7 @@ void send_snapshot(uint8_t player)
         log().write("coop_snapshot_error", JsonObj().add("what", err));
         return;
     }
+    coopsave::on_snapshot_sent(bytes);   // hôte d'une copie : la copie suit
     const uint32_t xfer = s.next_xfer++;
     const uint64_t h = fnv64(bytes);
     const std::string level = game::current_level();
@@ -246,6 +248,7 @@ void follow_new_game()
         return;
     }
     start_intro();
+    coopsave::mark_coop_game();   // après StartNewGame (qui lève la garde) : partie de l'hôte, rien dans les saves perso
     bump("new_games_followed");
     ui::set_status("session", "new_game_follow");
     log().write("coop_new_game_followed", JsonObj());
@@ -328,6 +331,7 @@ void on_chunk(const proto::SaveChunk& c)
     if (ec) { bump("join_errors"); log().write("coop_join_error", JsonObj().add("what", "write: " + ec.message())); in.reset(); return; }
     bump("snapshots_received");
     log().write("coop_snapshot_received", JsonObj().add("xfer", in->xfer).add("size", static_cast<int64_t>(in->size)).add("hash", hex64(h)).add("level", in->level));
+    coopsave::on_host_snapshot(in->data, s.net.name_of ? s.net.name_of(0) : std::string(), in->level);   // copie coop (D15)
     s.joined_xfer = in->xfer;
     s.cj = S::ClientJoin::Loading;
     s.cj_since = s.now;
@@ -764,6 +768,9 @@ void world_hash_tick()
     if (differ.empty()) {
         s.world_mismatch_streak = 0;
         log().write("coop_world_hash_ok", JsonObj().add("seq", host.seq));
+        uint64_t all = 0;
+        for (auto& p : host.parts) all = all * 31 + p.value;
+        coopsave::on_world_ok(all, s.net.name_of ? s.net.name_of(0) : std::string());   // état vérifié : copie coop (D15)
         return;
     }
     ++s.world_mismatch_streak;
@@ -1122,6 +1129,7 @@ bool sequence_playing() { return s.sequence_playing; }
 double last_event_age() { return s.now - s.last_event_at; }
 bool remote_paused() { return s.remote_paused_game; }
 double follow_error() { return s.follow_error; }
+bool calm(double secs) { return s.active && !s.ended && quiet(secs); }
 std::string take_world_enemy()
 {
     // Seulement un ennemi du monde qui vient de lancer ce combat (pas un combat scripté : boss, séquence).

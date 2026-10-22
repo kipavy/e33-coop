@@ -1,0 +1,15 @@
+{
+  "name": "p6_coopsave_client",
+  "description": "Sauvegarde côté client (D15) : vrai jeu client qui rejoint le faux hôte (rejeu de p5_resync_host, sans perturbation). L'instantané reçu devient la copie coop (SaveGames\\e33coop\\test-copies\\<hôte>.sav + .json), puis, à la première empreinte d'exploration identique à celle de l'hôte, la copie est refaite localement (-e33copymin=5). Aucune écriture dans les saves perso (autosave tenue coupée).",
+  "join": true,
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait", "until": "coop_copies_from_host", "is": "1", "timeout": 300 },
+    { "do": "wait", "until": "coop_copies_local", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33copymin=5"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p5_resync_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p5_resync_snapshot.sav", "--paced", "1", "--timeout", "600"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "coop_copies_from_host": "1", "coop_copies_local": ">=1", "coop_copy_errors": "0",
+              "coop_personal_saves_blocked": "0", "world_hash_diffs": "0", "coop_autosave_reenabled": "any", "coop_save_requests": "any" }
+}

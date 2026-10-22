@@ -1,0 +1,20 @@
+{
+  "name": "p6_coopsave_host",
+  "description": "Héberger depuis la copie coop (D15) : TEST_B est installée comme copie coop de « TestHost » (SaveGames\\e33coop\\test-copies), puis chargée comme avec F10 au menu principal (rôle hôte, autosave coupée). Le faux client rejoint : l'instantané envoyé remplace la copie. Le pion marche, puis la copie est refaite au calme (-e33copyevery=20). Aucune écriture dans les saves perso.",
+  "save": "e33coop-test/TEST_B",
+  "host_copy": true,
+  "timeout_s": 600,
+  "actions": [{ "type": "flee" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 3 },
+    { "do": "move", "dir": [1, 0], "s": 3 },
+    { "do": "wait", "until": "coop_copies_saved", "is": ">=3", "timeout": 120 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865", "-e33copymin=5", "-e33copyevery=20"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_coopsave.json", "--save-out", "{run}/snapshot-received.sav", "--timeout", "600"] },
+  "expect": { "coop_copy_hosted": "1", "coop_copies_saved": ">=3", "coop_copy_errors": "0", "coop_personal_saves_blocked": "0",
+              "snapshots_sent": "1", "joined_players": "1", "snapshot_errors": "0", "coop_autosave_reenabled": "any", "coop_save_requests": "any" }
+}

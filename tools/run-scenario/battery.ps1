@@ -22,7 +22,8 @@ $all = @(
     "p5_resync_host", "p5_resync_client", "p5_builds_host", "p5_builds_client", "p5_economy_host", "p5_economy_client",
     "p6_steam_selftest",
     "p6_world_host", "p6_world_client", "p6_world2_host", "p6_world2_client",
-    "p6_newgame_host", "p6_newgame_client"
+    "p6_newgame_host", "p6_newgame_client",
+    "p6_coopsave_client", "p6_coopsave_host"
 )
 $list = if ($Only) { $Only -split "," } else { $all }
 $results = @()
