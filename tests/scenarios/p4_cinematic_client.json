@@ -4,6 +4,7 @@
   "join": true,
   "timeout_s": 900,
   "end_on_battle": true,
+  "shots_every_s": 5,
   "explore": [
     { "do": "wait", "until": "barrier_waits", "is": ">=1", "timeout": 600 },
     { "do": "wait", "until": "barrier_releases", "is": ">=1", "timeout": 420 },
@@ -11,5 +12,5 @@
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
   "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p4_cinematic_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p4_cinematic_snapshot.sav", "--paced", "1", "--timeout", "900"] },
-  "expect": { "snapshots_received": "1", "joins_completed": "1", "barrier_waits": ">=1", "barrier_releases": ">=1", "barrier_timeouts": "0", "join_errors": "0" }
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "barrier_waits": ">=1", "barrier_releases": ">=1", "barrier_timeouts": "0", "join_errors": "0", "ui:waiting_players": ">=1" }
 }
