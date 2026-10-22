@@ -2351,7 +2351,9 @@ int connected_players()
 }
 bool session_ok() { return s.role == Role::Solo || (s.role == Role::Host ? true : (s.accepted && !s.rejected)); }
 bool battle_finalized() { return s.battle.finalized; }
-bool holding() { return s.battle.hold; }
+// Essai -e33turndep : début de tour retenu tant que l'état de l'hôte n'est pas là (le joueur n'a pas encore le menu ;
+// le testeur, qui agit directement, attend aussi).
+bool holding() { return s.battle.hold || s.battle.dep_active || s.battle.dep_finish_pending; }
 bool session_ended() { return s.ended; }
 bool action_forced(int spot) { return s.battle.forced.count({s.battle.turn, spot}) > 0; }
 std::string name_of(uint8_t player) { return player_name(player); }
