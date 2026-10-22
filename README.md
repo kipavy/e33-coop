@@ -45,6 +45,9 @@ Dans Expedition 33, le combat au tour par tour repose sur des **réflexes** : pa
 | ![Attaque en combat](docs/img/combat-attaque.jpg) | ![Lumière](docs/img/lumiere.jpg) |
 | Chaque joueur joue les tours de ses personnages et pare les coups qui les visent. | Exploration : un pilote, les autres le suivent, d'une zone à l'autre. |
 
+![Panneau Coop du menu pause](docs/img/panneau-coop.jpg)
+<sub>Le panneau **Coop** du menu pause : qui joue quel personnage (ici Monoco vient d'être donné à l'autre joueur avec **F9** puis **Maj+F9**), et les options du mod.</sub>
+
 ## Fonctionnalités
 
 Les cases cochées passent les tests automatiques. « À valider » signifie : écrit et compilé, en attente d'une vraie partie à deux.
