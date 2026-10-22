@@ -138,7 +138,7 @@ fs::path self_path()
     return buf;
 }
 
-bool game_running()
+bool process_running(const wchar_t* exe)
 {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
@@ -146,10 +146,12 @@ bool game_running()
     pe.dwSize = sizeof pe;
     bool found = false;
     for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
-        if (_wcsicmp(pe.szExeFile, kGameExe) == 0) found = true;
+        if (_wcsicmp(pe.szExeFile, exe) == 0) found = true;
     CloseHandle(snap);
     return found;
 }
+
+bool game_running() { return process_running(kGameExe); }
 
 // --- Jeu -------------------------------------------------------------------------------------------------------------
 std::wstring reg_steam_path()
@@ -383,13 +385,13 @@ bool install_package(const fs::path& win64, const Package& pkg, Progress* pr, st
             return false;
         };
         const bool restart = flag("restart"), update = flag("update");
-        std::vector<const wchar_t*> names;
-        if (restart || update) names.push_back(L"relaunch.ps1");
-        if (update) { names.push_back(L"apply-update.ps1"); names.push_back(L"rollback.ps1"); }
-        fs::create_directories(md / L"remote", ec);
-        for (auto* n : names) fs::copy_file(pkg.dir / L"remote-test" / n, md / L"remote" / n, fs::copy_options::overwrite_existing, ec);
         logline("remote test kept (restart " + std::to_string(restart) + ", update " + std::to_string(update) + ")");
     }
+    // Assistants du test à distance toujours posés : inertes sans remotetest.txt (le mod vérifie les droits du fichier
+    // avant de les lancer). Un remotetest.txt créé à la main après l'installation suffit donc.
+    fs::create_directories(md / L"remote", ec);
+    for (const wchar_t* n : {L"relaunch.ps1", L"apply-update.ps1", L"rollback.ps1"})
+        fs::copy_file(pkg.dir / L"remote-test" / n, md / L"remote" / n, fs::copy_options::overwrite_existing, ec);
     prune_backups(win64);
     logline("installed " + pkg.version + " in " + utf8(win64.wstring()) + (moved.empty() ? "" : " (backup " + utf8(bak.wstring()) + ")"));
     return true;
@@ -557,6 +559,14 @@ fs::path pick_game_folder()
 
 void relaunch_game()
 {
+    // Steam doit voir le jeu fermé (lanceur compris, Apps\1903340\Running à 0 ; lecture seule), sinon « jeu déjà en cours ».
+    for (int i = 0; i < 90; ++i) {
+        DWORD running = 0, size = sizeof running;
+        const bool reg = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam\\Apps\\1903340", L"Running", RRF_RT_REG_DWORD, nullptr, &running, &size) == ERROR_SUCCESS;
+        if (!game_running() && !process_running(L"Expedition33_Steam.exe") && (!reg || running == 0)) break;
+        Sleep(1000);
+    }
+    Sleep(5000);
     logline("relaunch steam://rungameid/1903340");
     ShellExecuteW(nullptr, L"open", L"steam://rungameid/1903340", nullptr, nullptr, SW_SHOWNORMAL);
 }

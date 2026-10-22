@@ -5,6 +5,7 @@
 #include "presence.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <deque>
 #include <filesystem>
@@ -159,7 +160,10 @@ struct S {
     std::optional<proto::WorldHash> pending_world;   // client : dernière empreinte de l'hôte, à comparer au calme
     double pending_world_at = 0;
     int world_mismatch_streak = 0;
-    int perturb_gold = 0;                         // -e33perturbworld=N (test)
+    int world_checks_since_join = 0;              // client : comparaisons faites depuis le dernier instantané chargé
+    std::set<std::string> world_resynced_parts;   // client : parties qui ont déjà valu un nouvel instantané
+    std::set<std::string> world_ignored_parts;    // client : parties qu'un instantané ne répare pas (plus de resynchro)
+    int perturb_gold = 0;                        // -e33perturbworld=N (test)
     double cj_joined_at = 0;
     double waited_since = -1;                     // joueur en retard : les autres ont fini depuis
     double last_world_compute = -1000;            // dernière lecture de l'état d'exploration (hôte et client)
@@ -373,6 +377,7 @@ void client_join_tick()
         s.cj = S::ClientJoin::Joined;
         s.cj_joined_at = s.now;
         s.world_mismatch_streak = 0;
+        s.world_checks_since_join = 0;
         s.last_event_at = s.now;
         const std::string level = game::current_level();
         s.net.publish(proto::JoinReady{s.joined_xfer, level}, true);
@@ -1020,12 +1025,44 @@ void world_hash_tick()
     if (host.level != game::current_level()) { log().write("coop_world_hash_skipped", JsonObj().add("seq", host.seq).add("why", "level")); return; }
     std::map<std::string, reflect::Leaves> leaves;
     const auto mine = world_parts(&leaves);
-    std::string differ;
+    std::string differ, ignored;
     for (auto& hp : host.parts)
         for (auto& mp : mine)
-            if (mp.name == hp.name && mp.value != hp.value) { if (!differ.empty()) differ += ","; differ += mp.name; }
+            if (mp.name == hp.name && mp.value != hp.value) {
+                std::string& to = s.world_ignored_parts.count(mp.name) ? ignored : differ;
+                if (!to.empty()) to += ",";
+                to += mp.name;
+            }
+    const bool first_after_join = s.world_checks_since_join++ == 0;
     bump("world_hashes_compared");
+    if (ignored.find("inventory") != std::string::npos)   // l'écart surveillé est journalisé avec coop_world_hash_diff
+        log().write("coop_inventory_items", JsonObj().add("seq", host.seq).add("items", leaves_line(leaves["inventory"])));
+    // Écart dès la première comparaison après un instantané, sur une partie qui a déjà valu un instantané : recharger
+    // ne le répare pas (par ex. objets liés au compte Steam de l'hôte, retirés au chargement chez nous). Plus de
+    // resynchro pour cette partie (sinon rechargement en boucle) ; les autres parties restent surveillées.
+    if (first_after_join && !differ.empty()) {
+        std::string keep;
+        size_t pos = 0;
+        while (pos <= differ.size()) {
+            const size_t c = differ.find(',', pos);
+            const std::string part = differ.substr(pos, c == std::string::npos ? std::string::npos : c - pos);
+            if (s.world_resynced_parts.count(part)) {
+                s.world_ignored_parts.insert(part);
+                bump("world_parts_ignored");
+                log().write("coop_world_part_ignored", JsonObj().add("part", part).add("seq", host.seq).add("why", "differs right after a snapshot"));
+                if (!ignored.empty()) ignored += ",";
+                ignored += part;
+            } else {
+                if (!keep.empty()) keep += ",";
+                keep += part;
+            }
+            if (c == std::string::npos) break;
+            pos = c + 1;
+        }
+        differ = keep;
+    }
     if (differ.empty()) {
+        if (!ignored.empty()) log().write("coop_world_hash_ok_except", JsonObj().add("seq", host.seq).add("ignored", ignored));
         s.world_mismatch_streak = 0;
         log().write("coop_world_hash_ok", JsonObj().add("seq", host.seq));
         uint64_t all = 0;
@@ -1056,6 +1093,12 @@ void world_hash_tick()
         s.world_mismatch_streak = 0;
         bump("world_resyncs");
         ui::set_status("session", "resyncing");
+        for (size_t pos = 0; pos <= differ.size();) {
+            const size_t c = differ.find(',', pos);
+            s.world_resynced_parts.insert(differ.substr(pos, c == std::string::npos ? std::string::npos : c - pos));
+            if (c == std::string::npos) break;
+            pos = c + 1;
+        }
         s.net.publish(proto::ResyncRequest{"world state differs: " + differ}, true);
         log().write("coop_world_resync", JsonObj().add("parts", differ));
     }

@@ -92,8 +92,16 @@ try {
 }
 
 # Relance et surveillance : le nouveau mod doit ecrire "mod_init" dans un nouveau journal.
+# Steam doit voir le jeu ferme (lanceur compris, Apps\1903340\Running a 0, lecture seule), sinon « jeu deja en cours ».
+$until = (Get-Date).AddSeconds(90)
+while ((Get-Date) -lt $until) {
+    $p = Get-Process "SandFall-Win64-Shipping", "Expedition33_Steam" -ErrorAction SilentlyContinue
+    $r = (Get-ItemProperty "HKCU:\Software\Valve\Steam\Apps\1903340" -ErrorAction SilentlyContinue).Running
+    if (-not $p -and -not $r) { break }
+    Start-Sleep -Seconds 1
+}
+Start-Sleep -Seconds 5
 $t0 = Get-Date
-Start-Sleep -Seconds 3
 Start-Process "steam://rungameid/1903340"
 Log "relaunched, waiting for mod_init"
 $deadline = $t0.AddMinutes(3)
