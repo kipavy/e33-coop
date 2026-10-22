@@ -118,6 +118,7 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u32(x.xfer); w.str(x.level);
         } else if constexpr (std::is_same_v<T, PilotState>) {
             w.u8(x.pilot); w.u32(x.seq); w.str(x.level); w.f64(x.x); w.f64(x.y); w.f64(x.z); w.f64(x.yaw); w.f64(x.vx); w.f64(x.vy); w.f64(x.vz);
+            w.u8(x.move); w.u8(x.custom); w.u8(x.flags); w.str(x.pawn);   // champs finaux facultatifs
         } else if constexpr (std::is_same_v<T, PilotRequest>) {
             w.u8(x.player);
         } else if constexpr (std::is_same_v<T, PilotChange>) {
@@ -298,6 +299,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
     case MsgType::PilotState: {
         PilotState x; x.pilot = r.u8(); x.seq = r.u32(); x.level = r.str(256);
         x.x = r.f64(); x.y = r.f64(); x.z = r.f64(); x.yaw = r.f64(); x.vx = r.f64(); x.vy = r.f64(); x.vz = r.f64();
+        if (r.ok() && !r.at_end()) { x.move = r.u8(); x.custom = r.u8(); x.flags = r.u8(); x.pawn = r.str(128); }   // facultatifs (carte du monde)
         for (double v : {x.x, x.y, x.z, x.yaw, x.vx, x.vy, x.vz}) if (!std::isfinite(v)) r.fail();
         if (x.pilot > 3) r.fail();
         return finish(x);
@@ -554,7 +556,8 @@ std::string to_json(const Message& m)
         else if constexpr (std::is_same_v<T, JoinReady>) { o.add("xfer", x.xfer).add("level", x.level); }
         else if constexpr (std::is_same_v<T, PilotState>) {
             o.add("pilot", static_cast<int>(x.pilot)).add("seq", x.seq).add("level", x.level).add("x", x.x).add("y", x.y).add("z", x.z).add("yaw", x.yaw)
-                .add("vx", x.vx).add("vy", x.vy).add("vz", x.vz);
+                .add("vx", x.vx).add("vy", x.vy).add("vz", x.vz)
+                .add("move", static_cast<int>(x.move)).add("custom", static_cast<int>(x.custom)).add("flags", static_cast<int>(x.flags)).add("pawn", x.pawn);
         } else if constexpr (std::is_same_v<T, PilotRequest>) { o.add("player", static_cast<int>(x.player)); }
         else if constexpr (std::is_same_v<T, PilotChange>) { o.add("pilot", static_cast<int>(x.pilot)); }
         else if constexpr (std::is_same_v<T, WorldInteract>) { o.add("seq", x.seq).add("actor", x.actor).add("instant", x.instant); }

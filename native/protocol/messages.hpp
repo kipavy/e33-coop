@@ -247,7 +247,16 @@ struct PilotState {
     std::string level;
     double x = 0, y = 0, z = 0, yaw = 0;
     double vx = 0, vy = 0, vz = 0;
+    // Champs finaux facultatifs (2026-10-22, carte du monde / Esquie) : absents = inconnus (move = kMoveUnknown).
+    uint8_t move = 0xFF;                  // EMovementMode du pion du pilote (0 aucun, 1 marche, 3 chute, 4 nage, 5 vol, 6 custom)
+    uint8_t custom = 0;                   // CustomMovementMode
+    uint8_t flags = 0;                    // kPilotMount | kPilotWorldMap | kPilotAttached
+    std::string pawn;                     // classe du pion possédé (nom court)
 };
+constexpr uint8_t kMoveUnknown = 0xFF;
+constexpr uint8_t kPilotMount = 1;        // GI.IsMountInUse : sur Esquie
+constexpr uint8_t kPilotWorldMap = 2;     // pion de la carte du monde (bIsWorldMapPawn)
+constexpr uint8_t kPilotAttached = 4;     // pion attaché à un autre acteur (monture)
 struct PilotRequest { uint8_t player = 0; };        // un joueur demande la main
 struct PilotChange { uint8_t pilot = 0; };          // hôte -> tous : nouveau pilote
 // Interaction du pilote avec un objet du monde (PNJ, coffre, porte…), rejouée par les autres instances.
