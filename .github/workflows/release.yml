@@ -1,0 +1,108 @@
+name: release
+# Release joueur : sur un tag vX.Y.Z poussé (X.Y.Z = fichier VERSION), build release du mod et des outils (build.yml),
+# paquet joueur (zip), puis release GitHub avec le zip, l'installateur et SHA256SUMS. Procédure : docs/RELEASE.md.
+# workflow_dispatch : essai à blanc (aucune release, seulement un artefact « release-dry-run »).
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Essai à blanc : artefact seulement, aucune release"
+        type: boolean
+        default: true
+permissions: { contents: read }
+concurrency: { group: "release-${{ github.ref }}", cancel-in-progress: false }
+defaults: { run: { shell: pwsh } }
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          v="$(tr -d ' \r\n' < VERSION)"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION invalide : '$v'"; exit 1; }
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "v$v" ]]; then
+            echo "Le tag ${GITHUB_REF_NAME} ne correspond pas au fichier VERSION ($v) : release refusée."; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+
+  package:
+    needs: [check, build]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions: { contents: write }
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      # UE4SS épinglé (D… : même commit que native/third_party/RE-UE4SS) : fichier de la release experimental-latest
+      # d'UE4SS, empreinte vérifiée (si l'asset est remplacé un jour, la release échoue au lieu de livrer autre chose).
+      UE4SS_URL: https://github.com/UE4SS-RE/RE-UE4SS/releases/download/experimental-latest/UE4SS_v3.0.1-1181-g83330635.zip
+      UE4SS_SHA256: b9a166a756605b21058a64cde93bcaab1a855dba3553e5c7e6ce0fa8fdfad7b9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: e33coop-mod, path: art/mod }
+      - uses: actions/download-artifact@v4
+        with: { name: e33coop-tools, path: art/tools }
+      - name: UE4SS (pinned)
+        run: |
+          New-Item -ItemType Directory -Force dl | Out-Null
+          Invoke-WebRequest $env:UE4SS_URL -OutFile dl/ue4ss.zip
+          $h = (Get-FileHash dl/ue4ss.zip -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:UE4SS_SHA256) { throw "UE4SS : empreinte $h, attendue $env:UE4SS_SHA256" }
+          Expand-Archive dl/ue4ss.zip -DestinationPath dl/ue4ss-std
+      - name: Player package
+        run: |
+          $exe = Get-ChildItem art/tools -Recurse -Filter "Installer E33 Coop.exe" | Select-Object -First 1
+          if (-not $exe) { throw "installateur absent des artefacts" }
+          $info = Get-Content art/mod/build-info.txt -Raw
+          if ($info -notmatch "version=$([regex]::Escape($env:VERSION))") { throw "build-info.txt ne porte pas la version $env:VERSION" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          ./tools/package/make-player-package.ps1 -Package art/mod -Ue4ssDir dl/ue4ss-std -Installer $exe.FullName -Out dist/e33coop-player.zip
+          # Nom de l'asset sans espace (GitHub remplace les espaces par des points) ; libellé « Installer E33 Coop.exe ».
+          Copy-Item $exe.FullName "dist/Installer.E33.Coop.exe"
+          Push-Location dist
+          $lines = foreach ($f in @("e33coop-player.zip", "Installer.E33.Coop.exe")) { "{0}  {1}" -f (Get-FileHash $f -Algorithm SHA256).Hash.ToLower(), $f }
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS", ($lines -join "`n") + "`n")
+          Pop-Location
+          Get-Content dist/SHA256SUMS
+          Get-ChildItem dist | Select-Object Name, Length
+      - name: Release notes
+        run: |
+          $v = $env:VERSION
+          @"
+          **E33 Coop $v** : mod coop en ligne pour *Clair Obscur: Expedition 33* (mod non officiel).
+
+          ### Installer (chaque joueur)
+          1. Télécharger **Installer.E33.Coop.exe** ci-dessous et le lancer (double-clic). Windows peut afficher « Windows a protégé votre ordinateur » (exe non signé) : *Informations complémentaires* › *Exécuter quand même*.
+          2. Cliquer **Installer**. L'installateur trouve le jeu, télécharge le paquet de cette release, vérifie son empreinte SHA-256 et installe UE4SS + le mod.
+          3. Lancer le jeu par Steam, **sans option de lancement**. Inviter : charger sa partie puis **F7**. Rejoindre : au menu principal, **Rejoindre <ami>** ou **F7**, ou accepter l'invitation Steam.
+
+          Mises à jour : automatiques par défaut (installées à la fermeture du jeu). Options : **F9** en jeu.
+          Hors ligne : poser `e33coop-player.zip` et `SHA256SUMS` à côté de l'installateur.
+
+          Empreintes : voir `SHA256SUMS`.
+          "@ | Set-Content dist-notes.md -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dry-run
+          path: |
+            dist/
+            dist-notes.md
+          retention-days: 14
+      - name: GitHub release
+        if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --title "E33 Coop $env:VERSION" --notes-file dist-notes.md --latest `
+            dist/e33coop-player.zip "dist/Installer.E33.Coop.exe#Installer E33 Coop.exe" dist/SHA256SUMS
