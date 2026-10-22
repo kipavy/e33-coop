@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <Unreal/UObject.hpp>
@@ -1129,8 +1130,53 @@ void confirm_click_gate(UObject* context, FFrame& stack, void* result)
     log().write("input_guard_confirm_click_blocked", JsonObj().add("spot", remote_turn_spot()), battle().turn);
 }
 
+// Choix d'action du gestionnaire de combat appelés par le chemin natif (ProcessEvent : délégué d'un bouton CommonUI,
+// entrée) : même porte, mais seuls les appels du mod passent pendant le tour d'un autre joueur.
+struct ChoiceGate
+{
+    const wchar_t* name;
+    UnrealScriptFunction orig = nullptr;
+    bool installed = false;
+};
+ChoiceGate g_choice_gates[] = {{L"SelectAction"}, {L"SelectSecondaryAction"}, {L"OnSelectSkillMenu"}, {L"OnSelectSkip"},
+                               {L"OnSelectFlee"}, {L"RequestActionExecution"}, {L"StartFreeAimFromUI"}};
+
+template <int I>
+void choice_gate(UObject* context, FFrame& stack, void* result)
+{
+    ChoiceGate& g = g_choice_gates[I];
+    if (game::mod_call_depth() > 0 || !confirm_must_block()) { g.orig(context, stack, result); return; }
+    bump("input_guard_choices_blocked");
+    static int logged = 0;
+    if (logged++ < 20) log().write("input_guard_choice_blocked", JsonObj().add("fn", ue::to_utf8(g.name)).add("spot", remote_turn_spot()), battle().turn);
+}
+
+template <int... I>
+void install_choice_gates_impl(std::integer_sequence<int, I...>)
+{
+    const UnrealScriptFunction thunks[] = {&choice_gate<I>...};
+    for (int i = 0; i < static_cast<int>(sizeof...(I)); ++i) {
+        ChoiceGate& g = g_choice_gates[i];
+        if (g.installed) continue;
+        const std::wstring path = std::wstring(game::path::BattleMgr) + g.name;
+        UFunction* f = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path.c_str());
+        if (!f || !f->GetFuncPtr()) continue;
+        g.orig = f->GetFuncPtr();
+        f->SetFuncPtr(thunks[i]);
+        g.installed = true;
+        log().write("input_guard_choice_gate", JsonObj().add("fn", ue::to_utf8(g.name)));
+    }
+}
+
+void install_choice_gates()
+{
+    if (!g_guard) return;
+    install_choice_gates_impl(std::make_integer_sequence<int, static_cast<int>(std::size(g_choice_gates))>{});
+}
+
 void install_confirm_click_gate()
 {
+    install_choice_gates();
     if (g_confirm_click_installed || !g_guard) return;
     UFunction* f = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, kConfirmClickPath);
     if (!f || !f->GetFuncPtr()) return;
@@ -1214,12 +1260,15 @@ void subscribe()
         bus.pre(fn(bm, name), [](HookCtx&, UFunction*) { if (confirm_must_block()) hold_targeting(targeting_manager()); });
         bus.post(fn(bm, name), [](HookCtx&, UFunction*) { if (!g_targeting_held.empty()) release_targeting(targeting_manager()); });
     }
-    // Diagnostic : d'où part une action lancée pendant le tour d'un autre joueur sans sa commande.
-    bus.pre(fn(bm, L"RequestActionExecution"), [](HookCtx& ctx, UFunction*) {
-        if (!confirm_must_block()) return;
-        static int logged = 0;
-        if (logged++ < 30) log().write("input_guard_execution_callers", JsonObj().raw("callers", script_callers(ctx.TheStack)), battle().turn);
-    });
+    // Diagnostic : d'où part un choix ou une action pendant le tour d'un autre joueur sans venir du mod.
+    for (const wchar_t* name : {L"RequestActionExecution", L"SelectAction", L"SelectSecondaryAction", L"OnSelectSkillMenu"}) {
+        const std::string n = ue::to_utf8(name);
+        bus.pre(fn(bm, name), [n](HookCtx& ctx, UFunction*) {
+            if (game::mod_call_depth() > 0 || !confirm_must_block()) return;
+            static int logged = 0;
+            if (logged++ < 40) log().write("input_guard_callers", JsonObj().add("fn", n).raw("callers", script_callers(ctx.TheStack)), battle().turn);
+        });
+    }
     bus.post(fn(bm, L"RequestActionExecution"), [](HookCtx&, UFunction*) {
         if (!g_guard || game::mod_call_depth() > 0 || remote_turn_spot() < 0) return;
         log().write("input_guard_execution_leak", JsonObj(), battle().turn);   // diagnostic : la confirmation a quand même lancé l'action
