@@ -1,10 +1,12 @@
 name: release
 # Release joueur : sur un tag vX.Y.Z poussé (X.Y.Z = fichier VERSION), build release du mod et des outils (build.yml),
 # paquet joueur (zip), puis release GitHub avec le zip, l'installateur et SHA256SUMS. Procédure : docs/RELEASE.md.
-# workflow_dispatch : essai à blanc (aucune release, seulement un artefact « release-dry-run »).
+# Essai à blanc (aucune release, seulement un artefact « release-dry-run ») : workflow_dispatch (une fois ce fichier
+# sur la branche par défaut), ou push d'une branche release-dry-run/<nom> (à supprimer ensuite).
 on:
   push:
     tags: ["v*.*.*"]
+    branches: ["release-dry-run/**"]
   workflow_dispatch:
     inputs:
       dry_run:
