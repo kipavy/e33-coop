@@ -12,6 +12,7 @@ Chacun joue sur son PC, avec son propre jeu. Pas de streaming vidéo : les parti
 <img src="https://img.shields.io/badge/joueurs-2%E2%80%933-3b82f6" alt="2 à 3 joueurs">
 <img src="https://img.shields.io/badge/C%2B%2B-UE4SS-00599c?logo=cplusplus" alt="C++ UE4SS">
 <img src="https://img.shields.io/badge/r%C3%A9seau-Steam%20P2P-171a21?logo=steam" alt="Steam P2P">
+<a href="LICENSE"><img src="https://img.shields.io/badge/licence-GPL--3.0-blue" alt="Licence GPL-3.0"></a>
 <a href="https://ko-fi.com/kipavy"><img src="https://img.shields.io/badge/Ko--fi-soutenir-ff5e5b?logo=ko-fi&logoColor=white" alt="Soutenir sur Ko-fi"></a>
 
 </div>
@@ -148,6 +149,14 @@ tools/
   - [`docs/DECISIONS.md`](docs/DECISIONS.md) : les décisions ;
   - [`docs/GAME-INTERNALS.md`](docs/GAME-INTERNALS.md) : les fonctions du jeu utilisées ;
   - [`docs/REMOTE-TEST.md`](docs/REMOTE-TEST.md) : le mode test à distance.
+
+## Licence
+
+Copyright © 2026 Killian ([kipavy](https://github.com/kipavy)).
+
+Le code de ce dépôt est distribué sous la licence **[GNU GPL v3.0](LICENSE)**. Vous pouvez l'utiliser, l'étudier, le modifier et le redistribuer. Toute version modifiée que vous distribuez doit rester sous GPL v3, avec son code source.
+
+La licence couvre le code du mod uniquement. *Clair Obscur: Expedition 33* et ses contenus appartiennent à leurs ayants droit. UE4SS est distribué sous sa propre licence (MIT).
 
 ## Soutenir
 
