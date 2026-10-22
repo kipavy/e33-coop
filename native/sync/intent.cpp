@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <tuple>
 #include <vector>
 
@@ -266,6 +267,10 @@ int hovered(UObject* wheel, int column)
 }
 
 bool targeting_on(const Hud& h) { return ue::get_bool(h.tm, STR("TargetingEnabled?")); }
+// Pré-ciblage : sur la roue des actions, le jeu garde le curseur sur un ennemi dès le début du tour (TargetingEnabled?
+// vrai aussi). Ce n'est pas le ciblage d'une action choisie (vu le 2026-10-22, p7_menumirror_host : le miroir
+// l'« annulait » en boucle et ne passait jamais aux pages ni aux colonnes).
+bool pretargeting(const Hud& h) { return ue::get_bool(h.tm, STR("IsPretargeting")); }
 std::vector<UObject*> targeted(const Hud& h) { return targeting_on(h) ? ue::get_object_array(h.tm, STR("TargetedCharacters")) : std::vector<UObject*>{}; }
 
 bool same_set(std::vector<UObject*> a, std::vector<UObject*> b)
@@ -312,7 +317,7 @@ void poll_menu(double now)
     }
     m.action_type = l->action;
     m.secondary = l->secondary;
-    m.targeting = targeting_on(h);
+    m.targeting = targeting_on(h) && !pretargeting(h);   // ciblage d'une action choisie seulement (cibles : pré-ciblage compris)
     m.targeting_type = static_cast<uint8_t>(ue::get_int(h.tm, STR("SelectedTargetingType"), 0));
     for (UObject* t : targeted(h))
         if (t && m.targets.size() < 16) m.targets.push_back(sync::unit_of(t));
@@ -338,6 +343,7 @@ struct Mirror {
     double selected_at = -10;
     std::map<std::string, int> tries;       // essais par étape (le jeu peut refuser : pas de boucle sans fin)
     bool gave_up = false;                   // une partie n'a pas pu être rejouée : ligne de texte pour ce tour
+    int cancel_game = 0;                    // retours en arrière sur un ciblage que le miroir n'a pas ouvert (ce tour)
     bool acted = false;                     // le miroir a changé les menus depuis la dernière remise à zéro
     bool released = false;
     double release_t0 = -1, released_at = -1;
@@ -352,6 +358,14 @@ struct Mirror {
     std::vector<UObject*> targets;
 };
 Mirror g_mir;
+
+// Ciblage d'une action choisie (attaque, compétence, objet) : pas le pré-ciblage de la roue des actions, sauf si le
+// miroir vient lui-même d'ouvrir un ciblage (au cas où le jeu laisserait IsPretargeting levé).
+bool selection_targeting(const Hud& h) { return targeting_on(h) && (!pretargeting(h) || !g_mir.selected.empty()); }
+
+// Garde des entrées (plus bas) : entrées du ciblage du jeu retirées tout de suite (après un choix rejoué par le miroir).
+bool block_targeting_input(double now, bool force);
+bool can_block_targeting();
 
 bool attempt(const std::string& step, int max = 3)
 {
@@ -494,16 +508,27 @@ bool mirror_step(double now, const Hud& h)
     }
     const auto& w = g_mir.want;
     const MenuPage page = active_page(h);
-    const bool tgt = targeting_on(h);
     // Ciblage voulu : attaque, ou compétence / objet choisi. Visée libre : rien dans les menus (le rejeu de la visée suit).
     const bool want_tgt = w.targeting && w.page != MenuPage::FreeAim &&
                           (w.action_type == game::ActAttack || ((w.action_type == game::ActSkill || w.action_type == game::ActItem) && !w.secondary.empty()));
     const std::string key = std::to_string(w.action_type) + "|" + w.secondary;
-    if (!tgt && now - g_mir.selected_at > 0.6) g_mir.selected.clear();   // ciblage refermé (par le jeu ou par nous)
+    if (!targeting_on(h) && now - g_mir.selected_at > 0.6) g_mir.selected.clear();   // ciblage refermé (par le jeu ou par nous)
+    // Ciblage d'une action choisie ici (le pré-ciblage de la roue des actions ne compte pas : il n'empêche ni pages ni colonnes).
+    bool tgt = selection_targeting(h);
+    // Ciblage que le miroir n'a pas ouvert et qu'un retour en arrière ne referme pas (pré-ciblage mal reconnu) : celui du
+    // jeu, laissé tel quel ; il ne bloque plus les pages ni les colonnes.
+    if (tgt && g_mir.selected.empty() && g_mir.cancel_game >= 2) {
+        if (g_mir.cancel_game++ == 2)
+            log().write("menu_mirror_game_targeting", JsonObj().add("pretargeting", pretargeting(h)).add("page", static_cast<int>(page)), g_mir.turn);
+        tgt = false;
+    }
     // 1. Retour en arrière : ciblage plus voulu, ou ouvert pour une autre action / compétence.
     if (tgt && (!want_tgt || g_mir.selected != key)) {
-        if (!attempt("cancel:" + g_mir.selected)) return false;
+        if (g_mir.selected.empty()) ++g_mir.cancel_game;
+        else if (!attempt("cancel:" + g_mir.selected)) return false;
         mod_call(now, h.bm, STR("OnCancelTargeting"), "cancel_targeting");
+        g_mir.selected.clear();
+        g_mir.next_step = now + 0.4;   // animation de retour (pas de second retour en arrière avant)
         bump("menu_mirror_cancels");
         return true;
     }
@@ -524,6 +549,13 @@ bool mirror_step(double now, const Hud& h)
     //    du jeu. Jamais RequestActionExecution ni ConfirmTarget : la confirmation vient seulement de la commande.
     if (want_tgt && !tgt) {
         if (g_mir.selected == key) return false;   // ciblage en cours d'ouverture
+        // Un ciblage ouvert ici doit rester sourd aux entrées d'ici (une touche y confirmait l'action du héros d'un autre
+        // joueur, p7_menumirror_host du 2026-10-22) : sans de quoi retirer ses entrées, pas de ciblage rejoué (ligne de texte).
+        if (g_guard && !can_block_targeting()) {
+            if (g_mir.tries["no_guard"]++ == 0) log().write("menu_mirror_no_guard", JsonObj().add("what", "UnregisterTargetingInput"), g_mir.turn);
+            g_mir.gave_up = true;
+            return false;
+        }
         if (!attempt("select:" + key)) return false;
         clear_hover(now);
         bool ok = false;
@@ -537,6 +569,7 @@ bool mirror_step(double now, const Hud& h)
                 ok = c && c.set_fname(STR("SelectedSecondaryAction"), sec.c_str()).invoke();
             }
         }
+        if (g_guard) block_targeting_input(now, true);   // dans la même image que l'ouverture du ciblage
         mark_call(now, "select", "SelectAction/SelectSecondaryAction", ok);
         g_mir.selected = key;
         g_mir.selected_at = now;
@@ -579,16 +612,94 @@ int remote_turn_spot()
 // Entrées d'ici pendant le tour d'un héros d'un autre joueur : en plus des contextes Enhanced Input retirés par le module
 // coop, navigation d'interface du jeu (BP_UINavigationComponent : flèches, validation, retour, ciblage) et clics sur la
 // roue 3D (LGUIWorldSpaceRaycaster) coupés. Rendus tels quels à la fin du tour, ou quand le menu pause est ouvert.
-struct Guard { bool on = false; UObject* nav = nullptr; bool nav_prev = false; bool nav_set = false; UObject* rc = nullptr; double next = 0; };
+// En plus (2026-10-22, p7_menumirror_host : une touche ou un clic injecté confirmait le ciblage ouvert par le miroir et
+// lançait l'action du héros de l'autre joueur ici) : entrées du ciblage du jeu retirées (WBP_HUD_BattleScreen :
+// UnregisterTargetingInput, à chaque image où le jeu les a remises) et invites cliquables du tour (Confirmer / Retour du
+// ciblage, Passer / Fuir) désactivées. Garde réarmée (et comptée) à chaque tour d'un héros d'un autre joueur.
+struct Guard {
+    bool on = false;
+    uint32_t battle = 0, turn = 0;
+    UObject* nav = nullptr; bool nav_prev = false; bool nav_set = false;
+    UObject* rc = nullptr;
+    std::vector<UObject*> disabled;         // invites désactivées par la garde (réactivées à la fin)
+    double next = 0;
+    double next_unreg = 0; int unreg_tries = 0; bool unreg_logged = false;
+};
 Guard g_guard_state;
+
+UObject* battle_screen() { return ue::get_object(game::battle_manager(), STR("BattleScreenWidget")); }
+
+// Entrées du ciblage du jeu retirées si le jeu les a enregistrées (IsTargetingRegistered). force : appel même sans
+// le drapeau (juste après un choix rejoué par le miroir). false si l'écran de combat ou la fonction manque.
+bool block_targeting_input(double now, bool force)
+{
+    auto& g = g_guard_state;
+    UObject* bs = battle_screen();
+    if (!bs) return false;
+    const bool registered = ue::get_bool(bs, STR("IsTargetingRegistered"));
+    // Chaque image : simple lecture du drapeau ; l'appel seulement s'il est levé (au plus 20 fois par tour s'il ne
+    // baisse jamais : on n'insiste pas à chaque image).
+    if (!force && (!registered || now < g.next_unreg || g.unreg_tries >= 20)) return true;
+    ue::Call c(bs, STR("UnregisterTargetingInput"));
+    if (!c) return false;
+    g.next_unreg = now + 0.05;
+    ++g.unreg_tries;
+    { game::ModCall mod; c.invoke(); }
+    bump("input_guard_targeting_unregistered");
+    if (!g.unreg_logged) {
+        g.unreg_logged = true;
+        log().write("input_guard_targeting", JsonObj().add("registered", registered).add("after", ue::get_bool(bs, STR("IsTargetingRegistered"))).add("force", force),
+                    battle().turn);
+    }
+    return true;
+}
+
+bool can_block_targeting()
+{
+    UObject* bs = battle_screen();
+    return bs && static_cast<bool>(ue::Call(bs, STR("UnregisterTargetingInput")));
+}
+
+// Invites cliquables du tour (boutons CommonUI de l'écran de combat) : désactivées pendant la garde.
+void disable_prompts(Guard& g)
+{
+    UObject* bs = battle_screen();
+    for (const wchar_t* name : {STR("WBP_HUD_TargetingControls"), STR("WBP_BattleInput_PlayerTurn")}) {
+        UObject* w = ue::get_object(bs, name);
+        if (!w || std::find(g.disabled.begin(), g.disabled.end(), w) != g.disabled.end()) continue;
+        ue::Call get(w, STR("GetIsEnabled"));
+        ue::Call set(w, STR("SetIsEnabled"));
+        // Paramètre introuvable : jamais désactivée (on ne pourrait pas la rendre). Déjà désactivée par le jeu : rien à rendre.
+        if (!get || !set || !set.param_property(STR("bInIsEnabled")) || !get.invoke() || !get.out_bool(STR("ReturnValue"))) continue;
+        { game::ModCall mod; set.set_bool(STR("bInIsEnabled"), false).invoke(); }
+        g.disabled.push_back(w);
+    }
+}
+
+void enable_prompts(Guard& g)
+{
+    UObject* bs = battle_screen();
+    for (const wchar_t* name : {STR("WBP_HUD_TargetingControls"), STR("WBP_BattleInput_PlayerTurn")}) {
+        UObject* w = ue::get_object(bs, name);
+        if (!w || std::find(g.disabled.begin(), g.disabled.end(), w) == g.disabled.end()) continue;   // HUD recréé : rien à rendre
+        ue::Call set(w, STR("SetIsEnabled"));
+        if (set) { game::ModCall mod; set.set_bool(STR("bInIsEnabled"), true).invoke(); }
+    }
+    g.disabled.clear();
+}
 
 void guard_tick(double now, bool remote)
 {
     auto& g = g_guard_state;
     const bool want = g_guard && remote && !game::pause_menu_visible();
     if (want) {
-        if (g.on && now < g.next) return;
+        const BattleRef b = battle();
+        const bool rearm = g.on && (g.battle != b.id || g.turn != b.turn);
+        if (rearm) { g.next = 0; g.unreg_tries = 0; g.unreg_logged = false; }   // nouveau tour : le jeu a pu tout remettre
+        block_targeting_input(now, false);   // à chaque image : le ciblage peut s'ouvrir à tout moment
+        if (g.on && !rearm && now < g.next) return;
         g.next = now + 0.5;
+        disable_prompts(g);
         UObject* nav = ue::get_object(game::controller(), STR("BP_UINavigationComponent"));
         if (nav != g.nav) { g.nav = nav; g.nav_set = false; }
         if (nav && !ue::get_bool(nav, STR("DisableNavigation"))) {
@@ -604,14 +715,18 @@ void guard_tick(double now, bool remote)
             if (c) { game::ModCall mod; c.invoke(); }
             g.rc = rc;
         }
-        if (!g.on) {
+        if (!g.on || rearm) {
             g.on = true;
+            g.battle = b.id;
+            g.turn = b.turn;
             bump("input_guards");
-            log().write("input_guard", JsonObj().add("on", true).add("nav", nav != nullptr).add("raycaster", rc != nullptr), battle().turn);
+            log().write("input_guard", JsonObj().add("on", true).add("rearm", rearm).add("nav", nav != nullptr).add("raycaster", rc != nullptr)
+                                           .add("prompts_disabled", static_cast<int64_t>(g.disabled.size())), b.turn);
         }
         return;
     }
     if (!g.on) return;
+    enable_prompts(g);
     UObject* nav = ue::get_object(game::controller(), STR("BP_UINavigationComponent"));
     if (nav && nav == g.nav && g.nav_set) ue::set_bool(nav, STR("DisableNavigation"), g.nav_prev);
     UObject* rc = ue::get_object(ue::get_object(game::battle_manager(), STR("LGUI_Actor_BattleWheels")), STR("LGUIWorldSpaceRaycaster"));
@@ -901,9 +1016,11 @@ bool mirror_release(double now)
     const Hud h = hud();
     clear_hover(now);
     // Ciblage refermé, puis roue revenue à la page des actions : l'état d'avant le miroir (celui du début du tour).
-    if (h.tm && targeting_on(h) && g_mir.tries["rel_cancel"]++ < 3) {
+    // Le pré-ciblage de la roue des actions fait partie de cet état : pas d'annulation pour lui.
+    if (h.tm && selection_targeting(h) && g_mir.tries["rel_cancel"]++ < 3) {
         mod_call(now, h.bm, STR("OnCancelTargeting"), "release_cancel");
-        g_mir.next_step = now + kMirrorStepS;
+        g_mir.selected.clear();
+        g_mir.next_step = now + 0.3;
         return false;
     }
     const MenuPage home = g_mir.base != MenuPage::None ? g_mir.base : MenuPage::Actions;
@@ -956,6 +1073,50 @@ void subscribe()
     // Action lancée : l'aperçu s'arrête (l'action elle-même part par le module coop).
     for (const wchar_t* name : {L"RequestActionExecution", L"OnSelectSkip", L"OnSelectFlee"})
         bus.pre(fn(bm, name), [](HookCtx&, UFunction*) { if (Local* l = local_turn()) l->done = true; });
+
+    // Garde des entrées, dernier recours : une confirmation de cible qui ne vient pas du mod pendant le tour du héros d'un
+    // autre joueur (avant sa commande) est une entrée d'ici qui a fuité. Un crochet UE4SS ne peut pas empêcher l'appel :
+    // le ciblage est refermé juste avant (BM.OnCancelTargeting), pour que la confirmation n'ait plus rien à lancer.
+    bus.pre(fn(L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_TargetingManager.AC_jRPG_TargetingManager_C:", L"ConfirmTarget"),
+            [](HookCtx& ctx, UFunction*) {
+        if (!g_guard || game::mod_call_depth() > 0) return;
+        const int spot = remote_turn_spot();
+        if (spot < 0) return;
+        const BattleRef b = battle();
+        if ((g_net.action_known && g_net.action_known(b.turn, spot)) || (g_net.remote_aim_active && g_net.remote_aim_active())) return;
+        bump("input_guard_confirms_neutralized");
+        log().write("input_guard_confirm", JsonObj().add("spot", spot).add("targeting", ue::get_bool(ctx.Context, STR("TargetingEnabled?")))
+                                               .add("pretargeting", ue::get_bool(ctx.Context, STR("IsPretargeting"))).add("mirror_selected", g_mir.selected), b.turn);
+        ue::Call c(game::battle_manager(), STR("OnCancelTargeting"));
+        if (c) { game::ModCall mod; c.invoke(); }
+        g_mir.selected.clear();
+    });
+    bus.post(fn(bm, L"RequestActionExecution"), [](HookCtx&, UFunction*) {
+        if (!g_guard || game::mod_call_depth() > 0 || remote_turn_spot() < 0) return;
+        log().write("input_guard_execution_leak", JsonObj(), battle().turn);   // diagnostic : la confirmation a quand même lancé l'action
+    });
+    // Diagnostic : chemin pris par une entrée d'ici vers la confirmation ou le retour du ciblage pendant le tour d'un autre
+    // joueur (navigation d'interface du jeu, invite cliquable, bouton CommonUI). Au plus 20 lignes par fonction et par lancement.
+    const std::pair<const wchar_t*, const wchar_t*> routes[] = {
+        {L"/Game/Gameplay/UINavigation/BP_UINavigationComponent.BP_UINavigationComponent_C:", L"InputAction_UI_Confirm"},
+        {L"/Game/Gameplay/UINavigation/BP_UINavigationComponent.BP_UINavigationComponent_C:", L"InputAction_UI_Cancel"},
+        {L"/Game/Gameplay/UINavigation/BP_UINavigationComponent.BP_UINavigationComponent_C:", L"OnElementAction"},
+        {L"/Game/UI/Widgets/HUD_Battle/Buttons/WBP_HUD_Battle_TargetingControls.WBP_HUD_Battle_TargetingControls_C:", L"OnUIAction"},
+        {L"/Game/UI/Widgets/HUD_Battle/Buttons/WBP_HUD_Battle_TargetingControls.WBP_HUD_Battle_TargetingControls_C:",
+         L"BndEvt__WBP_HUD_CancelButton_WBP_GM_PromptGeneric_K2Node_ComponentBoundEvent_1_CommonButtonBaseClicked__DelegateSignature"},
+        {L"/Game/UI/Widgets/HUD_Battle/WBP_HUD_BattleScreen.WBP_HUD_BattleScreen_C:",
+         L"BndEvt__WBP_HUD_BattleScreen_WBP_HUD_TargetingControls_K2Node_ComponentBoundEvent_3_OnConfirmClicked__DelegateSignature"},
+        {L"/Game/UI/Widgets/HUD_Battle/WBP_HUD_BattleScreen.WBP_HUD_BattleScreen_C:", L"RegisterTargetingInput"},
+    };
+    for (const auto& [cls, name] : routes) {
+        const std::string n = ue::to_utf8(name).substr(0, 48);
+        auto count = std::make_shared<int>(0);
+        bus.pre(fn(cls, name), [n, count](HookCtx&, UFunction*) {
+            if (*count >= 20 || remote_turn_spot() < 0) return;
+            ++*count;
+            log().write("input_route", JsonObj().add("fn", n).add("mod", game::mod_call_depth() > 0).add("guard", g_guard_state.on), battle().turn);
+        });
+    }
 }
 
 void receive(const proto::IntentPreview& m)
