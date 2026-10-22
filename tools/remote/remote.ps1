@@ -2,7 +2,8 @@
 # Depose une commande dans ue4ss\Mods\E33Coop\remote\inbox\ ; le mod de l'hote l'envoie au joueur par Steam et ecrit
 # la reponse (et les fichiers recus) dans remote\outbox\<id>\. Le jeu de l'hote doit tourner.
 #   remote.ps1 status
-#   remote.ps1 fetch-logs [-Count 2]          derniers journaux du mod, UE4SS.log, saves coop -> outbox\<id>\files
+#   remote.ps1 fetch-logs [-Count 2]          derniers journaux du mod, UE4SS.log, saves coop -> runs\remote\<id>\files
+# Chaque réponse est recopiée du dossier outbox du mod vers runs\remote\<id>\ (le dossier du mod est effacé par reset-env).
 #   remote.ps1 run <scenario.json> [-Wait]    scenario du test runner (relance du jeu de l'ami ; -Wait : attend le resultat puis rapatrie les journaux)
 #   remote.ps1 menu | load-snapshot | quit | restart
 #   remote.ps1 update <dossier artefact e33coop-mod | e33coop-player.zip>
@@ -42,6 +43,7 @@ if (-not (Test-Path $mod)) { throw "Mod E33Coop absent : $mod" }
 $remote = Join-Path $mod "remote"
 foreach ($d in "inbox", "outbox", "updates") { New-Item -ItemType Directory -Force (Join-Path $remote $d) | Out-Null }
 $utf8 = New-Object System.Text.UTF8Encoding $false
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 function Send-Remote([string]$cmd, [hashtable]$extra = @{}, [int]$timeoutS = 240) {
     $id = (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + $cmd + "-" + (Get-Random -Maximum 100000)
@@ -65,6 +67,12 @@ function Send-Remote([string]$cmd, [hashtable]$extra = @{}, [int]$timeoutS = 240
             $state = $null
             try { $state = [IO.File]::ReadAllText($stateFile) | ConvertFrom-Json } catch { continue }
             if ($state.state -eq "done" -or $state.state -eq "error") {
+                # Copie hors du dossier du mod (reset-env.ps1 l'efface avant chaque test local) : runs\remote\<id>.
+                Start-Sleep -Milliseconds 300
+                $kept = Join-Path $repo "runs\remote\$id"
+                New-Item -ItemType Directory -Force (Split-Path $kept -Parent) | Out-Null
+                Copy-Item $dir $kept -Recurse -Force
+                $dir = $kept
                 return [pscustomobject]@{ Id = $id; Dir = $dir; State = $state.state; Error = $state.error; Reply = $state.reply; Files = $state.files; Bytes = $state.bytes }
             }
             $line = "$($state.state) $($state.files) fichier(s), $($state.bytes) octets"

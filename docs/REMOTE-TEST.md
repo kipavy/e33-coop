@@ -85,7 +85,9 @@ powershell -NoProfile -File tools/remote/remote.ps1 update .tools/artifacts/<id>
 powershell -NoProfile -File tools/remote/remote.ps1 peer
 ```
 - `-Peer <SteamID64>` (défaut : l'ami, `76561198045698677`), `-Timeout <s>`, `-GameDir`.
-- Réponses et fichiers : `…\ue4ss\Mods\E33Coop\remote\outbox\<id>\` (`state.json`, `reply.json`, `files\`). Le
+- Réponses et fichiers : écrits par le mod dans `…\ue4ss\Mods\E33Coop\remote\outbox\<id>\` (`state.json`,
+  `reply.json`, `files\`), recopiés par le script dans `runs\remote\<id>\` du repo (`reset-env.ps1` efface le dossier du
+  mod avant chaque test local). Le
   « bonjour » du client (version, droits) : `remote\peers\<SteamID>.json`.
 - `run` : le scénario est validé chez l'ami (voir plus haut), déposé dans `remote\pending\`, puis le jeu redémarre
   (`-AllowRestart`) et l'exécute comme `-e33test` (ses `launch_args` filtrées ; `-e33connect` / `-e33port` retirés,
