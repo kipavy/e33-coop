@@ -142,6 +142,7 @@ std::string policy()
 void init()
 {
     s.enabled = !cmdline::test_mode();
+    if (!s.enabled) return;   // tests : aucun réseau, fichier de jonction laissé au joueur
     // Rejoindre après une mise à jour : SteamID de l'hôte écrit avant de quitter (lu une fois, 15 min au plus).
     std::ifstream f(rejoin_path());
     if (!f) return;
@@ -156,7 +157,7 @@ void init()
     std::error_code ec;
     fs::remove(rejoin_path(), ec);
     const int64_t age = static_cast<int64_t>(std::time(nullptr)) - t;
-    if (s.enabled && id && age >= 0 && age < kRejoinMaxAge) s.rejoin_read = id;
+    if (id && age >= 0 && age < kRejoinMaxAge) s.rejoin_read = id;
     log().write("update_rejoin", JsonObj().add("host", std::to_string(id)).add("age_s", age).add("used", s.rejoin_read != 0));
 }
 
