@@ -54,6 +54,14 @@ void invite_dialog(const Lobby& l);
 uint64_t command_line_lobby();
 // Invitation acceptée pendant que le jeu tourne (GameLobbyJoinRequested_t), 0 sinon ; consommée à la lecture.
 uint64_t take_join_request();
+// Lobbies coop ouverts par des amis qui jouent au jeu (données locales de Steam : appel peu coûteux, à espacer
+// quand même de quelques secondes). Lobby d'une autre version du mod (quand elle est connue) : écarté.
+struct FriendLobby {
+    uint64_t lobby = 0;
+    uint64_t friend_id = 0;
+    std::string name;      // nom Steam de l'ami
+};
+std::vector<FriendLobby> friend_lobbies(const std::string& mod_version);
 // Premier ami qui joue au jeu dans un lobby coop (rejoindre depuis le menu principal), 0 sinon.
 uint64_t find_friend_lobby(const std::string& mod_version);
 
