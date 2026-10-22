@@ -2,6 +2,17 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-22, soir — premier essai à deux PC Steam en v0.6.1 : client renvoyé au menu après une victoire (branche `fix/battle-end-client`)
+
+Combat SpringMeadows (Killian hôte, TOTOFFF client ; journaux dans `e33coop-backups/twopc-20261022`). L'hôte gagne, le client continue le combat puis reçoit « Connexion à l'hôte perdue ».
+- **Origine de l'écart** : tour 4, visée libre de Monoco (héros de l'hôte), 15 tirs. Chez l'hôte 14 touchent le Lancelier ; rejoués chez le client, les tirs 7, 9 et 14 ne touchent rien (aucun tirage de dégâts : `coop_draw_count_diff` « extra host » rangs 13-15 au tour 5). Le Lancelier meurt chez l'hôte seulement ; les rangs de `BP_LU_StayMarked` décalés laissent aussi « Marqué » sur le Volester chez le client. Tour 5 : `coop_resync` répare le buff, mais l'écart « extra » (ennemi vivant ici, absent chez l'hôte) n'était pas réparable.
+- `coop_remote_action_invalid` (BurningCanvas, `no_ap`) au tour 2 : sans effet (états identiques au tour 3) ; coût lu sans les réductions (Luminas) probablement. Journal complété (PA, coût).
+- **BattleEnd ignoré** : pour une victoire, le client ne clôturait qu'une fois sorti du combat de lui-même. Son tour suivant (6) a commencé, et `client_turn_finish` attendait 15 s, thread de jeu bloqué, un état d'hôte qui ne viendrait jamais.
+- **« Hôte perdu » à tort** : `wait_for` avançait l'horloge du mod du temps attendu, puis le tick suivant ajoutait le même temps (dt = 15 s) : horloge +30 s, dernier paquet de l'hôte daté de la fin de l'attente -> 15 s de « silence » -> fin de session. L'hôte envoyait toujours (PilotState reçus pendant l'attente).
+- **Corrections** (non vérifiées en jeu) : horloge sans double compte (`advance_clock`) ; attente de tour interrompue par le BattleEnd, jamais de fin de session sur attente expirée ; BattleEnd de l'hôte -> fin imposée par étapes (`client_force_end_tick` : `BM.ForceBattleEnd`, puis `StartBattleEndFlow`, puis ennemis restants mis à mort, puis clôture + nouvel instantané) ; écart « extra » réparé (ennemi mis à mort : PV 0 + `SetDead`), ennemis morts hors hash ; tir rejoué ancré sur le combattant touché chez le propriétaire et tir manqué journalisé (`coop_free_aim_replay_miss`).
+- **Test proposé** (pas lancé) : `p3_battleend_client` (`-e33perturbend=7` : ennemis increvables chez le client au tour où l'hôte gagne).
+- **À vérifier au prochain essai** : `coop_force_end` (quelle étape a fini le combat), `coop_free_aim_replay_miss` (cause des tirs manqués : pose, caméra ?), `coop_remote_action_invalid` (PA, coût).
+
 ## État courant (2026-10-22, fin d'après-midi) — branche `integ2` : batterie verte sauf la parade en duo ; Release v0.6.0 avec le miroir des menus désactivé
 
 - **`integ2`** = `integ` + `feat/menu-mirror` + `feat/easy-install` + correctifs des tests. Batterie (build 39779386369) : 43/45, puis `p5_version_host` vert après correction du test (faux pair refusé = le suivant peut partir ; attente de refus sans numéro de version). Seul rouge : `p6_duoparry_host` (l'ennemi du test ne fait jamais d'attaque de groupe : à valider à deux PC).

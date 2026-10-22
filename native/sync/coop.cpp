@@ -109,6 +109,7 @@ struct FreeAimOwner {                                      // visée libre d'un 
     bool have_point = false, raycast_point = false;
     bool seen_aiming = false;                              // IsAiming vu vrai : sa retombée = fin de visée
     std::array<double, 3> point{}, shot_point{};
+    UObject* shot_hit = nullptr;                           // combattant touché par le tir en cours (OnFreeAimProjectileHit)
 };
 
 struct FreeAimReplay {                                     // visée libre rejouée (héros d'un autre joueur)
@@ -119,6 +120,11 @@ struct FreeAimReplay {                                     // visée libre rejou
     uint16_t raycasts = 0;
     bool have_override = false;
     std::array<double, 3> point{};
+    // Tir rejoué en cours : combattant touché chez le propriétaire (kAutoSpot : aucun ou inconnu) et touché ici
+    bool in_raycast = false;
+    proto::Unit want{proto::ActorKind::Enemy, proto::kAutoSpot};
+    int hit_spot = -1;
+    uint16_t misses = 0;
 };
 
 struct LocalHit {                                          // coup reçu par un héros contrôlé ici (résultat à publier)
@@ -188,6 +194,12 @@ struct Battle {
     double host_end_at = -1;                               // client : réception du BattleEnd de l'hôte
     double end_flow_at = -1;                              // fin sans victoire : clôture différée (tick), jamais bloquante dans le flux de fin
     std::optional<proto::BattleRewards> host_rewards;
+    // Client : fin de l'hôte sans fin locale -> fin imposée par étapes (tick) ; force_now : un tour a recommencé ici après
+    // le BattleEnd de l'hôte (le combat local continue sans lui).
+    int force_step = 0;
+    double force_at = -1;
+    bool force_now = false;
+    int turn_wait_timeouts = 0;                            // client : attentes du début de tour de l'hôte expirées (combat)
     // Démarrage coordonné (hôte) : clients qui ont commencé ce combat ; jeu en pause tant qu'il en manque.
     std::set<uint8_t> ready;
     bool hold = false;
@@ -212,6 +224,7 @@ struct State {
     bool accepted = false;
     bool rejected = false;
     double now = 0;
+    double tick_now = 0;                                   // horloge à la dernière image (voir advance_clock)
     Battle battle;
     uint32_t next_battle_id = 1;
     std::map<std::string, uint8_t> owner_overrides;        // -e33owners=0:1,Lune:1  (emplacement ou nom : joueur)
@@ -227,6 +240,7 @@ struct State {
     std::optional<uint64_t> fixed_seed;                    // hôte : -e33seed=N
     std::vector<std::string> draw_filter;                  // diagnostic : -e33draws=none | sous-chaînes
     std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
+    std::optional<uint32_t> perturb_end_turn;              // client : -e33perturbend=N (test de la fin imposée : ennemis increvables ici)
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
     bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
     bool turn_dep = false;                                 // -e33turndep=1 : attente du TurnStart par dépendance de début de tour (essai)
@@ -605,6 +619,16 @@ void pump_network()
         if (s.role == Role::Host && !p.accepted && p.drop.empty() && s.now - p.created_at > kHandshakeTimeout) p.drop = "no hello";
     }
     sweep_peers();
+}
+
+// Horloge du mod (s.now) : avance de dt à chaque image. Une attente bloquante (wait_for) l'a déjà avancée du temps
+// attendu, et le dt de l'image suivante contient ce même temps : il ne compte qu'une fois. Avant, il comptait deux fois :
+// essai à deux PC du 2026-10-22, attente de tour de 15 s chez le client -> horloge avancée de 30 s -> lien jugé muet
+// 15 s (le dernier paquet de l'hôte datait de la fin de l'attente) -> « Connexion à l'hôte perdue », hôte bien vivant.
+void advance_clock(double dt)
+{
+    s.now = std::max(s.now, s.tick_now + dt);
+    s.tick_now = s.now;
 }
 
 // Pompe le réseau en bloquant le game thread jusqu'à cond() ou expiration (utilisé dans les hooks).
@@ -1229,6 +1253,22 @@ void perturb_state()
     log().write("coop_perturb", JsonObj().add("what", "enemy hp -1, hero ap +1"), s.battle.turn);
 }
 
+// Client : test de la fin imposée (-e33perturbend=N) : au début du tour N, après son contrôle, les ennemis vivants
+// d'ici reçoivent 100 fois leurs PV. Le coup fatal de l'hôte ne les tue pas ici : l'hôte gagne, le combat continue ici
+// (comme le Lancelier de l'essai à deux PC du 2026-10-22) et doit être clos par client_force_end_tick.
+void perturb_end()
+{
+    int n = 0;
+    for (UObject* e : game::enemies()) {
+        if (game::is_dead_fast(e)) continue;
+        UObject* st = game::stats(e);
+        ue::set_double(st, STR("CurrentHP"), ue::get_double(st, STR("CurrentHP")) * 100.0);
+        ++n;
+    }
+    bump("end_perturbations");
+    log().write("coop_perturb_end", JsonObj().add("enemies", n), s.battle.turn);
+}
+
 void client_turn_finish(UObject* actor);
 
 // --- Essai -e33turndep=1 : attente du début de tour de l'hôte sans figer le jeu ------------------------------------
@@ -1260,6 +1300,15 @@ void client_turn_start(UObject* actor)
     if (!b.ready_sent) {   // démarrage coordonné : l'hôte attend que chacun ait commencé ce combat
         b.ready_sent = true;
         for (auto& p : s.peers) send_to(p, proto::BattleReady{b.id, s.my_player_id});
+    }
+    // Combat déjà fini chez l'hôte (BattleEnd reçu) et pourtant un tour recommence ici : la simulation locale a divergé
+    // (ennemi encore vivant ici). Aucun état de l'hôte ne viendra pour ce tour : pas d'attente, fin imposée (tick).
+    // Avant : attente bloquante de 15 s du tour de l'hôte, puis session perdue (essai à deux PC du 2026-10-22).
+    if (b.host_end >= 0) {
+        bump("turns_after_host_end");
+        b.force_now = true;
+        log().write("coop_turn_after_host_end", JsonObj().add("battle", b.id).add("host_end", b.host_end).add("actor", game::char_class(actor)), b.turn);
+        return;
     }
     // État de l'hôte pas encore là : vérification différée (le tick l'appelle à l'arrivée), pendant que la dépendance
     // retient le tour. Si le jeu écoutait déjà sans nous pour ce tour, trop tard : attente bloquante comme avant.
@@ -1346,12 +1395,25 @@ void client_turn_finish(UObject* actor)
     auto& b = s.battle;
     const bool deferred = !b.dep_start.units.empty() && b.dep_start.turn == b.turn;
     // L'hôte rythme les tours : attendre son début de tour (TurnStart, StateHash, StateSync, dans cet ordre).
-    if (!wait_for([&] { return b.host_sync.count(b.turn) > 0; }, 15.0)) {
+    // Fin de combat de l'hôte arrivée pendant l'attente : aucun état ne viendra pour ce tour.
+    if (!wait_for([&] { return b.host_sync.count(b.turn) > 0 || b.host_end >= 0; }, 15.0)) {
         if (s.ended) return;   // l'hôte est parti pendant l'attente : ce n'est pas un tour manqué
+        // Jamais une fin de session : le lien est surveillé à part (silence de 15 s, D14). L'hôte reste maître du rythme ;
+        // l'écart éventuel est corrigé par son état au tour suivant, ou par la fin imposée si son BattleEnd arrive.
         bump("turn_wait_timeouts");
-        log().write("coop_turn_wait_timeout", JsonObj().add("battle", b.id), b.turn);
+        ++b.turn_wait_timeouts;
+        const double heard = s.peers.empty() || !s.peers[0].link ? -1 : s.peers[0].link->last_heard();
+        log().write("coop_turn_wait_timeout", JsonObj().add("battle", b.id).add("count", b.turn_wait_timeouts)
+                                                  .add("host_silent_s", heard >= 0 ? s.now - heard : -1.0), b.turn);
         return;
     }
+    if (!b.host_sync.count(b.turn)) {
+        bump("turns_after_host_end");
+        b.force_now = true;
+        log().write("coop_turn_after_host_end", JsonObj().add("battle", b.id).add("host_end", b.host_end).add("actor", game::char_class(actor)), b.turn);
+        return;
+    }
+    b.turn_wait_timeouts = 0;
     const proto::Unit au = actor_unit(actor);
     turn_indicator(au);
     if (auto it = b.host_turns.find(b.turn); it != b.host_turns.end() && (it->second.kind != au.kind || it->second.index != au.spot)) {
@@ -1388,6 +1450,7 @@ void client_turn_finish(UObject* actor)
     check_hash(b.turn);
     b.host_sync.erase(b.turn);
     if (s.perturb_turn && *s.perturb_turn == b.turn) perturb_state();
+    if (s.perturb_end_turn && *s.perturb_end_turn == b.turn) perturb_end();
 }
 
 // Contextes Enhanced Input coupés pendant le tour du héros d'un autre joueur. SetBattleInputEnabled(false) ne
@@ -1734,7 +1797,9 @@ void on_turn_start(UObject* actor)
     if (s.role != Role::Solo && s.battle.active && s.lock_input) {
         const bool hero = game::is_player(actor);
         const bool mine = hero && controls(game::spot(actor));
-        set_local_input(!hero || mine, "turn start", mine);
+        // Combat fini chez l'hôte : plus d'action ici, la fin est imposée (client_force_end_tick).
+        const bool over = s.role == Role::Client && s.battle.host_end >= 0;
+        set_local_input((!hero || mine) && !over, over ? "host battle over" : "turn start", mine && !over);
     }
 }
 
@@ -2083,6 +2148,7 @@ void subscribe()
         if (s.fa_own.active && game::spot(caster) == s.fa_own.spot) {
             s.fa_own.in_raycast = true;
             s.fa_own.raycast_point = false;
+            s.fa_own.shot_hit = nullptr;
             return;
         }
         // Rejeu : point exact du tir du propriétaire (attente bornée ; avec le décalage, il est déjà là).
@@ -2096,28 +2162,67 @@ void subscribe()
         }, 2.0);
         if (!shot) { bump("free_aim_timeouts"); return; }
         std::array<double, 3> p{shot->x, shot->y, shot->z};
-        if (shot->target.spot != proto::kAutoSpot) {   // point relatif à un combattant (faux client)
+        if (shot->target.spot != proto::kAutoSpot) {   // point relatif au combattant touché chez le propriétaire (ou visé par le faux client)
             double a[3];
             if (game::location(game::find_unit(shot->target.kind == proto::ActorKind::Hero, shot->target.spot), a)) p = {a[0] + p[0], a[1] + p[1], a[2] + p[2]};
+            else {
+                bump("free_aim_anchor_missing");
+                log().write("coop_free_aim_anchor_missing", JsonObj().add("seq", static_cast<int>(seq)).add("kind", static_cast<int>(shot->target.kind))
+                                                                .add("target_spot", static_cast<int>(shot->target.spot)), s.battle.turn);
+            }
         }
         r.point = p;
         r.have_override = true;
+        r.in_raycast = true;
+        r.want = shot->target;
+        r.hit_spot = -1;
         bump("free_aim_shots_replayed");
         log().write("coop_free_aim_shot", JsonObj().add("spot", r.key.second).add("seq", static_cast<int>(seq)).add("x", p[0]).add("y", p[1]).add("z", p[2]), s.battle.turn);
     });
     bus.post(fn(game::FreeAimProjectile, L"TriggerRaycast"), [fa_event](HookCtx& ctx, UFunction*) {
+        // Tir rejoué : le combattant touché chez le propriétaire l'a-t-il été ici ? Un tir manqué ici seulement laisse
+        // l'ennemi plus vivant qu'ailleurs (essai à deux PC du 2026-10-22 : tirs 7, 9 et 14 sur 15 manqués chez le
+        // client, Lancelier vivant ici et mort chez l'hôte). Diagnostic ; l'état de l'hôte corrige au tour suivant.
+        if (auto& r = s.fa_rep; r.in_raycast) {
+            UObject* caster = ue::get_object(ctx.Context, STR("Caster"));
+            if (caster && game::is_player(caster) && game::spot(caster) == r.key.second) {
+                r.in_raycast = false;
+                if (r.want.spot != proto::kAutoSpot && (r.hit_spot < 0 || r.hit_spot != r.want.spot)) {
+                    ++r.misses;
+                    bump("free_aim_replay_misses");
+                    log().write("coop_free_aim_replay_miss", JsonObj().add("spot", r.key.second).add("seq", static_cast<int>(r.raycasts))
+                                                                 .add("owner_hit", static_cast<int>(r.want.spot)).add("hit", r.hit_spot)
+                                                                 .add("x", r.point[0]).add("y", r.point[1]).add("z", r.point[2]), s.battle.turn);
+                }
+            }
+        }
         if (!s.fa_own.in_raycast) return;
         UObject* caster = ue::get_object(ctx.Context, STR("Caster"));
         if (!caster || game::spot(caster) != s.fa_own.spot) return;
         s.fa_own.in_raycast = false;
         const auto p = s.fa_own.raycast_point ? s.fa_own.shot_point : s.fa_own.point;
-        publish(fa_event(proto::FreeAimKind::Shot, ++s.fa_own.shots, p));
+        proto::FreeAimEvent e = fa_event(proto::FreeAimKind::Shot, ++s.fa_own.shots, p);
+        // Tir qui a touché un combattant : point envoyé relatif à lui (même format que le faux client ; une version
+        // précédente retrouve le même point absolu). Le rejeu vise ce combattant même s'il s'est un peu déplacé, et sait
+        // qui devait être touché (tir manqué détecté).
+        int hit_spot = -1;
+        if (UObject* hit = s.fa_own.shot_hit) {
+            double a[3];
+            if (game::location(hit, a)) {
+                e.target = actor_unit(hit);
+                e.x -= a[0]; e.y -= a[1]; e.z -= a[2];
+                hit_spot = e.target.spot;
+            }
+        }
+        publish(e);
         log().write("coop_free_aim_local_shot", JsonObj().add("seq", static_cast<int>(s.fa_own.shots)).add("x", p[0]).add("y", p[1]).add("z", p[2])
-                                                 .add("from_raycast", s.fa_own.raycast_point), s.battle.turn);
+                                                 .add("from_raycast", s.fa_own.raycast_point).add("hit_spot", hit_spot), s.battle.turn);
     });
     bus.post(fn(game::FreeAimComp, L"OnFreeAimProjectileHit"), [](HookCtx& ctx, UFunction* f) {
         if (s.role == Role::Solo || !s.battle.active) return;
         UObject* target = ue::read_param_object(ctx, f, STR("Character"));
+        if (s.fa_own.in_raycast && !s.fa_own.shot_hit) s.fa_own.shot_hit = target;
+        if (s.fa_rep.in_raycast && s.fa_rep.hit_spot < 0 && target) s.fa_rep.hit_spot = game::spot(target);
         bump("free_aim_hits");
         log().write("coop_free_aim_hit", JsonObj().add("target", game::char_class(target)).add("spot", game::spot(target))
                                           .add("body_part", ue::read_param_int(ctx, f, STR("BodyPart")).value_or(-1)), s.battle.turn);
@@ -2732,6 +2837,7 @@ void read_settings()
     if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
+    if (const std::wstring p = arg(L"e33perturbend"); !p.empty()) s.perturb_end_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
     if (arg(L"e33lockinput") == L"0") s.lock_input = false;
     if (const std::wstring l = arg(L"e33replaylag"); !l.empty()) s.replay_lag_s = std::wcstod(l.c_str(), nullptr);
     s.turn_dep = arg(L"e33turndep") != L"0";   // attente sans figer le jeu, par défaut depuis le 2026-10-22 (-e33turndep=0 : attente bloquante)
@@ -3077,11 +3183,12 @@ void run_remote_action()
     {
         int targeting = -1, cost = 0;
         const bool no_item = cmd.action_type == game::ActItem && game::battle_item_count(secondary) <= 0;
-        const bool no_ap = cmd.action_type == game::ActSkill && game::skill_info(cur, secondary, targeting, cost) &&
-                           ue::get_double(game::stats(cur), STR("CurrentAP")) < cost;
+        const double ap = ue::get_double(game::stats(cur), STR("CurrentAP"));
+        const bool no_ap = cmd.action_type == game::ActSkill && game::skill_info(cur, secondary, targeting, cost) && ap < cost;
         if (no_item || no_ap) {
             bump("remote_action_invalid");
-            log().write("coop_remote_action_invalid", JsonObj().add("spot", spot).add("secondary", cmd.secondary).add("no_item", no_item).add("no_ap", no_ap), b.turn);
+            log().write("coop_remote_action_invalid", JsonObj().add("spot", spot).add("secondary", cmd.secondary).add("no_item", no_item).add("no_ap", no_ap)
+                                                         .add("ap", ap).add("cost", cost).add("hero", game::char_class(cur)), b.turn);
         }
     }
     if (auto_target) targets = game::auto_targets(cur, cmd.action_type, secondary);
@@ -3145,11 +3252,79 @@ static void join_button_tick()
     else ui::clear_status("invite");
 }
 
+// Client : l'hôte a fini le combat (BattleEnd) mais le jeu d'ici ne l'a pas fini (ennemi encore vivant ici après un écart :
+// essai à deux PC du 2026-10-22, Lancelier tué chez l'hôte seulement). L'hôte décide : fin imposée ici, par étapes, chacune
+// tentée si la précédente n'a pas lancé la fin du jeu (StartBattleEndFlow -> s.battle.ending) :
+//   1. BM.ForceBattleEnd(résultat de l'hôte), dès qu'un tour recommence ici ou 5 s après le BattleEnd (le jeu d'ici finit
+//      normalement de lui-même dans ce délai : il n'a que le décalage de rejeu de retard) ;
+//   2. BM.StartBattleEndFlow(résultat), 3 s plus tard ;
+//   3. victoire : ennemis restants mis à mort (Stats.SetDead), 4 s plus tard ; le jeu conclut à la fin du tour ;
+//   4. 10 s plus tard : combat clos pour le mod (entrées rendues) et nouvel instantané demandé à l'hôte (ResyncRequest :
+//      il l'envoie hors combat, le client le recharge et sort du combat).
+// Les récompenses restent celles de l'hôte (RollBattleRewards) ; la clôture passe par les chemins habituels.
+constexpr double kForceEndGrace = 5.0;
+
+void client_force_end_tick()
+{
+    auto& b = s.battle;
+    if (s.role != Role::Client || !b.active || b.finalized || b.host_end < 0 || b.ending || b.end_flow_at >= 0) return;
+    if (!game::in_battle()) return;   // déjà sorti du combat : clôture par la règle « host_end » du tick
+    if (game::pause_menu_visible()) return;
+    const double since = s.now - b.host_end_at;
+    auto step_log = [&](const char* what, bool ok, const std::string& how) {
+        bump("battle_end_forced_steps");
+        log().write("coop_force_end", JsonObj().add("battle", b.id).add("step", b.force_step).add("what", what).add("ok", ok).add("how", how)
+                                          .add("host_end", b.host_end).add("since_host_end_s", since).add("turn_restarted", b.force_now), b.turn);
+    };
+    std::string how;
+    switch (b.force_step) {
+    case 0: {
+        if (!b.force_now && since < kForceEndGrace) return;
+        b.force_step = 1;
+        b.force_at = s.now;
+        bump("battles_end_forced");
+        const bool ok = game::force_battle_end(b.host_end, false, how);
+        step_log("ForceBattleEnd", ok, how);
+        return;
+    }
+    case 1: {
+        if (s.now - b.force_at < 3.0) return;
+        b.force_step = 2;
+        b.force_at = s.now;
+        const bool ok = game::force_battle_end(b.host_end, true, how);
+        step_log("StartBattleEndFlow", ok, how);
+        return;
+    }
+    case 2: {
+        if (s.now - b.force_at < 4.0) return;
+        b.force_step = 3;
+        b.force_at = s.now;
+        int killed = 0, failed = 0;
+        if (b.host_end == game::EndVictory)
+            for (UObject* e : game::enemies())
+                if (!game::is_dead_fast(e)) (game::kill_unit(e) ? killed : failed)++;
+        step_log("kill_enemies", failed == 0, std::to_string(killed) + " killed, " + std::to_string(failed) + " failed");
+        return;
+    }
+    case 3: {
+        if (s.now - b.force_at < 10.0) return;
+        b.force_step = 4;
+        step_log("resync", true, "finalize + ResyncRequest");
+        bump("battle_end_resyncs");
+        finalize_battle("host_end_forced");
+        publish(proto::ResyncRequest{"battle still running after host BattleEnd"});
+        return;
+    }
+    default:
+        return;
+    }
+}
+
 // Mode neutre (aucun rôle) : Steam prêt, bouton « Rejoindre », F7 / F10, copie coop. Le rôle décidé, tick() prend la suite.
 static void neutral_tick(double dt)
 {
     s.game_thread = GetCurrentThreadId();
-    s.now += dt;
+    advance_clock(dt);
     hb.last_tick_ms = steady_ms();
     steam_tick();
     if (s.role != Role::Solo) return;
@@ -3164,7 +3339,7 @@ void tick(double dt)
 {
     if (s.role == Role::Solo) { if (s.neutral) neutral_tick(dt); return; }
     s.game_thread = GetCurrentThreadId();
-    s.now += dt;
+    advance_clock(dt);
     hb.last_tick_ms = steady_ms();
     heartbeat_start();
     steam_tick();
@@ -3358,6 +3533,7 @@ void tick(double dt)
             log().write("coop_turn_dep_still_listening", JsonObj().add("turn", b.dep_turn), b.turn);
         }
     }
+    client_force_end_tick();
     // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
     if (auto& b = s.battle; b.end_flow_at >= 0 && !b.finalized && (s.role == Role::Host || b.host_end >= 0 || s.now - b.end_flow_at > 8.0))
         finalize_battle("end_flow");

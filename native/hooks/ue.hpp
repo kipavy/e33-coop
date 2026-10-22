@@ -70,6 +70,8 @@ public:
     Call& set_object(const wchar_t* param, UObject* v);
     Call& set_bool(const wchar_t* param, bool v);
     Call& set_int(const wchar_t* param, int64_t v);   // int32/int64/byte/enum selon la taille
+    // Premier paramètre de la fonction (nom inconnu, ex. ForceBattleEnd) : entier selon sa taille ; nom renvoyé, vide si aucun.
+    std::string set_first_int(int64_t v);
     Call& set_double(const wchar_t* param, double v);
     Call& set_fname(const wchar_t* param, const wchar_t* v);
     Call& set_string(const wchar_t* param, const wchar_t* v);   // FString

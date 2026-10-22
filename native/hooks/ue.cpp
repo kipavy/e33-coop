@@ -219,6 +219,24 @@ Call& Call::set_raw(const wchar_t* name, const void* src)
     return *this;
 }
 
+std::string Call::set_first_int(int64_t v)
+{
+    if (!fn_) return {};
+    // Les paramètres viennent en tête des propriétés d'une UFunction (variables locales d'un Blueprint ensuite).
+    for (FProperty* p : TFieldRange<FProperty>(fn_, EFieldIterationFlags::IncludeDeprecated)) {
+        void* d = p->ContainerPtrToValuePtr<void>(buf_.data());
+        switch (p->GetSize()) {
+        case 1: *static_cast<uint8_t*>(d) = static_cast<uint8_t>(v); break;
+        case 2: *static_cast<int16_t*>(d) = static_cast<int16_t>(v); break;
+        case 4: *static_cast<int32_t*>(d) = static_cast<int32_t>(v); break;
+        case 8: *static_cast<int64_t*>(d) = v; break;
+        default: return {};
+        }
+        return to_utf8(p->GetName());
+    }
+    return {};
+}
+
 size_t Call::param_size(const wchar_t* name)
 {
     FProperty* p = param(name);

@@ -343,6 +343,35 @@ bool perform_action(int action_type, const std::wstring& secondary, const std::v
     return true;
 }
 
+bool force_battle_end(int result, bool direct_flow, std::string& how)
+{
+    ModCall mod;
+    const wchar_t* name = direct_flow ? STR("StartBattleEndFlow") : STR("ForceBattleEnd");
+    how = direct_flow ? "StartBattleEndFlow" : "ForceBattleEnd";
+    ue::Call c(battle_manager(), name);
+    if (!c) { how += ": not found"; return false; }
+    // Nom du paramètre connu pour StartBattleEndFlow ; ForceBattleEnd : seul paramètre (EBattleEndResult), nom pas dumpé.
+    if (c.param_size(STR("BattleEndResult")) > 0) {
+        c.set_int(STR("BattleEndResult"), result);
+        how += "(BattleEndResult)";
+    } else {
+        const std::string p = c.set_first_int(result);
+        if (p.empty()) { how += ": no parameter"; return false; }
+        how += "(" + p + ")";
+    }
+    return c.invoke();
+}
+
+bool kill_unit(UObject* ch)
+{
+    ModCall mod;
+    UObject* st = stats(ch);
+    if (!st) return false;
+    ue::set_double(st, STR("CurrentHP"), 0);
+    ue::Call c(st, STR("SetDead"));
+    return c && c.invoke();
+}
+
 bool skill_info(UObject* hero, const std::wstring& skill, int& targeting, int& ap_cost)
 {
     ue::Call c(stats(hero), STR("FindEquippedSkillByID"));

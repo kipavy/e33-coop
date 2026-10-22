@@ -1,0 +1,13 @@
+{
+  "name": "p3_battleend_client",
+  "description": "Fin de combat de l'hôte alors que le combat continue chez le client (essai à deux PC du 2026-10-22 : Lancelier tué chez l'hôte seulement, client renvoyé au menu « Connexion à l'hôte perdue »). Même rejeu que p3_resync_client (l'hôte gagne au tour 7), mais au début du tour 7 le client donne 100 fois leurs PV à ses ennemis (-e33perturbend=7) : le coup fatal ne les tue pas ici. Le BattleEnd de l'hôte doit clore le combat local (fin imposée : BM.ForceBattleEnd, puis StartBattleEndFlow, puis ennemis mis à mort), sans attente de tour expirée ni fin de session.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "timeout_s": 600,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33perturbend=7"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p2_host_session.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "end_perturbations": "1", "battles_end_forced": "1", "battles_finalized": "1", "turn_wait_timeouts": "0" }
+}

@@ -109,6 +109,9 @@ uint64_t hash(const proto::StateSync& st, proto::Unit actor)
 {
     wire::Fnv64 h;
     for (auto& u : st.units) {
+        // Ennemi mort : compté comme absent. Le jeu le retire de BM.Enemies, parfois pas au même instant partout (et
+        // un ennemi tué ici par la réparation d'un écart « extra » peut y rester le temps de sa mort).
+        if (u.unit.kind == proto::ActorKind::Enemy && u.dead) continue;
         h.i64(static_cast<int64_t>(u.unit.kind));
         h.i64(u.unit.spot);
         h.i64(std::llround(u.hp));
@@ -139,7 +142,8 @@ std::string diff(const proto::StateSync& local, const proto::StateSync& host)
     for (auto& hu : host.units) {
         const auto* lu = find(local, hu.unit);
         const std::string k = unit_key(hu.unit) + ":" + hu.cls;
-        if (!lu) { item(k, "missing", "-", "present"); continue; }
+        if (!lu) { if (!(hu.unit.kind == proto::ActorKind::Enemy && hu.dead)) item(k, "missing", "-", "present"); continue; }
+        if (hu.unit.kind == proto::ActorKind::Enemy && hu.dead && lu->dead) continue;   // ennemi mort des deux côtés : hors hash
         if (std::llround(lu->hp) != std::llround(hu.hp)) item(k, "hp", num(lu->hp), num(hu.hp));
         if (std::llround(lu->ap) != std::llround(hu.ap)) item(k, "ap", num(lu->ap), num(hu.ap));
         if (lu->shield != hu.shield) item(k, "shield", std::to_string(lu->shield), std::to_string(hu.shield));
@@ -151,7 +155,7 @@ std::string diff(const proto::StateSync& local, const proto::StateSync& host)
         if (!same_mech(lu->mech, hu.mech)) item(k, "mech", mech_str(lu->mech, hu.mech), mech_str(hu.mech, lu->mech));
     }
     for (auto& lu : local.units)
-        if (!find(host, lu.unit)) item(unit_key(lu.unit) + ":" + lu.cls, "extra", "present", "-");
+        if (!find(host, lu.unit) && !(lu.unit.kind == proto::ActorKind::Enemy && lu.dead)) item(unit_key(lu.unit) + ":" + lu.cls, "extra", "present", "-");
     if (local.gradient_charges != host.gradient_charges || std::llround(local.gradient_progress * 1000) != std::llround(host.gradient_progress * 1000))
         item("gradient", "gauge", std::to_string(local.gradient_charges) + "/" + num(local.gradient_progress),
              std::to_string(host.gradient_charges) + "/" + num(host.gradient_progress));
@@ -165,7 +169,9 @@ RepairStats repair(const proto::StateSync& local, const proto::StateSync& host)
         const auto* lu = find(local, hu.unit);
         UObject* ch = game::find_unit(hu.unit.kind == proto::ActorKind::Hero, hu.unit.spot);
         UObject* st = game::stats(ch);
+        if (!lu && hu.unit.kind == proto::ActorKind::Enemy && hu.dead) continue;   // déjà retiré ici : rien à faire
         if (!lu || !st) { ++r.failed; continue; }
+        if (hu.unit.kind == proto::ActorKind::Enemy && hu.dead && lu->dead) continue;
         if (lu->dead != hu.dead) {
             ++r.death;
             if (hu.dead) {
@@ -232,6 +238,14 @@ RepairStats repair(const proto::StateSync& local, const proto::StateSync& host)
                 }
             }
         }
+    }
+    // Ennemi vivant ici, absent chez l'hôte : l'hôte l'a tué (le jeu retire les morts de BM.Enemies). Mis à mort ici aussi,
+    // sinon le combat continue ici après la victoire de l'hôte (Lancelier, essai à deux PC du 2026-10-22). Réparation
+    // faite au début d'un tour, comme celle des morts de héros (SetDead) ; un héros ne quitte jamais la liste.
+    for (auto& lu : local.units) {
+        if (lu.unit.kind != proto::ActorKind::Enemy || lu.dead || find(host, lu.unit)) continue;
+        ++r.death;
+        if (!game::kill_unit(game::find_unit(false, lu.unit.spot))) ++r.failed;
     }
     if (local.gradient_charges != host.gradient_charges || std::llround(local.gradient_progress * 1000) != std::llround(host.gradient_progress * 1000)) {
         ++r.gradient;

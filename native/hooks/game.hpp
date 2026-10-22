@@ -71,6 +71,13 @@ int mod_call_depth();
 // Fait exécuter une action au personnage courant (type E_jRPG_ActionType, compétence ou objet, cibles).
 // combo_auto_success >= 0 : DEBUG_ComboAutoSuccessCount (réussites automatiques des QTE offensifs).
 bool perform_action(int action_type, const std::wstring& secondary, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err);
+// Fin de combat imposée (client : BattleEnd de l'hôte sans fin locale, combat qui continue ici). direct_flow : appel de
+// BM.StartBattleEndFlow au lieu de BM.ForceBattleEnd. Non vérifié en jeu (noms du dump). how : fonction et paramètre
+// utilisés, pour le journal. Ne pas appeler depuis un hook (tick seulement).
+bool force_battle_end(int result, bool direct_flow, std::string& how);
+// Combattant mis à mort (PV à 0, puis Stats.SetDead, comme le réglage « dead » du test runner) : ennemi mort chez
+// l'hôte seulement. false si les stats ou SetDead manquent.
+bool kill_unit(UObject* character);
 // Cibles par défaut d'une action (même règle partout : test runner, hôte pour le faux client).
 std::vector<UObject*> auto_targets(UObject* actor, int action_type, const std::wstring& secondary);
 // Compétence équipée : type de ciblage (E_jRPG_TargetingType) et coût en PA ; false si absente.
