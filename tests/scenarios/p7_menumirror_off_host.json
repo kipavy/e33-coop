@@ -1,0 +1,28 @@
+{
+  "name": "p7_menumirror_off_host",
+  "description": "Témoin de p7_menumirror_host avec -e33menumirror=0 : même faux client (menus envoyés mais ignorés), l'hôte garde la ligne « FakeClient prépare … » et la roue reste sur la page des actions pendant les tours de Verso. Les touches et clics injectés pendant ces tours (spam_local_input) ne doivent rien faire (blocage des entrées seul, sans miroir).",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Lune"],
+  "timeout_s": 900,
+  "wait_players": 1,
+  "max_turns": 30,
+  "shots_every_s": 2,
+  "spam_local_input": true,
+  "actions": [ { "hero": "Lune", "type": "attack" } ],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=16250036901998647475", "-e33menumirror=0"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_menumirror.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": {
+    "battle_end": "any",
+    "remote_actions": ">=3",
+    "menu_states_received": ">=40",
+    "menu_mirror_calls": "0",
+    "ui:intent_action": ">=1",
+    "ui:intent_target": ">=1",
+    "menu_drifts": "0",
+    "input_guards": ">=3",
+    "local_inputs_injected": ">=100",
+    "local_input_leaks": "0"
+  }
+}

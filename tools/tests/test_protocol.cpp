@@ -53,7 +53,9 @@ static std::vector<proto::Message> samples()
             proto::EconomyDelta{3, 1, false, false, {{"gold", -100}, {"item:Lumicolor", 5}, {"level:Weapon_X", 1}}},
             proto::IntentPreview{7, 3, 1, 4, 5, false, "Combo1", {{proto::ActorKind::Enemy, 0}, {proto::ActorKind::Enemy, 2}}},
             proto::IntentPreview{7, 3, 1, 5, 0, true, "", {}},
-            proto::AimView{7, 3, 2, 1250, -32163.5, 16193.25, 1188.0, -12.5, 87.25, 70.0}};
+            proto::AimView{7, 3, 2, 1250, -32163.5, 16193.25, 1188.0, -12.5, 87.25, 70.0},
+            proto::MenuState{7, 3, 2, 6, proto::MenuPage::Skills, 1, 2, 5, "Combo1", true, 1, {{proto::ActorKind::Enemy, 1}}},
+            proto::MenuState{7, 3, 2, 7, proto::MenuPage::Actions, 0, -1, 0, "", false, 0, {}}};
 }
 
 static void test_roundtrip()

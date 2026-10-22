@@ -1,0 +1,14 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "0.5.0",
+  "gameplay_mods": [],
+  "intent_preview": { "delay_s": 12, "menus": { "targets": ["enemy:0"], "item_targets": ["hero:Lune", "hero:Verso", "hero:Lune", "hero:Verso"] } },
+  "actions": [
+    { "hero": "Verso", "type": "skill", "skill": "Combo1", "combo": ["success", "success", "success"] },
+    { "hero": "Verso", "type": "item", "item": "Consumable_Energy_Level2", "target": "hero:Verso" },
+    { "hero": "Verso", "type": "attack" },
+    { "hero": "Verso", "type": "freeaim", "shots": 2, "aim_points": true, "target": "enemy:0", "then": { "type": "attack" } }
+  ],
+  "defense": ["parry", "fail"]
+}

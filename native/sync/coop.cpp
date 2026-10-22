@@ -667,6 +667,13 @@ bool handle_battle_common(Peer& p, proto::Message& m)
         if (s.role == Role::Host) publish(*ip, &p);
         return true;
     }
+    if (auto* ms = std::get_if<proto::MenuState>(&m)) {
+        if (ms->battle_id != b.id) return true;
+        if (s.role == Role::Host && owner_of_spot(ms->spot) != p.player_id) return true;
+        intent::receive(*ms);
+        if (s.role == Role::Host) publish(*ms, &p);
+        return true;
+    }
     if (auto* av = std::get_if<proto::AimView>(&m)) {
         if (av->battle_id != b.id) return true;
         if (s.role == Role::Host && owner_of_spot(av->spot) != p.player_id) return true;
@@ -2456,6 +2463,15 @@ bool battle_finalized() { return s.battle.finalized; }
 bool holding() { return s.battle.hold || s.battle.dep_active || s.battle.dep_finish_pending; }
 bool session_ended() { return s.ended; }
 bool action_forced(int spot) { return s.battle.forced.count({s.battle.turn, spot}) > 0; }
+int remote_turn_open()
+{
+    if (s.role == Role::Solo || !s.battle.active || s.battle.ending) return -1;
+    UObject* cur = game::current_character();
+    if (!cur || !game::is_player(cur) || ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return -1;
+    const int spot = game::spot(cur);
+    if (controls(spot) || s.battle.executed.count({s.battle.turn, spot})) return -1;
+    return spot;
+}
 std::string name_of(uint8_t player) { return player_name(player); }
 uint8_t my_player() { return s.my_player_id; }
 uint8_t spot_owner(int spot) { return owner_of_spot(spot); }
@@ -2602,6 +2618,8 @@ void init()
         in.action_known = [](uint32_t turn, int spot) { return s.battle.commands.count({turn, spot}) > 0 || s.battle.executed.count({turn, spot}) > 0; };
         in.local_aiming = [] { return s.fa_own.active; };
         in.battle = [] { return intent::BattleRef{s.battle.id, s.battle.turn, s.battle.active}; };
+        in.remote_aim_active = [] { return s.battle.active && s.fa_rep.started && !s.fa_rep.done && s.fa_rep.key.first == s.battle.turn; };
+        in.paused = [] { return s.battle.hold || explore::remote_paused() || game::pause_menu_visible(); };
         intent::init(in);
     }
     subscribe();
@@ -2671,6 +2689,8 @@ bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
     if (r.done) return false;
     if (!r.started) {
         if (s.now - b.turn_started_at < s.action_delay_s || s.now - b.fa_arrival[key] < s.replay_lag_s) return true;
+        if (!intent::mirror_release(s.now)) return true;   // menus rejoués refermés d'abord (état du début du tour)
+        game::ModCall mod;
         ue::Call c(game::battle_manager(), STR("StartFreeAimFromUI"));
         if (c) c.invoke();
         // Le joueur d'ici ne doit ni orienter la caméra ni tirer pour ce héros (vu par Killian le 2026-10-19).
@@ -2698,6 +2718,7 @@ bool replay_free_aim(const std::pair<uint32_t, int>& key, UObject* hero)
         }
     }
     // Événements fiables, dans l'ordre.
+    game::ModCall mod;   // tirs et fin de la visée rejoués : appels du mod, pas des entrées d'ici
     while (r.next < events.size() && events[r.next].t_ms <= elapsed) {
         const auto& e = events[r.next++];
         if (e.kind == proto::FreeAimKind::Fire) {
@@ -2779,6 +2800,8 @@ void run_remote_action()
     if (s.now - b.turn_started_at < s.action_delay_s) return;
     if (s.now - b.command_time[key] < s.replay_lag_s) return;
     if (explore::remote_paused() || game::pause_menu_visible()) return;   // jeu en pause : l'action attend la reprise
+    // Menus du propriétaire rejoués ici (miroir) : refermés d'abord, l'action part du même état qu'avant le miroir.
+    if (!controls(spot) && !intent::mirror_release(s.now)) return;
     const proto::ActionCommand cmd = it->second;
     b.executed.insert(key);
     if (controls(spot)) set_local_input(false, "forced action");   // action imposée sur un héros d'ici : le joueur ne joue plus ce tour

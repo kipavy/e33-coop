@@ -311,8 +311,14 @@ bool trigger_battle(const std::wstring& encounter, const std::vector<std::wstrin
 const std::wstring& last_encounter() { return g_last_encounter; }
 const std::vector<std::wstring>& last_party() { return g_last_party; }
 
+namespace { int g_mod_calls = 0; }
+ModCall::ModCall() { ++g_mod_calls; }
+ModCall::~ModCall() { --g_mod_calls; }
+int mod_call_depth() { return g_mod_calls; }
+
 bool perform_action(int action_type, const std::wstring& secondary, const std::vector<UObject*>& targets, int combo_auto_success, std::string& err)
 {
+    ModCall mod;
     UObject* bm = battle_manager();
     if (!bm) { err = "no battle manager"; return false; }
     // Passer le tour / fuir : chemins de l'interface (pas de RequestActionExecution).
