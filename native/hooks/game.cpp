@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -768,6 +769,57 @@ bool set_pawn_desired_gait(UObject* pawn, int gait)
     if (!c) return false;
     c.set_int(STR("NewGait"), gait);
     return c.invoke();
+}
+
+bool move_info(UObject* pawn, MoveInfo& out)
+{
+    if (!pawn) return false;
+    out.cls = ue::short_name(pawn->GetClassPrivate());
+    // ACharacter::CharacterMovement -> MovementMode (TEnumAsByte<EMovementMode>), CustomMovementMode (Engine, dump)
+    if (UObject* cmc = ue::get_object(pawn, STR("CharacterMovement"))) {
+        out.move = static_cast<int>(ue::get_int(cmc, STR("MovementMode"), -1));
+        out.custom = static_cast<int>(ue::get_int(cmc, STR("CustomMovementMode"), 0));
+    }
+    out.world_map = ue::get_bool(pawn, STR("bIsWorldMapPawn"));   // BP_jRPG_Character_World_C (dump)
+    out.mount = ue::get_bool(gi(), STR("IsMountInUse"));           // BP_jRPG_GI_Custom_C, sauvegardé aussi (dump)
+    ue::Call parent(pawn, STR("GetAttachParentActor"));
+    out.attached = parent && parent.invoke() && parent.out_object(STR("ReturnValue")) != nullptr;
+    return true;
+}
+
+bool set_movement_mode(UObject* pawn, int mode)
+{
+    UObject* cmc = ue::get_object(pawn, STR("CharacterMovement"));
+    ue::Call c(cmc, STR("SetMovementMode"));
+    if (!c) return false;
+    c.set_int(STR("NewMovementMode"), mode).set_int(STR("NewCustomMode"), 0);
+    return c.invoke();
+}
+
+bool set_pawn_visible(UObject* pawn, bool visible)
+{
+    ue::Call h(pawn, STR("SetActorHiddenInGame"));
+    ue::Call col(pawn, STR("SetActorEnableCollision"));
+    if (!h || !col) return false;
+    h.set_bool(STR("bNewHidden"), !visible).invoke();
+    col.set_bool(STR("bNewActorEnableCollision"), visible).invoke();
+    return true;
+}
+
+std::vector<std::string> function_names(UObject* o, const std::vector<std::string>& needles, size_t max)
+{
+    std::vector<std::string> out;
+    if (!o || !o->GetClassPrivate()) return out;
+    auto lower = [](std::string s) { for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); return s; };
+    for (UFunction* f : TFieldRange<UFunction>(o->GetClassPrivate(), EFieldIterationFlags::IncludeSuper)) {
+        if (!f) continue;
+        const std::string n = ue::to_utf8(f->GetName());
+        const std::string ln = lower(n);
+        for (const auto& k : needles)
+            if (ln.find(k) != std::string::npos) { out.push_back(n); break; }
+        if (out.size() >= max) break;
+    }
+    return out;
 }
 
 bool map_destination(std::string& level, std::string& spawn_tag)

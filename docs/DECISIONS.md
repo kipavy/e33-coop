@@ -264,3 +264,20 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Non vérifié en jeu** : tout le mode neutre (F7 hôte en pleine partie avec hooks accrochés tard, invitation, retour au neutre), la vérification de release et l'installateur lancé depuis le jeu (`CREATE_BREAKAWAY_FROM_JOB`, copie de l'exe dans `%TEMP%`), l'installation à la fermeture du jeu.
 
 **Remise en cause si** : un hook accroché en pleine partie rate un état déjà commencé (combat, cinématique) ; ou si Steam relance le jeu avant la fin de l'installation à la fermeture.
+
+## D19 — Carte du monde : pilote sur Esquie, suiveur « fantôme » (2026-10-22, bug signalé par Killian)
+
+**Constat** (essai à deux PC, sans journal) : l'hôte (pilote) vole sur Esquie ; chez le client, le pion suiveur (à pied) est conduit vers une position en l'air ou au-dessus de l'eau : il tombe, nage, est téléporté (écart vertical > 400), retombe… « comme s'il entrait et sortait de l'eau 20 fois par seconde » (cadence de `PilotState`). Le suiveur n'a aucun moyen de reproduire la monture : `PilotState` ne portait que position, rotation et vitesse.
+
+**Données du jeu (dump)** : `BP_jRPG_GI_Custom_C.IsMountInUse` (aussi dans la save : `BP_SaveGameData`, `BP_SaveGameObject_V0`) ; `BP_jRPG_Character_World_C.bIsWorldMapPawn`, capacités (`E_jRPG_CharacterWorldCapability`, `UpdateCharacterCapabilities`) ; `BP_jRPG_Controller_World_C.OnDismountRequested()` et `LastControlledCharacterReference` (le contrôleur change de pion à la monture) ; `CharacterMovement.MovementMode` (`EMovementMode` : 3 chute, 4 nage, 5 vol, 6 custom). La classe d'Esquie et sa fonction « monter » ne sont pas dans le dump (pris hors carte du monde).
+
+**Décision** :
+1. `PilotState` gagne des champs finaux facultatifs : `move` (`EMovementMode`, 255 = inconnu/absent), `custom`, `flags` (monture = `IsMountInUse`, pion de carte du monde, pion attaché) et `pawn` (classe du pion). Anciens enregistrements : décodés avec `move` = 255, suivi inchangé.
+2. Suiveur, **sur la carte du monde seulement** (drapeau du pilote, `bIsWorldMapPawn` d'ici ou niveau `*WorldMap*`) : si la monture diffère, si la classe du pion diffère, si le pilote est attaché, ou s'il vole / est en mode custom (0,3 s), le pion est tenu en **fantôme** : caché, sans collision, en mode vol (sans gravité), placé sur la position prédite et lissée du pilote à chaque image. Rendu (posé à la position du pilote, visible, chute puis marche) après 1 s d'état reproductible, ou dès que le suivi s'arrête (prise de main, combat, niveau, fin de session). Pas de nage reproduite à tort, plus de boucle air/eau.
+3. Rien n'est écrit dans la save : la copie coop du client (D15) est sautée tant que le pion est fantôme (position en l'air, sans monture ici).
+4. Suiveur resté sur Esquie (instantané pris monté) alors que le pilote est à pied au sol : `OnDismountRequested()` du contrôleur, 3 essais au plus (`-e33mountsync=0` pour couper).
+5. Journal pour le prochain essai : `coop_pilot_move` (pilote : mode, monture, classe, z), `coop_pilot_pawn_other` (pion possédé hors `BP_jRPG_Character_World_C`), `coop_mount_functions` (fonctions du pion et du contrôleur contenant mount/esquie/fly/swim/land… : de quoi rejouer la monture plus tard), `coop_follow_mode` (pilote vu d'ici et pion d'ici), `coop_follower_ghost` (entrée/sortie, raison, durée), `coop_follower_ghost_mode` (le jeu repasse le pion en nage/chute), `coop_follower_dismount`, `coop_copy_skipped`.
+
+**Limite** : pendant le vol, l'ami ne voit pas l'hôte (pas d'avatar distant) ; sa caméra suit le pion caché. Reproduire la monture (Esquie chez le suiveur aussi) demande le nom de la fonction de montée, à lire dans `coop_mount_functions`.
+
+**Remise en cause si** : le pion de la carte du monde à pied utilise un mode custom (fantôme permanent : `coop_follower_ghost` raison `pilot_move` avec `pilot_mount` faux) ; ou si `IsMountInUse` n'est pas mis à jour à la monture (raison `pawn_class` à la place, à vérifier dans `coop_pilot_move`).

@@ -2,6 +2,7 @@
 
 #include "builds.hpp"
 #include "coopsave.hpp"
+#include "mount.hpp"
 #include "presence.hpp"
 
 #include <algorithm>
@@ -443,6 +444,7 @@ void pilot_tick()
     if (s.host && joined_players() == 0) return;
     if (!s.host && s.cj != S::ClientJoin::Joined && s.want_join) return;
     UObject* pawn = game::explore_pawn();
+    if (!pawn && !game::map_change_in_progress()) mount::pilot_without_pawn(s.now);   // diagnostic : monture ?
     if (!pawn || game::map_change_in_progress()) return;
     game::PawnState ps;
     if (!game::pawn_state(pawn, ps)) return;
@@ -454,6 +456,7 @@ void pilot_tick()
     m.level = game::current_level();
     m.x = ps.pos[0]; m.y = ps.pos[1]; m.z = ps.pos[2]; m.yaw = ps.yaw;
     m.vx = ps.vel[0]; m.vy = ps.vel[1]; m.vz = ps.vel[2];
+    mount::fill_pilot(pawn, m, s.now);   // mode de déplacement, monture (carte du monde)
     s.net.publish(m, false);
 }
 
@@ -519,6 +522,8 @@ void follow_tick()
         return;
     }
     s.level_mismatch_since = -1;
+    // Carte du monde : pilote sur Esquie (vol, nage) non reproductible ici -> pion tenu en fantôme sur le pilote (D19).
+    if (mount::follow(pawn, p, s.now - s.last_pilot_at, s.now, s.net.bump)) { s.follow_have_target = false; s.follow_moving = false; return; }
     game::PawnState me;
     if (!game::pawn_state(pawn, me)) return;
     const double own_speed = std::hypot(me.vel[0], me.vel[1]);
@@ -1116,8 +1121,9 @@ void world_hash_tick()
         uint64_t all = 0;
         for (auto& p : host.parts) all = all * 31 + p.value;
         // État vérifié : copie coop (D15). Écrire une save fige l'image : reportée si le pion court (copy_tick).
-        s.copy_ok_hash = all;
-        s.copy_ok_at = s.now;
+        // Pion fantôme (pilote sur Esquie) : position en l'air, sans monture ici : pas de copie coop.
+        if (mount::ghosted()) log().write("coop_copy_skipped", JsonObj().add("why", "follower_ghost"));
+        else { s.copy_ok_hash = all; s.copy_ok_at = s.now; }
         return;
     }
     ++s.world_mismatch_streak;
@@ -1192,6 +1198,7 @@ void init(bool host, bool want_join, const Net& net)
 void reset()
 {
     // Gardés : suivis par les hooks hors session (cinématique, question en cours).
+    mount::reset();
     S fresh;
     fresh.sequence_playing = s.sequence_playing;
     fresh.choice_pending = s.choice_pending;
@@ -1228,6 +1235,7 @@ void on_session_end()
     sprint_release();
     follow_stats_flush(true);
     s.pilot = s.me;            // plus de pilote distant : le déplacement local est rendu (movement_lock_tick)
+    mount::release("session_end");
     movement_lock_tick();
     ui::clear_status("pause");
     ui::clear_status("wait");
@@ -1384,6 +1392,7 @@ void tick(double now)
     key_tick();
     if (is_pilot()) { sprint_release(); pilot_tick(); }
     else { prof::Scope p("follow"); follow_tick(); }
+    mount::tick(s.now);   // pion fantôme rendu si le suivi s'est arrêté
     follow_stats_flush(false);
     replay_tick();
     { prof::Scope p("explore_poll"); poll_tick(); }

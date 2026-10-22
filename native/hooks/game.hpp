@@ -145,6 +145,14 @@ bool teleport_pawn(UObject* pawn, const double pos[3], double yaw);
 int pawn_gait(UObject* pawn, bool desired = false);
 bool pawn_sprint_action(UObject* pawn, bool on);
 bool set_pawn_desired_gait(UObject* pawn, int gait);
+// Mode de déplacement d'un pion (carte du monde : Esquie, vol, nage ; 2026-10-22). move = EMovementMode de
+// CharacterMovement (-1 si illisible), mount = GI.IsMountInUse, world_map = bIsWorldMapPawn, attached = attaché à un acteur.
+struct MoveInfo { int move = -1; int custom = 0; bool mount = false; bool world_map = false; bool attached = false; std::string cls; };
+bool move_info(UObject* pawn, MoveInfo& out);
+bool set_movement_mode(UObject* pawn, int mode);       // CharacterMovement.SetMovementMode(mode, 0)
+bool set_pawn_visible(UObject* pawn, bool visible);    // SetActorHiddenInGame + SetActorEnableCollision
+// Noms des fonctions de la classe de o (et de ses parents) contenant l'un des mots (insensible à la casse) : diagnostic.
+std::vector<std::string> function_names(UObject* o, const std::vector<std::string>& needles, size_t max = 80);
 // Destination d'un changement de niveau en cours (GI : LevelDestinationAssetName, SpawnPointTag).
 bool map_destination(std::string& level, std::string& spawn_tag);
 bool change_map(const std::wstring& level, const std::wstring& spawn_tag);   // FL_jRPG_CustomFunctionLibrary_C:ChangeMapByAssetName

@@ -44,6 +44,7 @@ static std::vector<proto::Message> samples()
             proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}},
             wb, proto::SaveOffer{3, 438435, 0x1122334455667788ull, "Level_SpringMeadows_Main_V2"}, ch, proto::JoinWait{"battle"},
             proto::JoinReady{3, "Level_SpringMeadows_Main_V2"}, proto::PilotState{0, 12, "Level_Camp_Main", -2191.5, -1232, 192, 120, 300, -10, 0},
+            proto::PilotState{0, 13, "Level_WorldMap", 1.5, 2, 3000, 90, 600, 0, 50, 5, 0, proto::kPilotMount | proto::kPilotWorldMap, "BP_Esquie_C"},
             proto::PilotRequest{1}, proto::PilotChange{1}, proto::WorldInteract{4, "/Game/Levels/X.X:PersistentLevel.NPC_1", false},
             proto::DialogueChoice{5, 1}, proto::MapChange{6, "Level_Camp_Main", "Level.SpawnPoint.Generic.Dynamic"},
             proto::NarrativeState{1, proto::NarrativeKind::Cinematic, true, 7}, proto::BarrierRelease{7}, proto::PauseState{2, true, false},
@@ -199,6 +200,17 @@ static void test_compat()
     auto m = proto::decode(r, err);
     CHECK(m.has_value());
     if (m) CHECK(!std::get<proto::ActionCommand>(*m).forced);
+    // PilotState d'avant les champs de mode de déplacement (enregistrement p4_cinematic_host) : mode inconnu.
+    const char* hex = "2c005400000100000015004c6576656c5f4c756d696572655f4d61696e5f5632d509c32dd296b840959d7e103882fcc027925d818498c1407d2c973d4da65640000000000000000000000000000000000000000000000000";
+    std::vector<uint8_t> old;
+    for (const char* p = hex; p[0] && p[1]; p += 2) old.push_back(static_cast<uint8_t>(std::strtoul(std::string(p, 2).c_str(), nullptr, 16)));
+    wire::Reader r2(old.data(), old.size());
+    auto ps = proto::decode(r2, err);
+    CHECK(ps.has_value() && r2.at_end());
+    if (ps) {
+        const auto& x = std::get<proto::PilotState>(*ps);
+        CHECK(x.move == proto::kMoveUnknown && x.flags == 0 && x.pawn.empty() && x.level == "Level_Lumiere_Main_V2" && x.seq == 1);
+    }
 }
 
 // Transport mémoire parfait (pour les tests de cycle de vie du lien).
