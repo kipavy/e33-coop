@@ -2,6 +2,14 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24 nuit — v0.6.8 : pause, escalade, personnage affiché (essai à deux PC, branche `fix/pause-load`)
+
+- **Pause** (vu à 00:12) : resynchro demandée et instantané envoyé pendant la pause du client -> chargement bloqué menu ouvert ; la sécurité de 0.6.7 l'a rattrapé (nouvelle demande à 00:14:05, entré à 00:14:32). Corrigé : hôte sans envoi pendant la pause du client (`remote_pause`), client sans resynchro ni chargement pendant sa pause.
+- **Escalade** (00:35:44, prises `BP_Holds`) : le suiveur rejouait la prise et restait en pose d'escalade dans les airs. Corrigé : pilote hors escalade depuis 0,6 s -> `BP_ClimbingComponent.StopClimbing` + `PrepareCharacterForWalking`, marche, placé sur le pilote (`coop_follower_climb_exit`). Non prouvé par un scénario (pas de tranche d'escalade) : à vérifier en vrai.
+- **Personnage affiché** : changement de personnage en exploration jamais transmis. Corrigé : `PilotState.chr` (champ final facultatif, nom passé à `LoadAndActivateCharacter`), le suiveur appelle `LoadAndActivateCharacter` s'il diffère (`coop_follower_character`). À vérifier en vrai.
+- **Ouvert** : parade et tir en visée libre impossibles pour TOTOFFF à la manette dans le duel du prologue (esquive OK) ; diagnostics ajoutés (`coop_defense_try` avec `BlockAllDefensiveMoves`, `coop_free_aim_shoot_input`, `coop_free_aim_shoot_action`). Attente de défense de 3 s chez l'hôte (00:54:09, `coop_wait_long` site defense, résultat du client pas reçu) : journal du client à rapatrier.
+- **Tests** (build 40036092235) : `p4_session_client`, `p6_world_client`, `p9_join_stuck_client` verts. Scénario p9 : fin sur le Bye du faux hôte (le choix rejoué pouvait être manqué).
+
 ## 2026-10-23 nuit — v0.6.7 : chargement bloqué et combat joué seul (essai à deux PC avec TOTOFFF, branche `fix/join-load-stuck`, D27)
 
 - **Vu en vrai** (v0.6.6, journaux des deux PC ; ceux du client rapatriés par `remote.ps1 fetch-logs` avec l'accord de Killian, `runs/remote/20261023-231336-fetch-logs-49003`) : 2 fois, écran noir « Chargement de la partie de l'hôte » sans fin chez le client. Les deux fois, l'instantané est parti à la seconde même où le dialogue du client finissait (`NarrativeState` faux -> `SaveOffer` aussitôt) ; `LoadGameFromSaveFile` demandé, jeu fluide, mais monde jamais prêt, et aucune limite de temps.

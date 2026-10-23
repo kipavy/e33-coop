@@ -14,6 +14,15 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.8] - 2026-10-24
+
+### Corrections
+- Pause : la partie de l'hôte n'est plus envoyée ni chargée pendant que l'autre joueur est dans le menu pause (le
+  chargement y restait bloqué).
+- Escalade : le perso de l'autre joueur ne reste plus accroché dans les airs en pose d'escalade quand le meneur a fini
+  de grimper.
+- Changement de personnage en exploration : l'autre joueur voit le même personnage que le meneur.
+
 ## [0.6.7] - 2026-10-23
 
 ### Corrections
