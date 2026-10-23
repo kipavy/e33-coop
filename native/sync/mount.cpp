@@ -628,7 +628,29 @@ void watch_line(const std::string& label)
                                         .add("explore_pawn", pawn != nullptr).add("mount", ue::get_bool(game::gi(), STR("IsMountInUse")))
                                         .add("move", mi.move).add("custom", mi.custom).add("parent", ue::short_name(parent))
                                         .add("x", ps.pos[0]).add("y", ps.pos[1]).add("z", ps.pos[2]).add("vz", ps.vel[2])
-                                        .add("speed", std::hypot(ps.vel[0], ps.vel[1])));
+                                        .add("speed", std::hypot(ps.vel[0], ps.vel[1]))
+                                        .add("wm_mode", ue::get_int(p, STR("CurrentMovementMode"), -1))
+                                        .add("wm_prev", ue::get_int(p, STR("PreviousMovementMode"), -1))
+                                        .add("zone", ue::get_int(p, STR("CurrentZoneType"), -1)).add("detected", ue::get_int(p, STR("DetectedZoneType"), -1))
+                                        .add("ground_zone", ue::get_int(p, STR("GroundZoneType"), -1))
+                                        .add("transition", ue::get_bool(p, STR("IsInTransition"))));
+}
+
+// Signature d'une fonction : noms, tailles et types des paramètres (pour l'appeler ensuite).
+void signature(UObject* t, const std::string& fn)
+{
+    UFunction* f = t ? t->GetFunctionByNameInChain(ue::from_utf8(fn).c_str()) : nullptr;
+    std::vector<std::string> ps;
+    if (f) {
+        for (FProperty* p : RC::Unreal::TFieldRange<FProperty>(f, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+            if (!p) continue;
+            ps.push_back(ue::to_utf8(p->GetName()) + ":" + std::to_string(p->GetSize()) +
+                         (RC::Unreal::CastField<RC::Unreal::FBoolProperty>(p) ? ":bool" : "") +
+                         (RC::Unreal::CastField<RC::Unreal::FObjectPropertyBase>(p) ? ":object" : "") +
+                         (RC::Unreal::CastField<RC::Unreal::FStructProperty>(p) ? ":struct" : ""));
+        }
+    }
+    log().write("coop_mount_sig", JsonObj().add("target", ue::short_name(t)).add("fn", fn).add("found", f != nullptr).add("params", join(ps)));
 }
 
 bool set_param(ue::Call& c, const std::string& name, const json::Value& v)
@@ -657,6 +679,11 @@ bool test_step(const json::Value& st, double step_t, bool first, std::string& er
     const std::string label = st["label"].as_string(op);
     if (op == "diag") { diag(label); return true; }
     if (op == "trace") { trace(); return true; }
+    if (op == "sig") {
+        UObject* t = target_of(st["target"].as_string("possessed"));
+        for (size_t i = 0; i < st["fns"].size(); ++i) signature(t, st["fns"][i].as_string());
+        return true;
+    }
     if (op == "interact" || op == "call") {
         UObject* t = target_of(st["target"].as_string("esquie"));
         if (!t) {
