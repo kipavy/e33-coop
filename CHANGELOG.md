@@ -16,12 +16,6 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [0.6.6] - 2026-10-23
 
-### Ajouts
-- Panneau Coop du menu pause utilisable comme le menu du jeu : souris (survol, clic), flèches du clavier ou croix /
-  stick de la manette pour passer d'une ligne à l'autre (Droite depuis le menu pour y entrer), Entrée / A ou
-  Gauche / Droite pour changer la répartition d'un personnage ou une option, Échap / B pour revenir au menu.
-  F9 / Maj+F9 marchent toujours.
-
 ### Modifications
 - Version du mod au menu principal : en petit en bas à droite, à côté du numéro du jeu.
 
