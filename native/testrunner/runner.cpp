@@ -1132,13 +1132,10 @@ void run_explore_step(float dt)
             next_step("skipped");
         } else if (g.seq_since >= 0 && g.step_t - g.seq_since >= st["after_s"].as_number(0) && g.step_t >= g.next_skip) {
             g.next_skip = g.step_t + 2.0;
-            // "pause_first" : comme le joueur (pause de la cinématique, puis « Passer » dans ses commandes), une fois sur deux.
             UObject* cs = ue::get_object(game::controller(), STR("BP_CinematicSystem"));
-            const bool pause_first = st["pause_first"].as_bool(false) && g.metrics["skip_attempts"] % 2 == 1;
-            if (pause_first) { ue::Call p(cs, STR("PauseCinematic")); if (p) p.invoke(); }
             if (!game::skip_cinematic()) { fail("skip_cinematic failed"); return; }
             ++g.metrics["skip_attempts"];
-            log().write("tr_skip_cinematic", JsonObj().add("t", g.step_t).add("pause_first", pause_first)
+            log().write("tr_skip_cinematic", JsonObj().add("t", g.step_t)
                                                  .add("paused", ue::get_bool(cs, STR("CinematicPaused"))).add("skipping", ue::get_bool(cs, STR("IsSkippingCinematic")))
                                                  .add("transition", ue::get_bool(cs, STR("IsInTransition"))).add("started", ue::get_bool(cs, STR("SequenceStarted"))));
         }

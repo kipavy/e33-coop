@@ -851,6 +851,7 @@ struct SceneSync {
     std::string local_scene; double local_scene_at = -1;
     // Suiveur : scène du pilote à déclencher ici
     std::optional<proto::SceneStart> pending; double pending_at = -1;
+    double scene_rx_at = -1;                      // dernier SceneStart reçu (mesure du retard)
     std::string acted_scene; double acted_at = -1; int acted_method = 0; bool acted_checked = true;
     // Suiveur : cinématique passée par le pilote, à passer ici aussi (réessayée : le jeu ignore un passage trop tôt)
     double skip_at = -1, next_skip_try = 0; int skip_tries = 0; bool skip_seen_playing = false;
@@ -1061,7 +1062,14 @@ void poll_tick()
         s.net.publish(proto::NarrativeState{s.me, s.local_kind, narr, s.narr_seq}, true);
         bump(narr ? "narratives_started" : "narratives_finished");
         log().write("coop_narrative", JsonObj().add("active", narr).add("kind", static_cast<int>(s.local_kind)).add("seq", s.narr_seq));
-        // Mesures : début ici après le début chez un autre joueur (scène en cours chez lui), fin ici après sa fin.
+        // Mesures : début ici après le début chez un autre joueur (scène en cours chez lui, ou SceneStart reçu juste avant),
+        // fin ici après sa fin.
+        if (narr && sc.scene_rx_at >= 0 && s.now - sc.scene_rx_at < 30) {
+            const double lag = s.now - sc.scene_rx_at;
+            log().write("coop_scene_lag", JsonObj().add("from_scene_start", true).add("lag_s", lag));
+            bump_max("scene_start_lag_ms_max", sc.lag_max_ms, static_cast<int>(lag * 1000));
+            sc.scene_rx_at = -1;
+        }
         for (auto& [p, a] : s.remote_narr) {
             if (p == s.me) continue;
             if (narr && a) {
@@ -1589,7 +1597,7 @@ bool handle(uint8_t from, const proto::Message& m)
         if (s.host) { if (ss->player != from || from != s.pilot) return true; s.net.relay(m, from, true); }
         log().write("coop_scene_remote", JsonObj().add("player", static_cast<int>(ss->player)).add("scene", ss->scene).add("sequence", ss->sequence)
                                              .add("cause", static_cast<int>(ss->cause)).add("cause_path", ss->cause_path).add("action", ss->action));
-        if (ss->player == s.pilot && ss->player != s.me && sharing()) { sc.pending = *ss; sc.pending_at = s.now; bump("scenes_received"); }
+        if (ss->player == s.pilot && ss->player != s.me && sharing()) { sc.pending = *ss; sc.pending_at = s.now; sc.scene_rx_at = s.now; bump("scenes_received"); }
         touch();
         return true;
     }
