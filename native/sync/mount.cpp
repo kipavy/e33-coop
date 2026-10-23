@@ -46,6 +46,8 @@ struct S {
     std::string other_cls;                 // pion possédé hors BP_jRPG_Character_World_C
     std::set<std::string> listed;          // classes dont les fonctions ont été journalisées
     // Suiveur
+    double climb_exit_since = -1;          // pion d'ici encore en escalade alors que le pilote n'y est plus (depuis)
+    double next_climb_fix = 0;
     bool ghost = false;
     UObject* pawn = nullptr;
     std::string reason;
@@ -409,6 +411,28 @@ bool follow(UObject* pawn, const proto::PilotState& p, double age, double now, c
     const bool world_map = (p.flags & proto::kPilotWorldMap) || me.world_map || p.level.find("WorldMap") != std::string::npos;
     const bool p_mount = (p.flags & proto::kPilotMount) != 0;
     if (p_mount != s.last_p_mount) { s.last_p_mount = p_mount; s.mount_tries = 0; s.dismount_tries = 0; s.next_mount = now + 0.3; }
+
+    // Escalade (prises murales) : le suiveur rejoue la prise et grimpe, mais n'en sort pas sans entrée (essai à deux PC
+    // du 2026-10-24 : Gustave resté en pose d'escalade dans les airs chez le client). Pilote sorti depuis 0,6 s -> fin
+    // de l'escalade par le jeu (StopClimbing), marche, et placé sur le pilote.
+    if (!world_map && me.move == kCustom && p.move != kCustom && p.move != 0) {
+        if (s.climb_exit_since < 0) s.climb_exit_since = now;
+        if (now - s.climb_exit_since >= 0.6 && now >= s.next_climb_fix) {
+            s.next_climb_fix = now + 1.0;
+            UObject* cc = ue::get_object(pawn, STR("BP_ClimbingComponent"));
+            bool stopped = false;
+            if (ue::Call c(cc, STR("StopClimbing")); c) stopped = c.invoke();
+            if (ue::Call c(cc, STR("PrepareCharacterForWalking")); c) c.invoke();
+            game::set_movement_mode(pawn, kWalk);
+            const double pos[3] = {p.x, p.y, p.z};
+            game::teleport_pawn(pawn, pos, p.yaw);
+            if (bump) bump("follower_climb_exits", 1);
+            log().write("coop_follower_climb_exit", JsonObj().add("custom", me.custom).add("pilot_move", static_cast<int>(p.move))
+                                                       .add("component", cc != nullptr).add("stopped", stopped));
+        }
+    } else {
+        s.climb_exit_since = -1;
+    }
     if (world_map && mount_sync_enabled()) {
         if (me.mount && is_esquie(pawn)) {
             if (s.ghost) end_ghost(nullptr, "riding", nullptr, 0);
