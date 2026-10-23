@@ -1188,6 +1188,13 @@ void apply_map_change(const proto::MapChange& mc)
                                                 .add("after_rx_s", wnow() - mt.rx_at));
 }
 
+// Dernier chargement d'ici pas encore arrivé : le jeu ne dit plus « chargement en cours » mais le pion de l'ancien
+// niveau est encore là (vu le 2026-10-23 avec des chargements lents, 20 s) ; un ChangeMap à ce moment est perdu.
+bool load_unfinished()
+{
+    return !load_dest.empty() && game::current_level() != load_dest && wnow() - load_rise_at < 60.0;
+}
+
 // Suiveur : MapChange appliqué tout de suite si possible ; sinon gardé (le dernier seulement) et appliqué dès que le
 // monde est prêt ici (pending_map_tick) : chargement d'un autre niveau en cours (pilote reparti avant notre arrivée),
 // combat pas encore fini ici, instantané en cours de chargement. Avant : second ChangeMap en plein chargement, ou
@@ -1222,7 +1229,7 @@ void on_map_change(const proto::MapChange& mc)
     s.last_pilot.reset();
     s.level_mismatch_since = -1;
     if (!zone_fix() && !sharing()) return;   // ancien comportement (mesure « avant ») : MapChange ignoré pendant la jonction
-    if (zone_fix() && (loading || game::in_battle() || !sharing() || !world_ready())) {
+    if (zone_fix() && (loading || load_unfinished() || game::in_battle() || !sharing() || !world_ready())) {
         s.pending_map = mc;
         mt.how = "deferred";
         bump("map_changes_deferred");
@@ -1236,7 +1243,7 @@ void on_map_change(const proto::MapChange& mc)
 void pending_map_tick()
 {
     if (!s.pending_map || is_pilot()) { s.pending_map.reset(); return; }
-    if (!sharing() || !world_ready()) return;
+    if (!sharing() || !world_ready() || load_unfinished()) return;
     const proto::MapChange mc = *s.pending_map;
     apply_map_change(mc);
 }

@@ -342,3 +342,30 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 6. **Critères de fluidité** mesurés par le mod chez le suiveur (compteurs, vérifiés par les scénarios `p8_sprint_*`) : 0 téléportation hors trou de données ; écart au pilote < 250 u en sprint, < 150 u en course, < 120 u en marche, < 60 u à l'arrêt ; 0 « stall » (pion < 30 % de la vitesse du pilote pendant 150 ms, pilote en mouvement), immobilité du pion pilote en mouvement <= 150 ms ; 0 creux (< 60 %, 150 ms) et 0 chute brusque (> 250 u/s en 0,1 s) pendant une course continue ; 0 arrêt du pion pilote en mouvement ; 0 image > 50 ms due au mod pendant le mouvement ; 0 resynchro envoyée pendant le mouvement. Pourquoi ces seuils : à 720 u/s, 0,2-0,3 s de retard (transit + tampon + réaction de l'ALS) font 150-220 u ; 150 ms d'immobilité est le seuil où un arrêt se voit ; à l'arrêt, 60 u = un pas.
 
 **Remise en cause si** : le jeu impose sa vitesse de sprint autrement (rattrapage sans effet : `own_speed_max` jamais au-dessus de 720 dans `coop_follow_stats`) ; ou si l'écart en sprint reste > 250 u à deux PC (tampon trop long pour le réseau réel : réduire `kRenderDelay`).
+
+---
+
+## D24 — Changements de niveau : le suiveur ne change de niveau que sur MapChange, MapChange gardé si besoin (2026-10-23, demande de Killian, précise D12 point 4)
+
+**Constat** (`p9_zones_*`, tranche réelle de 7 transitions sur `TEST_LATE` : drapeau -> carte du monde, entrée de la carte
+du monde, sorties de zone, camp) : le suivi d'une transition simple était déjà fluide (1 chargement, début 33 ms après la
+réception, aucune pause ni resynchro). Deux défauts : (1) un MapChange reçu pendant que le suiveur charge un autre niveau
+(hôte plus rapide qui repart aussitôt) : `ChangeMapByAssetName` en plein chargement est ignoré par le jeu, le suiveur
+restait dans la mauvaise zone (`p9_zones_rapid_client` avant : 2 chargements manquants, 4 transitions jamais finies) ;
+(2) MapChange perdu pendant la jonction, et position de l'ancien niveau reçue après le MapChange.
+
+**Décision** :
+1. Le suiveur applique un MapChange tout de suite si son monde est prêt ; sinon (chargement d'un autre niveau, combat pas
+   fini, jonction en cours) il garde le dernier et l'applique dès que le monde est prêt (`coop_map_change_deferred`).
+2. Il ne change de niveau que sur MapChange : les boîtes de passage (`BP_jRPG_MapTeleportPoint*`, sorties de zone et
+   entrées de la carte du monde) sont coupées chez lui (`SetGenerateOverlapEvents(false)`, reprises toutes les 10 s pour
+   les parties chargées ensuite), rendues quand il redevient pilote ou à la fin de session.
+3. Positions du pilote de l'ancien niveau ignorées après le MapChange (jusqu'à sa première position dans le nouveau, 30 s
+   au plus) ; retour par `level_resync` avec le point d'apparition du dernier MapChange vers ce niveau.
+4. Niveau du menu principal jamais publié ni suivi (le retour au menu est une fin de session).
+5. Mesures chez le suiveur (`coop_map_transition`, horloge murale) et critères des scénarios : 1 chargement par transition,
+   début < 500 ms après réception, arrivée < 3 s après le pilote, écart à la reprise < 300 u, rattrapage < 2 s, aucune
+   pause, 0 `level_resyncs`, 0 `world_resyncs`. `-e33zonefix=0` coupe 1 à 3 (mesure « avant »).
+
+**Remise en cause si** : un niveau dont l'arrivée dépend du passage du pion dans la boîte (aucun vu) ; ou
+`coop_map_change_deferred` fréquent en vrai (l'hôte devrait alors attendre le client avant de repartir).
