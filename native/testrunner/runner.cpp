@@ -21,6 +21,7 @@
 #include "../sync/coop.hpp"
 #include "../sync/coopsave.hpp"
 #include "../sync/explore.hpp"
+#include "../sync/mount.hpp"
 #include "../ui/options.hpp"
 #include "../ui/owners_ui.hpp"
 #include "../ui/ui.hpp"
@@ -280,6 +281,7 @@ int metric(const std::string& name)
     if (name.rfind("ui:", 0) == 0) return ui::count(name.substr(3));   // textes affichés (phase 5)
     if (name.rfind("owners_ui:", 0) == 0) return owners_ui::count(name.substr(10));   // losanges, panneau Coop
     if (name.rfind("options:", 0) == 0) return options::count(name.substr(8));       // panneau Coop au clavier, options
+    if (name.rfind("mount:", 0) == 0) return mount::count(name.substr(6));            // banc d'essai de la monture (Esquie)
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
 }
@@ -956,6 +958,7 @@ void subscribe()
 //   {"do":"wait_key"}                     validation en jeu : attend la touche F9
 //   {"do":"trigger","players":1}          combat du scénario (encounter, party) dès que "players" clients sont connectés
 //   {"do":"build","character":"Verso","op":"reset_attributes"}   modifie un build (comme un menu)
+//   {"do":"mount","op":"diag|trace|interact|call|move|watch|wait_mount",…}   monture d'Esquie (mount.cpp)
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -1143,6 +1146,9 @@ void run_explore_step(float dt)
         DWORD pid = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &pid);
         if (pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F9) & 0x8000)) next_step("key");
+    } else if (what == "mount") {   // banc d'essai de la monture : diagnostic, appels, déplacement du pion possédé (mount.cpp)
+        if (mount::test_step(st, g.step_t, first, err)) next_step("done");
+        else if (!err.empty()) { fail(err); return; }
     } else if (what == "request_pilot") {
         explore::request_pilot();
         next_step("requested");

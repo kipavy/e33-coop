@@ -7,6 +7,9 @@
 #pragma once
 
 #include <functional>
+#include <string>
+
+#include "../common/minijson.hpp"
 
 #include <Unreal/UObject.hpp>
 
@@ -28,5 +31,10 @@ void tick(double now);
 void release(const char* why);   // rend le pion tout de suite si possible
 bool ghosted();
 void reset();
+
+// Banc d'essai (étape {"do":"mount","op":…} des scénarios) : diagnostic de la monture, trace des appels, interaction ou
+// appel de fonction sur Esquie / le pion / le contrôleur, déplacement du pion possédé. true quand l'étape est finie.
+bool test_step(const json::Value& st, double step_t, bool first, std::string& err);
+int count(const std::string& name);   // compteurs du banc (métrique "mount:<nom>")
 
 } // namespace e33::mount

@@ -396,6 +396,17 @@ std::string owners_summary()
     return out;
 }
 
+// Bannière « Équipe : … » seulement quand la répartition a changé (avant : à chaque Owners reçu, donc à chaque arrivée
+// ou rechargement du client, jugé parasite par Killian le 2026-10-23).
+void toast_owners_if_changed()
+{
+    static std::string last;
+    const std::string sum = owners_summary();
+    if (sum.empty() || sum == last) return;   // vide : partie pas encore chargée (arrivée du client)
+    last = sum;
+    ui::toast("owners_summary", {sum}, 8.0);
+}
+
 // Hôte : répartition actuelle des personnages de l'équipe, envoyée aux clients (ils l'appliquent telle quelle).
 proto::Owners character_owner_map()
 {
@@ -423,7 +434,7 @@ void cycle_owner(size_t index)
     broadcast(character_owner_map());
     bump("owner_reassignments");
     ui::toast("owner_changed", {ch, player_name(next)});
-    if (const std::string sum = owners_summary(); !sum.empty()) ui::toast("owners_summary", {sum}, 8.0);   // vide : partie pas encore chargée (arrivée du client)
+    toast_owners_if_changed();
     log().write("coop_owner_reassigned", JsonObj().add("character", ch).add("player", static_cast<int>(next)));
 }
 
@@ -868,7 +879,7 @@ void handle(Peer& p, proto::Message& m)
             s.owner_overrides.clear();
             for (auto& o : ow->owners) s.owner_overrides[o.character] = o.player_id;
             bump("owner_maps_received");
-            if (const std::string sum = owners_summary(); !sum.empty()) ui::toast("owners_summary", {sum}, 8.0);   // vide : partie pas encore chargée (arrivée du client)
+            toast_owners_if_changed();
             log().write("coop_character_owners", JsonObj().raw("msg", proto::to_json(m)));
             return;
         }
@@ -2617,11 +2628,11 @@ void neutral_steam(bool f7)
         s.next_place_check = s.now + 0.5;   // FindFirstOf : pas à chaque image
         const bool menu = game::main_menu() != nullptr && !game::controller();
         const bool world = !menu && game::controller() && game::world_pawn() && !game::map_change_in_progress();
-        if (world && !s.ready_hint_shown && !game::in_battle()) {   // partie chargée : rappel de F7, une fois par partie
+        if (world && !s.ready_hint_shown && !game::in_battle()) {   // partie chargée : rappel de F7, une fois par lancement
             s.ready_hint_shown = true;
             ui::toast("coop_ready_hint", {}, 8.0);
         }
-        if (menu) s.ready_hint_shown = false;
+        // Rappel de F7 une seule fois par lancement du jeu (avant : à chaque partie chargée, jugé parasite).
         s.at_menu = menu;
         s.in_world = world;
     }
@@ -2968,6 +2979,7 @@ void start_session(Role r, const char* why)
             coopsave::subscribe();
             subscribe_session();
             if (r == Role::Client && s.steam) ui::joinbutton::subscribe();   // bouton « Rejoindre <ami> » du menu principal
+            ui::joinbutton::subscribe_version();   // version du mod au menu principal
         } else {
             HookBus::get().try_register();   // en pleine partie : classes déjà chargées, accrochées tout de suite
         }
@@ -3000,6 +3012,7 @@ void init()
         coopsave::subscribe();
         subscribe_session();
         ui::joinbutton::subscribe();
+        ui::joinbutton::subscribe_version();   // version du mod au menu principal
         log().write("coop_neutral", JsonObj().add("mod_version", kModVersion).add("rejoin", std::to_string(s.rejoin_host)));
         return;
     }
@@ -3423,7 +3436,7 @@ static void explore_frames_tick(double dt)
         for (auto& [n, m] : ef.step_max) if (n == name) { m = std::max(m, ms); found = true; break; }
         if (!found) ef.step_max.emplace_back(name, ms);
     }
-    // Images > 50 ms pendant un mouvement (suivi, D21) ; « mod » : le travail du mod en fait au moins la moitié.
+    // Images > 50 ms pendant un mouvement (suivi, D22) ; « mod » : le travail du mod en fait au moins la moitié.
     if (dt > 0.05 && dt < 3.0 && explore::motion_recent() && !game::map_change_in_progress()) {
         bump("explore_hitches_moving");
         if (last.total_ms > 500.0 * dt) bump("explore_hitches_mod");

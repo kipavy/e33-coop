@@ -300,7 +300,22 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 
 ---
 
-## D21 — Suivi du pilote : tampon d'interpolation, commande en vitesse, critères de fluidité (2026-10-23, demande de Killian)
+## D21 — Carte du monde : le suiveur monte sur Esquie et le conduit comme le pilote (2026-10-23, demande de Killian)
+
+**Données du jeu (en jeu, save `TEST_LATE`)** : pion à pied `BP_jRPG_Character_WorldMap_pawn_C`, Esquie = pion `BP_WorldMapCharacter_C` (sous-classe de `BP_jRPG_Character_World_C`) possédé à la montée. `BP_WorldMapControllerComponent` du contrôleur : `OnInputMountPressed` -> `OnMountRequested` -> `ProcessMountRequest` (montée), `OnDismountRequested` (descente, refusée en vol), `MountIsInUse`, `IsMountPerformingAnAnimation`. Esquie : `CurrentMovementMode` (0 marche, 1 eau, 2 vol), `TryChangeMovementMode(MovementMode, ZoneType)` (décollage / atterrissage, appelé par l'événement de saut), `ChangeMovementMode` (imposé), `IsInTransition`.
+
+**Décision** :
+1. `PilotState` gagne un dernier champ facultatif `wm_mode` (mode d'Esquie, 255 = pas sur Esquie).
+2. Suiveur sur la carte du monde, pilote sur Esquie : montée par `OnInputMountPressed` (repli : événement de la touche de monture), 3 essais toutes les 1,5 s, pion laissé sur place pendant ce temps. Puis même mode (`TryChangeMovementMode`, `ChangeMovementMode` après 2 refus), toutes les 0,5 s au plus.
+3. Conduite : vol et eau (3000-4000 u/s) : Esquie placé à chaque image sur la position prédite du pilote (cible avancée à sa vitesse puis rapprochée de la position reçue en ~0,1 s) ; marche (350 u/s) : `AddMovementInput` comme le suivi à pied, recalé au-delà de 1500 u. Pendant les animations de montée / transitions : rien.
+4. Pilote à pied, suiveur sur Esquie : retour au sol (mode marche) puis `OnDismountRequested`, 8 essais.
+5. Le fantôme de D19 reste en repli (montée impossible, ex. pion à la nage) ; `-e33mountsync=0` coupe montée et descente.
+
+**Remise en cause si** : `coop_follower_mount` échoue souvent (`can_mount` faux), ou `coop_follower_wm_mode` `forced` fréquent (mode refusé par le jeu), ou Esquie placé qui saccade visiblement en vol (passer à une poursuite par entrées).
+
+---
+
+## D22 — Suivi du pilote : tampon d'interpolation, commande en vitesse, critères de fluidité (2026-10-23, demande de Killian)
 
 **Constat** (essai à deux PC du 2026-10-22, journaux du client en 0.6.1) : quand l'hôte courait, l'ami voyait des « freeze ». Causes trouvées côté mod : téléportations toutes les ~2,2 s (sprint non suivi, seuil fixe de 800 u) et **deux rechargements d'instantané de 5-6 s en plein sprint** (resynchro d'inventaire demandée sans regarder le mouvement) ; en 0.6.4 encore (`p8_sprint_client`) : sprint du suiveur obtenu seulement par le repli `SetDesiredGait` après 0,6 s, retard moyen de 200 u jamais rattrapé (le suiveur ne peut pas aller plus vite que le pilote), départs/arrêts répétés en marche, et une resynchro envoyée en plein sprint.
 

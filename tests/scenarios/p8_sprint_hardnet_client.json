@@ -1,6 +1,6 @@
 {
   "name": "p8_sprint_hardnet_client",
-  "description": "Suivi en sprint sur un réseau dur : même tranche réelle que p8_sprint_client (twopc_sprint_a), mais latence 60 ms, gigue moyenne 40 ms, 2 % de pertes, 3 % de pointes de 250 ms (bien pire que l'essai Steam réel : < 2 % d'écarts > 80 ms). Les à-coups du réseau ne doivent pas se voir : mêmes critères de fluidité que p8_sprint_client (D21), écarts un peu plus larges (le suiveur reste derrière la position la plus récente arrivée à l'heure) : < 300 u en sprint, < 180 u en course.",
+  "description": "Suivi en sprint sur un réseau dur : même tranche réelle que p8_sprint_client (twopc_sprint_a), mais latence 60 ms, gigue moyenne 40 ms, 2 % de pertes, 3 % de pointes de 250 ms (bien pire que l'essai Steam réel : < 2 % d'écarts > 80 ms). Les à-coups du réseau ne doivent pas se voir : mêmes critères de fluidité que p8_sprint_client (D22), écarts un peu plus larges (le suiveur reste derrière la position la plus récente arrivée à l'heure) : < 300 u en sprint, < 180 u en course.",
   "join": true,
   "timeout_s": 600,
   "explore": [

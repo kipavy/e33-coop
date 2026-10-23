@@ -105,7 +105,7 @@ struct S {
     double last_pilot_at = 0;
     double follow_error = -1;
     // Sprint du suiveur (2026-10-22 : le pilote sprinte à ~720 u/s, le suiveur restait en course à ~350 u/s et était
-    // téléporté toutes les ~2,2 s à 800 u d'écart : les « freeze » vus quand l'hôte court). Suivi : FollowCtl (D21).
+    // téléporté toutes les ~2,2 s à 800 u d'écart : les « freeze » vus quand l'hôte court). Suivi : FollowCtl (D22).
     bool follow_sprint = false;                   // sprint demandé au pion suiveur
     bool sprint_touched = false;                  // le mod a déjà changé l'allure de ce pion
     int sprint_method = 0;                        // 2 SetDesiredGait (0 : échec)
@@ -345,7 +345,7 @@ void follow_new_game()
     start_intro();
     coopsave::mark_coop_game();   // après StartNewGame (qui lève la garde) : partie de l'hôte, rien dans les saves perso
     bump("new_games_followed");
-    ui::set_status("session", "new_game_follow");
+    // Pas de bannière ici (jugée inutile par Killian, 2026-10-23) : l'intro qui démarre suffit.
     log().write("coop_new_game_followed", JsonObj());
 }
 
@@ -461,7 +461,7 @@ void pilot_tick()
     s.net.publish(m, false);
 }
 
-// --- Suivi fluide du pilote (2026-10-23, « freeze » vus par le client quand l'hôte court, D21) -------------
+// --- Suivi fluide du pilote (2026-10-23, « freeze » vus par le client quand l'hôte court, D22) -------------
 // Avant : cible extrapolée depuis la dernière position reçue + lissage exponentiel, échelle d'entrée approximative,
 // sprint par SprintAction (sans effet sur le pion suiveur : repli SetDesiredGait après 0,6 s, retard de ~200 u jamais
 // rattrapé puisque le suiveur n'allait pas plus vite que le pilote), téléportation fixe à 800 u.
@@ -691,7 +691,7 @@ void follow_event(const char* what, double v, double rv, double own, double gap)
                                          .add("starved", s.now - fc.last_arrival));
 }
 
-// Mesures de fluidité chez le suiveur (compteurs vérifiés par les scénarios ; D21) :
+// Mesures de fluidité chez le suiveur (compteurs vérifiés par les scénarios ; D22) :
 //  - follow_gap_max_{walk,run,sprint} : écart max (u) au pilote (sa dernière position prolongée jusqu'à maintenant),
 //    allure du pilote stable (vitesse rendue et actuelle dans la même classe : marche 40-260, course 260-500, sprint
 //    > 500) ; follow_gap_rest_max : écart au pilote arrêté depuis 2 s ;
@@ -2127,7 +2127,6 @@ void subscribe()
             ++n;
         }
         bump("new_games_announced");
-        if (n > 0) ui::toast("new_game_shared", {std::to_string(n)});
         log().write("coop_new_game", JsonObj().add("players_following", n));
     });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:OnInitialCinematicCompleted", [](HookCtx&, UFunction*) {
