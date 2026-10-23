@@ -27,6 +27,11 @@
 #include "options.hpp"
 #include "ui.hpp"
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#define NOGDI
+#include <Windows.h>
+
 // Chemins vérifiés dans le dump (build 23765773) :
 //  - ordre des tours : BM.BattleScreenWidget (WBP_HUD_BattleScreen_C) .WBP_HUD_DriveG_TimeContainer .WBP_HUD_TurnOrder
 //    (WBP_HUD_TurnOrder_C : Portraits_List, PortraitsToCharacters = TMap<portrait, AC_jRPG_CharacterBattleStats_C*>) ;
@@ -645,7 +650,8 @@ void update_highlight()
 // Suivi du focus (4 fois par seconde) : focus -> ligne choisie (options), ligne choisie au clavier (F9) -> focus.
 void tick_nav(UObject* menu)
 {
-    for (UObject* b : menu_buttons(menu)) if (has_focus(b)) { g_nav.menu_focus = b; break; }
+    UObject* menu_btn = nullptr;
+    for (UObject* b : menu_buttons(menu)) if (has_focus(b)) { g_nav.menu_focus = menu_btn = b; break; }
     const int focused = nav_focused();
     const int sel = options::selected();
     if (sel != g_nav.last_sel) {   // F9, testeur, oubli après 20 s
@@ -657,7 +663,15 @@ void tick_nav(UObject* menu)
     } else if (focused != g_nav.focused) {   // souris, flèches, manette
         if (focused >= 0) { options::select(focused); ++g_counts["panel_focus_rows"]; }
         else if (g_nav.focused >= 0 && sel == g_nav.focused) options::select(-1);   // focus sorti du panneau
-        log().write("owners_ui_panel_focus", JsonObj().add("row", focused).add("was", g_nav.focused));
+        // Diagnostic : où est parti le focus (bouton du menu, ailleurs dans le menu, hors du menu ; fenêtre au premier plan).
+        DWORD pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        if (focused < 0) ++g_counts["panel_focus_lost"];
+        log().write("owners_ui_panel_focus", JsonObj().add("row", focused).add("was", g_nav.focused)
+                                                 .add("menu_btn", menu_btn ? ue::short_name(menu_btn) : std::string())
+                                                 .add("in_menu", call_bool(menu, L"HasFocusedDescendants"))
+                                                 .add("menu_self", call_bool(menu, L"HasAnyUserFocus"))
+                                                 .add("fg", pid == GetCurrentProcessId()));
         g_nav.last_sel = options::selected();
         g_nav.focused = focused;
     }
