@@ -1091,6 +1091,14 @@ void run_explore_step(float dt)
                 if (ok && d < best) { best = d; pick = &t; }
             }
             log().write("tr_teleport_points", JsonObj().add("count", static_cast<int64_t>(pts.size())).add("level", game::current_level()).raw("points", list + "]"));
+            if (!pick && st["fallback_level"].is_string()) {
+                // Aucun point de passage (ex. carte du monde) : changement de niveau direct.
+                log().write("tr_map_exit_fallback_level", JsonObj().add("level", st["fallback_level"].as_string("")).add("spawn", st["fallback_spawn"].as_string("")));
+                if (!game::change_map(ue::from_utf8(st["fallback_level"].as_string("")), ue::from_utf8(st["fallback_spawn"].as_string("")))) { fail("map_exit: fallback change_map failed"); return; }
+                ++g.metrics["map_exit_fallback_levels"];
+                g.exit_called = true;
+                return;
+            }
             if (!pick) { fail("map_exit: no teleport point matching '" + st["match"].as_string("") + "'"); return; }
             g.exit_point = pick->actor;
             UObject* pawn = game::explore_pawn();

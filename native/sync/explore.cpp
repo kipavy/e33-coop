@@ -122,6 +122,11 @@ struct S {
     double local_speed = 0;
     double local_speed_at = -1;
     double level_mismatch_since = -1;
+    // Changements de niveau (suiveur) : MapChange en attente, point d'apparition du pilote par niveau, niveau attendu
+    std::optional<proto::MapChange> pending_map;
+    std::map<std::string, std::string> map_spawns;
+    std::string expect_level;
+    double expect_level_at = -1;
     bool f8_down = false;
     // Interactions, dialogues, transitions (rejoués chez les suiveurs)
     uint32_t seq = 0;
@@ -519,7 +524,11 @@ void follow_tick()
             s.level_mismatch_since = -1;
             bump("level_resyncs");
             log().write("coop_level_resync", JsonObj().add("mine", level).add("pilot", p.level));
-            game::change_map(ue::from_utf8(p.level), L"");
+            {
+                // Point d'apparition du dernier MapChange vers ce niveau, s'il est connu (sinon point principal du niveau).
+                auto it = s.map_spawns.find(p.level);
+                game::change_map(ue::from_utf8(p.level), it == s.map_spawns.end() ? std::wstring() : ue::from_utf8(it->second));
+            }
         }
         return;
     }
@@ -793,9 +802,45 @@ void mt_follow(double err, bool teleported, int started, int stopped)
     mt.stops += stopped;
 }
 
+// Niveau du menu principal : jamais suivi ni publié (retour au menu = fin de session, gérée à part). Vu le 2026-10-22 :
+// le client publiait MapChange « Level_MainMenu » en quittant ; venant de l'hôte, le client aurait chargé le menu
+// comme une carte.
+bool is_menu_level(const std::string& level) { return level.empty() || level == "None" || level.find("MainMenu") != std::string::npos; }
+
+void apply_map_change(const proto::MapChange& mc)
+{
+    s.pending_map.reset();
+    if (game::current_level() == mc.level) {
+        mt.how = mt.how == "deferred" ? "deferred_same_level" : "same_level";
+        mt.expect_loads = 0;
+        log().write("coop_map_change_same_level", JsonObj().add("level", mc.level));
+        return;
+    }
+    if (mt.how.empty()) mt.how = "followed";
+    s.last_pilot.reset();
+    s.level_mismatch_since = -1;
+    s.replaying = true;
+    const bool ok = game::change_map(ue::from_utf8(mc.level), ue::from_utf8(mc.spawn_tag));
+    s.replaying = false;
+    bump(ok ? "map_changes_followed" : "map_change_errors");
+    log().write("coop_map_change_followed", JsonObj().add("level", mc.level).add("spawn", mc.spawn_tag).add("ok", ok).add("how", mt.how)
+                                                .add("after_rx_s", s.now - mt.rx_at));
+}
+
+// Suiveur : MapChange appliqué tout de suite si possible ; sinon gardé (le dernier seulement) et appliqué dès que le
+// monde est prêt ici (pending_map_tick) : chargement d'un autre niveau en cours (pilote reparti avant notre arrivée),
+// combat pas encore fini ici, instantané en cours de chargement. Avant : second ChangeMap en plein chargement, ou
+// MapChange perdu pendant la jonction (retour par level_resync 8 s plus tard, sans point d'apparition).
 void on_map_change(const proto::MapChange& mc)
 {
     touch();
+    if (is_menu_level(mc.level)) {
+        log().write("coop_map_change_ignored", JsonObj().add("level", mc.level).add("why", "menu"));
+        return;
+    }
+    s.map_spawns[mc.level] = mc.spawn_tag;
+    s.expect_level = mc.level;
+    s.expect_level_at = s.now;
     mt_close("next");
     mt = MapTrans{};
     mt.open = true;
@@ -803,28 +848,35 @@ void on_map_change(const proto::MapChange& mc)
     mt.spawn = mc.spawn_tag;
     mt.rx_at = s.now;
     std::string dest, tag;
-    if (game::map_change_in_progress() && game::map_destination(dest, tag) && dest == mc.level) {
+    const bool loading = game::map_change_in_progress();
+    if (loading && game::map_destination(dest, tag) && dest == mc.level) {
+        s.pending_map.reset();
         mt.how = "already";
         mt.loads = 1;
         mt.load_at = load_rise_at;
         log().write("coop_map_change_already", JsonObj().add("level", mc.level));
         return;
     }
-    if (!game::map_change_in_progress() && game::current_level() == mc.level) {
-        mt.how = "same_level";
-        mt.expect_loads = 0;
-        log().write("coop_map_change_same_level", JsonObj().add("level", mc.level));
-        return;
-    }
-    mt.how = "followed";
     // Dernière position du pilote = ancienne zone : oubliée, sinon le suiveur arrivé avant lui y retournait au bout de 8 s.
     s.last_pilot.reset();
     s.level_mismatch_since = -1;
-    s.replaying = true;
-    const bool ok = game::change_map(ue::from_utf8(mc.level), ue::from_utf8(mc.spawn_tag));
-    s.replaying = false;
-    bump(ok ? "map_changes_followed" : "map_change_errors");
-    log().write("coop_map_change_followed", JsonObj().add("level", mc.level).add("spawn", mc.spawn_tag).add("ok", ok));
+    if (loading || game::in_battle() || !sharing() || !world_ready()) {
+        s.pending_map = mc;
+        mt.how = "deferred";
+        bump("map_changes_deferred");
+        log().write("coop_map_change_deferred", JsonObj().add("level", mc.level).add("loading", loading).add("loading_to", dest)
+                                                    .add("battle", game::in_battle()).add("sharing", sharing()));
+        return;
+    }
+    apply_map_change(mc);
+}
+
+void pending_map_tick()
+{
+    if (!s.pending_map || is_pilot()) { s.pending_map.reset(); return; }
+    if (!sharing() || !world_ready()) return;
+    const proto::MapChange mc = *s.pending_map;
+    apply_map_change(mc);
 }
 
 // --- Entrées de déplacement d'un suiveur ------------------------------------------------------------
@@ -1688,6 +1740,12 @@ bool handle(uint8_t from, const proto::Message& m)
         }
         if (p->pilot == s.me) return true;
         follow_stats_rx(*p);
+        // Position de l'ancien niveau arrivée après le MapChange (non fiable, peut doubler le message fiable) : ignorée
+        // jusqu'à la première position du pilote dans le nouveau niveau (30 s au plus).
+        if (!s.expect_level.empty()) {
+            if (p->level == s.expect_level || s.now - s.expect_level_at > 30.0) s.expect_level.clear();
+            else { bump("pilot_states_old_level"); return true; }
+        }
         if (!s.last_pilot || p->seq > s.last_pilot->seq || p->pilot != s.last_pilot->pilot) { s.last_pilot = *p; s.last_pilot_at = s.now; }
         if (mt.open && mt.pilot_at < 0 && p->level == mt.level && p->pilot == s.pilot) mt.pilot_at = s.now;   // pilote arrivé
         return true;
@@ -1700,9 +1758,10 @@ bool handle(uint8_t from, const proto::Message& m)
         return true;
     }
     if (auto* pc = std::get_if<proto::PilotChange>(&m)) { if (!s.host) set_pilot(pc->pilot, "host"); return true; }
-    // Client pas encore entré (instantané en cours) : les événements d'exploration ne le concernent pas encore.
+    // Client pas encore entré (instantané en cours) : les événements d'exploration ne le concernent pas encore. Sauf le
+    // dernier MapChange, gardé pour après l'arrivée (pilote parti dans un autre niveau pendant la jonction).
     if (!s.host && !sharing() && (std::holds_alternative<proto::WorldInteract>(m) || std::holds_alternative<proto::DialogueChoice>(m) ||
-                                  std::holds_alternative<proto::MapChange>(m) || std::holds_alternative<proto::PilotState>(m)))
+                                  std::holds_alternative<proto::PilotState>(m)))
         return true;
     if (auto* wi = std::get_if<proto::WorldInteract>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
@@ -1764,6 +1823,7 @@ void tick(double now)
     if (s.ended) return;
     s.now = now;
     { prof::Scope p("map"); map_tick(); }
+    if (!s.host || !is_pilot()) pending_map_tick();
     if (s.host) host_join_tick();
     else client_join_tick();
     key_tick();
@@ -1906,9 +1966,9 @@ void subscribe()
         log().write("coop_intro_finished", JsonObj().add("after_s", s.now - s.intro_since));
     });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:ChangeMap", [](HookCtx&, UFunction*) {
-        if (s.replaying || !s.active || !is_pilot() || !sharing()) return;   // pas pendant le chargement de l'instantané
+        if (s.replaying || !s.active || s.ended || !is_pilot() || !sharing()) return;   // pas pendant le chargement de l'instantané
         std::string level, tag;
-        if (!game::map_destination(level, tag)) return;
+        if (!game::map_destination(level, tag) || is_menu_level(level)) return;   // retour au menu : pas une transition
         s.net.publish(proto::MapChange{++s.seq, level, tag}, true);
         bump("map_changes_published"); touch();
         log().write("coop_map_change", JsonObj().add("level", level).add("spawn", tag));
