@@ -56,7 +56,10 @@ static std::vector<proto::Message> samples()
             proto::IntentPreview{7, 3, 1, 5, 0, true, "", {}},
             proto::AimView{7, 3, 2, 1250, -32163.5, 16193.25, 1188.0, -12.5, 87.25, 70.0},
             proto::MenuState{7, 3, 2, 6, proto::MenuPage::Skills, 1, 2, 5, "Combo1", true, 1, {{proto::ActorKind::Enemy, 1}}},
-            proto::MenuState{7, 3, 2, 7, proto::MenuPage::Actions, 0, -1, 0, "", false, 0, {}}};
+            proto::MenuState{7, 3, 2, 7, proto::MenuPage::Actions, 0, -1, 0, "", false, 0, {}},
+            proto::SceneStart{0, 3, "SQT_Lumiere_Sophie", "/Game/Cinematics/X.X", proto::SceneCause::Zone,
+                              "/Game/Levels/X.X:PersistentLevel.BP_GameActionTriggerZone_C_UAID_1", "/Game/GA/DA_GA_X.DA_GA_X", 13511.25, -44700.5, 6952.0},
+            proto::SceneStart{1, 4, "", "", proto::SceneCause::Unknown, "", "", 0, 0, 0}, proto::SceneSkip{0, 5, "SQT_Lumiere_Sophie"}};
 }
 
 static void test_roundtrip()

@@ -1,0 +1,17 @@
+{
+  "name": "p8_cutscene_sync_client",
+  "description": "Scène synchronisée (2026-10-23) : le faux hôte rejoue p8_cutscene_host (le pilote traverse la zone de la scène de Sophie, publie SceneStart puis la passe : SceneSkip). Le pion du client reste sur place (-e33nofollow=1, loin de la zone) : seule la synchro peut lui faire jouer la scène. Il doit la commencer moins de 1,5 s après l'hôte par la même zone, sans pause de barrière avant, et la passer avec lui.",
+  "join": true,
+  "timeout_s": 600,
+  "shots_every_s": 5,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "until": "narratives_finished", "is": ">=1", "timeout": 240 },
+    { "do": "wait", "s": 10 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33nofollow=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p8_cutscene_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_cutscene_sync_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "600"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "scenes_received": "1", "scene_syncs_zone": "1", "scene_syncs_ok": "1", "scene_syncs_failed": "0",
+              "scene_start_lag_ms_max": "<=1500", "barrier_waits_unstarted": "0", "scene_skips_received": "1", "scene_skips_ok": "1",
+              "scene_end_late_ms_max": "<=4000", "barrier_timeouts": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
+}

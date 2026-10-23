@@ -2,6 +2,16 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-23 — cinématiques jouées ensemble (branche `fix/cutscene-sync`, D20)
+
+- **Scène « en décalé » du 2026-10-22 = scène de Sophie** (`DA_SEQ_MyFlower_P2`, `MCS_MyFlower_P2`, objectif `FoundSophie`) : déclenchée par une zone au bas de la corde. Hôte 798→835 s, client 835→874 s. En 0.6.1 la barrière figeait le client dès le `NarrativeState` de l'hôte (pas de délai de grâce), son pion n'atteignait jamais la zone. Horloges des deux PC alignées à ~0,5 s près (le « −46,2 s » ne tient pas : comparer les envois et réceptions). Intro de la nouvelle partie : pas de série (client 19 s **en avance**, chargement de la nouvelle partie plus long chez l'hôte, client pas encore entré donc sans barrière).
+- **Correction** : le pilote publie `SceneStart` (scène + cause : zone, interaction, game action + position) au `TriggerCinematic` ; le suiveur appelle `TryExecuteGameActionOnOverlap()` sur la même zone (repli : action de la zone, puis téléportation sur la position du pilote). Passage partagé (`SceneSkip`, publié seulement si la séquence finit vraiment). `game::skip_cinematic` met d'abord la cinématique en pause (sinon le jeu ignore le passage).
+- **Mesures** (compteurs `scene_start_lag_ms_max`, `scene_end_late_ms_max`, `barrier_waits_unstarted`, `barrier_wait_ms_max`, `scene_syncs_*`, `scene_skips_*`) :
+  - `p8_cutscene_client` (tranche réelle, ancien hôte sans `SceneStart`) : avant (build 39916245776, 0.6.4) début 0,37 s après l'hôte grâce au délai de grâce et au suivi ; après : 0,49 s, 0 pause avant la scène. Fin : +145 s (l'hôte réel a passé la scène, l'enregistrement ne le dit pas).
+  - `p8_cutscene_sync_client` (pion suiveur immobile `-e33nofollow=1`, loin de la zone) : début **0,07 s** après `SceneStart` (avant même le `NarrativeState`), par la zone ; passage 0 s ; fin **0,17 s** après l'hôte ; 0 pause de barrière.
+  - `p8_cutscene_host` : `SceneStart` cause zone + `DA_SEQ_MyFlower_P2`, un `SceneSkip`.
+- **À vérifier à deux PC** : `coop_cinematic_trigger` (causes des autres scènes), `coop_scene_sync` (méthode 1 attendue), `coop_scene_skip_done`.
+
 ## Fin de session (2026-10-23, 01h15) — v0.6.4 publiée ; prochaine session : autonomie à 100 %
 
 - **v0.6.3** : l'hôte envoie son salon au client du test à distance (E33R v2, `Op::Lobby`) ; diagnostic `coop_lobby_diag`. Validé : après une relance, le client a rejoint grâce à l'offre de l'hôte. **v0.6.4** : relance détachée (relaunch.ps1 / apply-update.ps1 se recréent par WMI `Win32_Process.Create`, l'installateur confie la relance à un script détaché). Cause trouvée : Steam compte le jeu « en cours » tant qu'un processus lancé par le jeu vit (helper dans le job du jeu) -> « jeu déjà en cours d'exécution ». Vérifié localement : processus WMI dans la session de l'utilisateur, parent WmiPrvSE. **Pas encore vérifié à deux PC.**
