@@ -695,6 +695,22 @@ bool wait_for(const char* site, Cond cond, double timeout_s)
 bool handle_battle_common(Peer& p, proto::Message& m)
 {
     auto& b = s.battle;
+    // Hôte : preuve positive que ce joueur est dans ce tour chez lui (il agit, ouvre ses menus, vise, pare : en plus de
+    // son StateHash du tour). Un joueur qui réfléchit, fouille ses menus ou lit une description n'est jamais « bloqué ».
+    if (s.role == Role::Host) {
+        auto sign = [&](uint32_t bid, uint32_t turn) {
+            if (bid != b.id) return;
+            b.acks[turn].insert(p.player_id);
+            if (turn >= b.turn) b.unresponsive.erase(p.player_id);
+        };
+        if (auto* x = std::get_if<proto::ActionCommand>(&m)) sign(x->battle_id, x->turn);
+        else if (auto* x1 = std::get_if<proto::ComboResult>(&m)) sign(x1->battle_id, x1->turn);
+        else if (auto* x2 = std::get_if<proto::FreeAimEvent>(&m)) sign(x2->battle_id, x2->turn);
+        else if (auto* x3 = std::get_if<proto::IntentPreview>(&m)) sign(x3->battle_id, x3->turn);
+        else if (auto* x4 = std::get_if<proto::MenuState>(&m)) sign(x4->battle_id, x4->turn);
+        else if (auto* x5 = std::get_if<proto::AimView>(&m)) sign(x5->battle_id, x5->turn);
+        else if (auto* x6 = std::get_if<proto::DefenseResult>(&m)) sign(x6->battle_id, x6->turn);
+    }
     if (auto* ac = std::get_if<proto::ActionCommand>(&m)) {
         if (ac->battle_id != b.id) return true;
         if (s.role == Role::Host && owner_of_spot(ac->actor_spot) != p.player_id) {
@@ -3344,9 +3360,11 @@ void run_remote_action()
                 return;
             }
         }
-        // Tour bloqué (sans minuteur) : le propriétaire n'a même pas commencé ce tour chez lui (aucun StateHash de ce tour)
-        // depuis stuck_turn_s de temps de jeu, sans raison visible (chargement, reconnexion : on attend). Il ne jouera pas :
-        // attaque automatique, et ses défenses / QTE ne sont plus attendus (image figée) tant qu'il ne répond pas.
+        // Tour bloqué (sans minuteur) : preuve positive que le jeu du propriétaire n'est pas dans ce tour : lien vivant,
+        // mais aucun signe de ce tour venu de lui (ni StateHash, ni menu, aperçu, visée, action) depuis stuck_turn_s de
+        // temps de jeu (pauses exclues), sans raison visible (chargement, reconnexion : on attend). Un joueur qui réfléchit,
+        // fouille ses menus ou lit une description a déjà envoyé son StateHash au début du tour : jamais concerné, même
+        // longtemps. Attaque automatique, et ses défenses / QTE ne sont plus attendus tant qu'il ne répond pas.
         if (s.role == Role::Host && running && !controls(spot)) {
             const uint8_t owner = owner_of_spot(spot);
             const auto act = presence::activity(owner, s.now);

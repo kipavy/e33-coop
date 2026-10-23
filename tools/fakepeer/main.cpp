@@ -296,6 +296,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     double own_narr_from = -1, own_narr_end = -1;   // instant de l'événement "on", fin de la scène
     int own_narr_state = 0;   // 0 pas commencée, 1 en cours, 2 finie
     const int stuck_at = static_cast<int>(script["stuck_at_turn"].as_int(0));
+    const bool hash_echo = script["hash_echo"].as_bool(true);
     bool stuck = false;
     const double def_delay_s = script["defense_delay_ms"].as_number(0) / 1000.0;
     const int def_delay_every = std::max<int>(1, static_cast<int>(script["defense_delay_every"].as_int(1)));
@@ -600,7 +601,9 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 if (def_delay_s > 0 && idx % def_delay_every == 0) { later.emplace_back(now_s() + def_delay_s, dr); ++counts["defenses_delayed"]; }
                 else lp->send(dr);
             } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
-                if (!stuck) lp->send(*sh);   // le faux client n'a pas d'état propre : il renvoie le hash de l'hôte
+                // Le faux client n'a pas d'état propre : il renvoie le hash de l'hôte ("hash_echo": false : jamais, pour
+                // tester que ses menus et aperçus suffisent à prouver qu'il est dans son tour).
+                if (!stuck && hash_echo) lp->send(*sh);
             } else if (std::get_if<proto::BattleEnd>(&m)) {
                 ++counts["battle_ends"];
                 if (!session) {

@@ -1,0 +1,11 @@
+{
+  "player_name": "Pensif",
+  "game_build": 23765773,
+  "mod_version": "current",
+  "gameplay_mods": [],
+  "hash_echo": false,
+  "intent_preview": { "delay_s": 45, "menus": true },
+  "actions": [{ "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "expect": { "menu_states_sent": ">=10", "intent_previews_sent": ">=2" }
+}
