@@ -854,6 +854,7 @@ struct SceneSync {
     std::string acted_scene; double acted_at = -1; int acted_method = 0; bool acted_checked = true;
     // Suiveur : cinématique passée par le pilote, à passer ici aussi (réessayée : le jeu ignore un passage trop tôt)
     double skip_at = -1, next_skip_try = 0; int skip_tries = 0; bool skip_seen_playing = false;
+    double skip_called_at = -1;                   // SkipCinematic appelé ici (passage effectif si la séquence finit juste après)
     // Mesures (tests) : début de la scène ici après le début chez un autre, fin ici après la fin chez lui
     std::map<uint8_t, double> remote_end_at;
     int lag_max_ms = 0, end_late_max_ms = 0, barrier_wait_max_ms = 0;
@@ -1719,9 +1720,16 @@ void subscribe()
         read_cinematic_params(ctx, f, id, seq);
         on_local_cinematic(id, seq);
     });
+    // Passage : le jeu ignore parfois SkipCinematic (trop tôt, scène impossible à passer) ; on ne publie qu'un passage
+    // effectif, vu à la fin de la séquence peu après l'appel (OnSequenceFinished, avant la transition de sortie).
     bus.pre(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:SkipCinematic", [](HookCtx&, UFunction*) {
+        sc.skip_called_at = s.now;
+        log().write("coop_skip_called", JsonObj().add("playing", game::playing_cinematic()).add("remote", sc.skip_at >= 0));
+    });
+    bus.post(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:OnSequenceFinished", [](HookCtx&, UFunction*) {
+        if (sc.skip_called_at < 0 || s.now - sc.skip_called_at > 5.0) return;
+        sc.skip_called_at = -1;
         if (!s.active || s.ended || !is_pilot() || !sharing() || sc.skip_at >= 0) return;
-        if (!game::playing_cinematic()) return;
         s.net.publish(proto::SceneSkip{s.me, ++sc.seq, sc.local_scene}, true);
         bump("scene_skips_published");
         log().write("coop_scene_skip", JsonObj().add("scene", sc.local_scene));
