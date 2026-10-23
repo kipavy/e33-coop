@@ -1040,7 +1040,11 @@ bool run_zone_action(const std::string& name_part, std::string& err)
 
 bool skip_cinematic()
 {
-    ue::Call c(ue::get_object(controller(), STR("BP_CinematicSystem")), STR("SkipCinematic"));
+    // Comme le joueur : cinématique mise en pause (ses commandes s'affichent), puis « Passer ». Sans la pause,
+    // SkipCinematic est ignoré (vu le 2026-10-23, scène de Sophie : 50 appels sans effet ; pause puis passage : fin en 1 s).
+    UObject* cs = ue::get_object(controller(), STR("BP_CinematicSystem"));
+    if (!ue::get_bool(cs, STR("CinematicPaused"))) { ue::Call p(cs, STR("PauseCinematic")); if (p) p.invoke(); }
+    ue::Call c(cs, STR("SkipCinematic"));
     return c && c.invoke();
 }
 

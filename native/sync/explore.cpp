@@ -105,7 +105,7 @@ struct S {
     double last_pilot_at = 0;
     double follow_error = -1;
     // Sprint du suiveur (2026-10-22 : le pilote sprinte à ~720 u/s, le suiveur restait en course à ~350 u/s et était
-    // téléporté toutes les ~2,2 s à 800 u d'écart : les « freeze » vus quand l'hôte court). Suivi : FollowCtl (D20).
+    // téléporté toutes les ~2,2 s à 800 u d'écart : les « freeze » vus quand l'hôte court). Suivi : FollowCtl (D21).
     bool follow_sprint = false;                   // sprint demandé au pion suiveur
     bool sprint_touched = false;                  // le mod a déjà changé l'allure de ce pion
     int sprint_method = 0;                        // 2 SetDesiredGait (0 : échec)
@@ -461,7 +461,7 @@ void pilot_tick()
     s.net.publish(m, false);
 }
 
-// --- Suivi fluide du pilote (2026-10-23, « freeze » vus par le client quand l'hôte court, D20) -------------
+// --- Suivi fluide du pilote (2026-10-23, « freeze » vus par le client quand l'hôte court, D21) -------------
 // Avant : cible extrapolée depuis la dernière position reçue + lissage exponentiel, échelle d'entrée approximative,
 // sprint par SprintAction (sans effet sur le pion suiveur : repli SetDesiredGait après 0,6 s, retard de ~200 u jamais
 // rattrapé puisque le suiveur n'allait pas plus vite que le pilote), téléportation fixe à 800 u.
@@ -689,7 +689,7 @@ void follow_event(const char* what, double v, double rv, double own, double gap)
                                          .add("starved", s.now - fc.last_arrival));
 }
 
-// Mesures de fluidité chez le suiveur (compteurs vérifiés par les scénarios ; D20) :
+// Mesures de fluidité chez le suiveur (compteurs vérifiés par les scénarios ; D21) :
 //  - follow_gap_max_{walk,run,sprint} : écart max (u) au pilote (sa dernière position prolongée jusqu'à maintenant),
 //    allure du pilote stable (vitesse rendue et actuelle dans la même classe : marche 40-260, course 260-500, sprint
 //    > 500) ; follow_gap_rest_max : écart au pilote arrêté depuis 2 s ;
@@ -1149,6 +1149,205 @@ void waited_line_tick(bool narr)
     else ui::clear_status("waited");
 }
 
+// --- Scènes synchronisées (2026-10-23) -------------------------------------------------------------
+// Essai à deux PC du 2026-10-22 : le pilote déclenche une cinématique (zone traversée au bas de la corde) ; le suiveur,
+// un peu derrière, n'atteint pas la zone, la barrière le fige, et il ne joue la scène qu'après la fin chez le pilote
+// (« en décalé »). Le pilote publie donc la scène qu'il commence (TriggerCinematic) et sa cause ; le suiveur la
+// déclenche aussitôt par la même zone (TryExecuteGameActionOnOverlap : état de la zone tenu par le jeu, pas de double
+// lecture), sinon téléporte son pion sur la position du pilote au déclenchement (il traverse la même zone).
+// La barrière ne sert plus qu'à attendre la fin ; son délai de grâce reste le filet (pair ancien, scène non retrouvée).
+struct SceneSync {
+    // Dernières causes possibles vues ici (pilote) : zone « au passage », interaction publiée, game action exécutée.
+    std::string zone, zone_action; double zone_at = -1;
+    std::string interaction; double interaction_at = -1;
+    std::string action; double action_at = -1;
+    UObject* zone_in_call = nullptr;              // zone dans TryExecuteGameActionOnOverlap (pré -> post)
+    uint32_t seq = 0;
+    // Dernière cinématique commencée ici
+    std::string local_scene; double local_scene_at = -1;
+    // Suiveur : scène du pilote à déclencher ici
+    std::optional<proto::SceneStart> pending; double pending_at = -1;
+    double scene_rx_at = -1;                      // dernier SceneStart reçu (mesure du retard)
+    std::string acted_scene; double acted_at = -1; int acted_method = 0; bool acted_checked = true;
+    // Suiveur : cinématique passée par le pilote, à passer ici aussi (réessayée : le jeu ignore un passage trop tôt)
+    double skip_at = -1, next_skip_try = 0; int skip_tries = 0; bool skip_seen_playing = false;
+    double skip_called_at = -1;                   // SkipCinematic appelé ici (passage effectif si la séquence finit juste après)
+    // Mesures (tests) : début de la scène ici après le début chez un autre, fin ici après la fin chez lui
+    std::map<uint8_t, double> remote_end_at;
+    int lag_max_ms = 0, end_late_max_ms = 0, barrier_wait_max_ms = 0;
+};
+SceneSync sc;
+
+constexpr double kSceneCauseWindow = 60.0;   // cause retenue si vue dans la minute qui précède la cinématique
+
+// Clé d'une scène : identifiant de cinématique, sinon nom de l'asset de séquence.
+std::string scene_key(const std::string& id, const std::string& seq) { return !id.empty() && id != "None" ? id : seq; }
+
+// Compteur « maximum » (les compteurs du coop sont des sommes) : relevé de la différence.
+void bump_max(const char* name, int& cur, int v)
+{
+    if (v <= cur) return;
+    bump(name, v - cur);
+    cur = v;
+}
+
+// Action « au passage » d'une zone (GameActionOnOverlap : référence ou action intégrée).
+UObject* zone_overlap_action(UObject* zone)
+{
+    using namespace RC::Unreal;
+    auto* wp = CastField<FStructProperty>(ue::prop(zone, STR("GameActionOnOverlap")));
+    if (!wp) return nullptr;
+    void* w = wp->ContainerPtrToValuePtr<void>(zone);
+    for (const wchar_t* m : {STR("GameActionReference"), STR("GameActionInline")})
+        if (FProperty* p = ue::struct_member(wp->GetStruct(), m))
+            if (UObject* a = *static_cast<UObject**>(p->ContainerPtrToValuePtr<void>(w))) return a;
+    return nullptr;
+}
+
+// TriggerCinematic(FS_TriggerCinematicVariables) : identifiant de la cinématique et asset de la séquence (chemin souple).
+void read_cinematic_params(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* f, std::string& id, std::string& seq)
+{
+    using namespace RC::Unreal;
+    auto* sp = CastField<FStructProperty>(ue::struct_member(f, L"TriggerCinematicVariableStruct"));
+    void* base = ue::param_address(ctx, f, STR("TriggerCinematicVariableStruct"));
+    if (!sp || !base) return;
+    UStruct* st = sp->GetStruct();
+    if (FProperty* p = ue::struct_member(st, L"Cinematic_LevelSequence_ID"))
+        id = ue::to_utf8(static_cast<FName*>(p->ContainerPtrToValuePtr<void>(base))->ToString());
+    // TSoftObjectPtr (UE 5.4, 0x28) : FWeakObjectPtr (8) puis FSoftObjectPath { PackageName, AssetName, SubPath }.
+    if (FProperty* p = ue::struct_member(st, L"Cinematic_LevelSequence_SequenceToPlay"); p && p->GetSize() == 0x28) {
+        auto* raw = static_cast<uint8_t*>(p->ContainerPtrToValuePtr<void>(base));
+        const std::string pkg = ue::to_utf8(reinterpret_cast<FName*>(raw + 0x08)->ToString());
+        const std::string asset = ue::to_utf8(reinterpret_cast<FName*>(raw + 0x10)->ToString());
+        if (!asset.empty() && asset != "None") seq = pkg + "." + asset;
+    }
+}
+
+// Pilote : la cinématique commence ici -> SceneStart (cause la plus récente : zone, sinon interaction, sinon game action).
+void on_local_cinematic(const std::string& id, const std::string& seq)
+{
+    sc.local_scene = scene_key(id, seq);
+    sc.local_scene_at = s.now;
+    proto::SceneStart m;
+    m.scene = id; m.sequence = seq;
+    auto recent = [](double at) { return at >= 0 && s.now - at < kSceneCauseWindow; };
+    if (recent(sc.zone_at) && (!recent(sc.interaction_at) || sc.zone_at >= sc.interaction_at)) {
+        m.cause = proto::SceneCause::Zone; m.cause_path = sc.zone; m.action = sc.zone_action;
+    } else if (recent(sc.interaction_at)) {
+        m.cause = proto::SceneCause::Interaction; m.cause_path = sc.interaction;
+        if (recent(sc.action_at)) m.action = sc.action;
+    } else if (recent(sc.action_at)) {
+        m.cause = proto::SceneCause::Action; m.action = sc.action;
+    }
+    const bool publish = s.active && !s.ended && is_pilot() && sharing() && !s.replaying;
+    log().write("coop_cinematic_trigger", JsonObj().add("scene", id).add("sequence", seq).add("cause", static_cast<int>(m.cause))
+                                              .add("cause_path", m.cause_path).add("action", m.action).add("published", publish)
+                                              .add("zone_age_s", sc.zone_at < 0 ? -1.0 : s.now - sc.zone_at)
+                                              .add("interaction_age_s", sc.interaction_at < 0 ? -1.0 : s.now - sc.interaction_at));
+    if (!publish) return;
+    m.player = s.me;
+    m.seq = ++sc.seq;
+    if (UObject* pawn = game::explore_pawn()) {
+        game::PawnState ps;
+        if (game::pawn_state(pawn, ps)) { m.x = ps.pos[0]; m.y = ps.pos[1]; m.z = ps.pos[2]; }
+    }
+    s.net.publish(m, true);
+    bump("scenes_published");
+}
+
+// Test (-e33nofollow=1) : pion suiveur laissé sur place, la scène ne peut venir que de la synchro (SceneStart).
+bool scene_test_no_follow()
+{
+    static const bool v = cmdline::arg(L"e33nofollow") == L"1";
+    return v;
+}
+
+// Suiveur : déclenche ici la scène que le pilote vient de commencer.
+void scene_tick()
+{
+    // Passage de la cinématique demandé par le pilote : tant qu'elle joue ici (au plus 10 s), une tentative par seconde.
+    if (sc.skip_at >= 0 && s.now >= sc.next_skip_try) {
+        // Séquence en cours (OnSequenceStarted -> OnSequenceFinished) : après sa fin, la transition de sortie suit, on
+        // n'y touche plus (une pause de cinématique pendant la transition n'est pas souhaitable).
+        const bool playing = s.sequence_playing && game::playing_cinematic();
+        if (!playing && !sc.skip_seen_playing && s.now - sc.skip_at < 10.0) {
+            sc.next_skip_try = s.now + 0.2;   // pas encore commencée ici : attente
+        } else if (playing && s.now - sc.skip_at < 10.0) {
+            sc.skip_seen_playing = true;
+            sc.next_skip_try = s.now + 1.0;
+            ++sc.skip_tries;
+            game::skip_cinematic();
+            log().write("coop_scene_skip_try", JsonObj().add("try", sc.skip_tries).add("after_s", s.now - sc.skip_at));
+        } else {
+            bump(sc.skip_seen_playing && !playing ? "scene_skips_ok" : "scene_skips_failed");
+            log().write("coop_scene_skip_done", JsonObj().add("tries", sc.skip_tries).add("still_playing", playing).add("after_s", s.now - sc.skip_at));
+            sc.skip_at = -1;
+        }
+    }
+    // Vérification (3 s après) : la scène a-t-elle commencé ici ?
+    if (!sc.acted_checked && s.now - sc.acted_at > 3.0) {
+        sc.acted_checked = true;
+        const bool ok = s.local_narr || sc.local_scene_at >= sc.acted_at;
+        bump(ok ? "scene_syncs_ok" : "scene_syncs_failed");
+        log().write("coop_scene_sync_result", JsonObj().add("scene", sc.acted_scene).add("ok", ok).add("method", sc.acted_method)
+                                                  .add("local_scene", sc.local_scene));
+    }
+    if (!sc.pending) return;
+    const proto::SceneStart m = *sc.pending;
+    const std::string key = scene_key(m.scene, m.sequence);
+    auto drop = [&](const char* why) {
+        log().write("coop_scene_sync_skip", JsonObj().add("scene", key).add("why", why));
+        bump("scene_syncs_skipped");
+        sc.pending.reset();
+    };
+    if (is_pilot()) return drop("pilot");
+    // Déjà dans une scène ici, ou même scène commencée ici récemment (le pion suiveur a traversé la zone) : rien.
+    if (s.local_narr || game::playing_cinematic() || game::in_dialogue()) return drop("already_narrative");
+    if (!key.empty() && sc.local_scene == key && s.now - sc.local_scene_at < 120) return drop("already_started");
+    if (!world_ready()) { if (s.now - sc.pending_at > 15) drop("world_not_ready"); return; }
+    // Interaction : rejouée ici par WorldInteract, la scène doit suivre d'elle-même ; repli après 3 s.
+    if (m.cause == proto::SceneCause::Interaction && s.now - sc.pending_at < 3.0) return;
+    int method = 0;
+    if (m.cause == proto::SceneCause::Zone && !m.cause_path.empty()) {
+        if (UObject* zone = ue::find_object(ue::from_utf8(m.cause_path).c_str())) {
+            const bool done = ue::get_bool(zone, STR("IsBehaviorDone"));
+            s.replaying = true;
+            ue::Call c(zone, STR("TryExecuteGameActionOnOverlap"));
+            const bool called = c && c.invoke();
+            s.replaying = false;
+            const bool playing = ue::get_bool(zone, STR("IsGameActionOnOverlapPlaying"));
+            log().write("coop_scene_zone", JsonObj().add("zone", m.cause_path).add("done_before", done).add("called", called).add("playing", playing)
+                                               .add("scene_started", sc.local_scene_at >= sc.pending_at));
+            if (playing || sc.local_scene_at >= sc.pending_at || game::playing_cinematic()) method = 1;
+            else if (!done) {
+                // La zone refuse (conditions d'entrée ?) : son action exécutée directement.
+                UObject* action = zone_overlap_action(zone);
+                ue::Call ex(ue::get_object(game::controller(), STR("BP_GameActionExecutorComponent")), STR("ExecuteGameAction"));
+                if (action && ex) {
+                    s.replaying = true;
+                    ex.set_object(STR("GameAction"), action).invoke();
+                    s.replaying = false;
+                    method = 2;
+                    log().write("coop_scene_zone_action", JsonObj().add("action", ue::full_name(action)));
+                }
+            }
+        } else log().write("coop_scene_zone_missing", JsonObj().add("zone", m.cause_path));
+    }
+    if (method == 0 && (m.x != 0 || m.y != 0 || m.z != 0)) {
+        // Repli : le pion suiveur rejoint la position du pilote au déclenchement (il traverse la même zone).
+        if (UObject* pawn = game::explore_pawn()) {
+            const double pos[3] = {m.x, m.y, m.z};
+            const double yaw = s.last_pilot ? s.last_pilot->yaw : 0.0;
+            if (game::teleport_pawn(pawn, pos, yaw)) method = 3;
+        }
+    }
+    bump(method == 1 ? "scene_syncs_zone" : method == 2 ? "scene_syncs_action" : method == 3 ? "scene_syncs_teleport" : "scene_syncs_none");
+    log().write("coop_scene_sync", JsonObj().add("scene", key).add("cause", static_cast<int>(m.cause)).add("method", method)
+                                       .add("after_s", s.now - sc.pending_at));
+    sc.acted_scene = key; sc.acted_at = s.now; sc.acted_method = method; sc.acted_checked = false;
+    sc.pending.reset();
+}
+
 void poll_tick()
 {
     if (s.now < s.next_poll) return;
@@ -1181,6 +1380,26 @@ void poll_tick()
         s.net.publish(proto::NarrativeState{s.me, s.local_kind, narr, s.narr_seq}, true);
         bump(narr ? "narratives_started" : "narratives_finished");
         log().write("coop_narrative", JsonObj().add("active", narr).add("kind", static_cast<int>(s.local_kind)).add("seq", s.narr_seq));
+        // Mesures : début ici après le début chez un autre joueur (scène en cours chez lui, ou SceneStart reçu juste avant),
+        // fin ici après sa fin.
+        if (narr && sc.scene_rx_at >= 0 && s.now - sc.scene_rx_at < 30) {
+            const double lag = s.now - sc.scene_rx_at;
+            log().write("coop_scene_lag", JsonObj().add("from_scene_start", true).add("lag_s", lag));
+            bump_max("scene_start_lag_ms_max", sc.lag_max_ms, static_cast<int>(lag * 1000));
+            sc.scene_rx_at = -1;
+        }
+        for (auto& [p, a] : s.remote_narr) {
+            if (p == s.me) continue;
+            if (narr && a) {
+                const double lag = s.now - s.remote_narr_since[p];
+                log().write("coop_scene_lag", JsonObj().add("player", static_cast<int>(p)).add("lag_s", lag));
+                bump_max("scene_start_lag_ms_max", sc.lag_max_ms, static_cast<int>(lag * 1000));
+            } else if (!narr && !a && sc.remote_end_at.count(p) && s.now - sc.remote_end_at[p] < 300) {
+                const double late = s.now - sc.remote_end_at[p];
+                log().write("coop_scene_end_late", JsonObj().add("player", static_cast<int>(p)).add("late_s", late));
+                bump_max("scene_end_late_ms_max", sc.end_late_max_ms, static_cast<int>(late * 1000));
+            }
+        }
     }
     // Barrière : fini ici, pas chez les autres -> jeu en pause jusqu'à ce que tout le monde ait fini. Aussi quand la
     // cinématique enchaîne sur un combat (boss) : personne ne commence le combat avant les autres.
@@ -1207,6 +1426,7 @@ void poll_tick()
         s.barrier_paused = true;
         s.barrier_since = s.now;
         bump("barrier_waits");
+        if (!finished_here) bump("barrier_waits_unstarted");   // scène des autres pas commencée ici (pause avant la scène)
         // finished_here : même scène, finie ici avant les autres ; sinon scène pas commencée ici après le délai de grâce.
         log().write("coop_barrier_hold", JsonObj().add("finished_here", finished_here).add("others_since_s", since < -1e8 ? -1.0 : s.now - since));
     } else if (s.barrier_paused && (!hold || s.now - s.barrier_since > kBarrierTimeout)) {
@@ -1216,6 +1436,7 @@ void poll_tick()
         ui::clear_status("wait");
         bump("barrier_releases");
         if (battle) bump("barrier_releases_battle");
+        bump_max("barrier_wait_ms_max", sc.barrier_wait_max_ms, static_cast<int>((s.now - s.barrier_since) * 1000));
         log().write("coop_barrier_release", JsonObj().add("waited_s", s.now - s.barrier_since).add("timeout", hold).add("battle", battle));
     }
     // Qui on attend et pourquoi (cinématique, dialogue, chargement, menu, reconnexion), mis à jour à chaque passage.
@@ -1549,6 +1770,7 @@ void reset()
     s = std::move(fresh);
     fstats = FollowStats{};
     fc = FollowCtl{};
+    sc = SceneSync{};
 }
 
 void set_player_id(uint8_t id) { s.me = id; }
@@ -1712,12 +1934,30 @@ bool handle(uint8_t from, const proto::Message& m)
     if (auto* ns = std::get_if<proto::NarrativeState>(&m)) {
         if (s.host) { if (ns->player != from) return true; s.net.relay(m, from, true); }
         if (ns->active && !s.remote_narr[ns->player]) s.remote_narr_since[ns->player] = s.now;
+        if (!ns->active && s.remote_narr[ns->player]) sc.remote_end_at[ns->player] = s.now;
         s.remote_narr[ns->player] = ns->active;
         presence::set_narrative(ns->player, ns->active, ns->kind == proto::NarrativeKind::Cinematic, s.now);
         log().write("coop_narrative_remote", JsonObj().add("player", static_cast<int>(ns->player)).add("active", ns->active).add("seq", ns->seq));
         return true;
     }
     if (std::get_if<proto::BarrierRelease>(&m)) return true;
+    if (auto* ss = std::get_if<proto::SceneStart>(&m)) {
+        if (s.host) { if (ss->player != from || from != s.pilot) return true; s.net.relay(m, from, true); }
+        log().write("coop_scene_remote", JsonObj().add("player", static_cast<int>(ss->player)).add("scene", ss->scene).add("sequence", ss->sequence)
+                                             .add("cause", static_cast<int>(ss->cause)).add("cause_path", ss->cause_path).add("action", ss->action));
+        if (ss->player == s.pilot && ss->player != s.me && sharing()) { sc.pending = *ss; sc.pending_at = s.now; sc.scene_rx_at = s.now; bump("scenes_received"); }
+        touch();
+        return true;
+    }
+    if (auto* sk = std::get_if<proto::SceneSkip>(&m)) {
+        if (s.host) { if (sk->player != from || from != s.pilot) return true; s.net.relay(m, from, true); }
+        log().write("coop_scene_skip_remote", JsonObj().add("player", static_cast<int>(sk->player)).add("scene", sk->scene).add("local_scene", sc.local_scene));
+        if (sk->player == s.pilot && sk->player != s.me && sharing()) {
+            sc.skip_at = s.now; sc.next_skip_try = s.now; sc.skip_tries = 0; sc.skip_seen_playing = false;
+            bump("scene_skips_received");
+        }
+        return true;
+    }
     if (auto* ps = std::get_if<proto::PauseState>(&m)) {
         if (s.host) { if (ps->player != from) return true; s.net.relay(m, from, true); }
         s.remote_pause[ps->player] = ps->paused;
@@ -1737,7 +1977,7 @@ void tick(double now)
     else client_join_tick();
     key_tick();
     if (is_pilot()) { sprint_release(); pilot_tick(); }
-    else { prof::Scope p("follow"); follow_tick(); }
+    else if (!scene_test_no_follow()) { prof::Scope p("follow"); follow_tick(); }
     mount::tick(s.now);   // pion fantôme rendu si le suivi s'est arrêté
     follow_stats_flush(false);
     {   // Mouvement en cours (pilote vu d'ici, ou pion local) : pas de rechargement d'instantané (world_resync_tick).
@@ -1747,6 +1987,7 @@ void tick(double now)
         if (pilot_moving || local_moving_now) s.last_motion_at = s.now;
     }
     replay_tick();
+    scene_tick();
     { prof::Scope p("explore_poll"); poll_tick(); }
     world_hash_tick();
     world_resync_tick();
@@ -1784,6 +2025,7 @@ void subscribe()
             }
             s.net.publish(proto::WorldInteract{++s.seq, path, instant}, true);
             bump("interactions_published"); touch();
+            sc.interaction = path; sc.interaction_at = s.now;   // cause possible d'une cinématique (SceneStart)
             log().write("coop_interaction", JsonObj().add("actor", path).add("instant", instant));
         });
     }
@@ -1814,6 +2056,46 @@ void subscribe()
         s.sequence_playing = false;
         if (s.intro) ++s.intro_sequences_done;
         log().write("coop_sequence_finished", JsonObj());
+    });
+    // Scènes synchronisées : causes vues ici (zone « au passage », game action), début et passage d'une cinématique.
+    bus.pre(L"/Game/LevelTools/MovementZone/BP_GameActionTriggerZone.BP_GameActionTriggerZone_C:TryExecuteGameActionOnOverlap", [](HookCtx& ctx, UFunction*) {
+        sc.zone_in_call = ctx.Context;
+    });
+    bus.post(L"/Game/LevelTools/MovementZone/BP_GameActionTriggerZone.BP_GameActionTriggerZone_C:TryExecuteGameActionOnOverlap", [](HookCtx&, UFunction*) {
+        sc.zone_in_call = nullptr;
+    });
+    bus.pre(L"/Game/Gameplay/GameActionsSystem/BP_GameActionExecutorComponent.BP_GameActionExecutorComponent_C:ExecuteGameActionWrapperFromTriggerZone", [](HookCtx&, UFunction*) {
+        if (!sc.zone_in_call) return;
+        UObject* action = zone_overlap_action(sc.zone_in_call);
+        sc.zone = object_path(sc.zone_in_call);
+        sc.zone_action = action ? object_path(action) : std::string();
+        sc.zone_at = s.now;
+        log().write("coop_zone_executed", JsonObj().add("zone", sc.zone).add("action", sc.zone_action).add("replaying", s.replaying));
+    });
+    bus.pre(L"/Game/Gameplay/GameActionsSystem/BP_GameActionExecutorComponent.BP_GameActionExecutorComponent_C:ExecuteGameAction", [](HookCtx& ctx, UFunction* f) {
+        UObject* a = ue::read_param_object(ctx, f, STR("GameAction"));
+        if (!a) return;
+        sc.action = object_path(a);
+        sc.action_at = s.now;
+    });
+    bus.pre(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:TriggerCinematic", [](HookCtx& ctx, UFunction* f) {
+        std::string id, seq;
+        read_cinematic_params(ctx, f, id, seq);
+        on_local_cinematic(id, seq);
+    });
+    // Passage : le jeu ignore parfois SkipCinematic (trop tôt, scène impossible à passer) ; on ne publie qu'un passage
+    // effectif, vu à la fin de la séquence peu après l'appel (OnSequenceFinished, avant la transition de sortie).
+    bus.pre(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:SkipCinematic", [](HookCtx&, UFunction*) {
+        sc.skip_called_at = s.now;
+        log().write("coop_skip_called", JsonObj().add("playing", game::playing_cinematic()).add("remote", sc.skip_at >= 0));
+    });
+    bus.post(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:OnSequenceFinished", [](HookCtx&, UFunction*) {
+        if (sc.skip_called_at < 0 || s.now - sc.skip_called_at > 5.0) return;
+        sc.skip_called_at = -1;
+        if (!s.active || s.ended || !is_pilot() || !sharing() || sc.skip_at >= 0) return;
+        s.net.publish(proto::SceneSkip{s.me, ++sc.seq, sc.local_scene}, true);
+        bump("scene_skips_published");
+        log().write("coop_scene_skip", JsonObj().add("scene", sc.local_scene));
     });
     bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:EndDialogue", [](HookCtx&, UFunction*) { s.choice_pending = false; });
     // Nouvelle partie ensemble : l'hôte lance une nouvelle partie -> les clients qui attendent au menu suivent.
