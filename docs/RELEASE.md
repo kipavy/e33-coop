@@ -8,6 +8,8 @@ Une release GitHub de `kipavy/e33-coop` contient trois fichiers :
 | `e33coop-player.zip` | paquet joueur : UE4SS épinglé + mod + `mods.txt` + installateur + `install.ps1` / `uninstall.ps1` |
 | `SHA256SUMS` | empreintes SHA-256 des deux fichiers ci-dessus (format `sha256sum`) |
 
+Notes de chaque release : section de la version dans `CHANGELOG.md` (source unique).
+
 L'installateur et le mod n'installent **que** le zip de la dernière release, téléchargé en HTTPS depuis `github.com` (et
 le stockage de GitHub vers lequel il redirige), avec la même empreinte que dans `SHA256SUMS`.
 
@@ -21,23 +23,30 @@ correspond pas à `VERSION`.
 ## Procédure
 
 1. Vérifier que la branche à publier est verte (`build`) et que la batterie est passée.
-2. Mettre le nouveau numéro dans `VERSION` (même format `X.Y.Z`), committer et pousser.
-3. Optionnel, essai à blanc : *Actions › release › Run workflow* sur la branche (case « essai à blanc » cochée).
+2. **Notes de version** : dans `CHANGELOG.md` (source unique, format Keep a Changelog), renommer la section
+   `## [Non publié]` en `## [X.Y.Z] - AAAA-MM-JJ`, ouvrir une nouvelle section `## [Non publié]` vide au-dessus, et
+   mettre à jour les liens de comparaison en bas du fichier. Vérifier le rendu :
+   `powershell -File tools/release/release-notes.ps1 -Version X.Y.Z`. Chaque changement visible par les joueurs est
+   ajouté sous `[Non publié]` au moment où il est fusionné (rubriques Ajouts / Modifications / Corrections /
+   Suppressions / Sécurité, une ligne écrite pour un joueur).
+3. Mettre le nouveau numéro dans `VERSION` (même format `X.Y.Z`), committer et pousser.
+4. Optionnel, essai à blanc : *Actions › release › Run workflow* sur la branche (case « essai à blanc » cochée).
    Le workflow compile, fait le paquet et publie seulement l'artefact `release-dry-run` (zip, installateur,
    `SHA256SUMS`, notes). Rien n'est publié.
-4. Poser et pousser le tag :
+5. Poser et pousser le tag :
    ```bash
    git tag v0.6.0
    git push origin v0.6.0
    ```
-5. Le workflow `release` (`.github/workflows/release.yml`) :
-   - vérifie que le tag vaut `v` + `VERSION` ;
+6. Le workflow `release` (`.github/workflows/release.yml`) :
+   - vérifie que le tag vaut `v` + `VERSION` et que `CHANGELOG.md` a une section non vide pour cette version ;
    - compile le mod (`Game__Shipping__Win64`) et les outils (`Release`) par `build.yml`, tests unitaires compris ;
    - télécharge UE4SS épinglé (release `experimental-latest` d'UE4SS, fichier `UE4SS_v3.0.1-1181-g83330635.zip`,
      empreinte vérifiée) ;
    - fait le paquet (`tools/package/make-player-package.ps1`), calcule `SHA256SUMS` ;
-   - crée la release `vX.Y.Z` (marquée « latest ») avec les trois fichiers.
-6. Suivre : `gh run list -w release -L1`, puis `gh run watch <id> --exit-status`.
+   - crée la release `vX.Y.Z` (marquée « latest ») avec les trois fichiers ; notes = section du CHANGELOG + mode
+     d'installation (`tools/release/release-notes.ps1`).
+7. Suivre : `gh run list -w release -L1`, puis `gh run watch <id> --exit-status`.
 
 Dès la publication, les mods installés (option `updates = auto`, par défaut) téléchargent la nouvelle version au
 menu principal et l'installent à la fermeture du jeu.
