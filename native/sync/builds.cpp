@@ -166,8 +166,6 @@ void on_complete(Inbound& in)
         log().write("coop_build_applied", JsonObj().add("xfer", o.xfer).add("names", ns).add("reason", o.reason).add("applied", static_cast<int64_t>(applied.size())));
         if (o.reason == "not yours")
             for (auto& n : o.names) ui::toast("build_not_yours", {n.name, s.net.name_of ? s.net.name_of(s.net.owner_of(n.name)) : ""});
-        else if (!applied.empty() && o.origin != s.me)
-            for (auto& n : applied) ui::toast("build_applied", {n, s.net.name_of ? s.net.name_of(o.origin) : ""});
         return;
     }
     // Hôte : proposition d'un client. Seuls ses propres personnages sont acceptés.
@@ -190,7 +188,6 @@ void on_complete(Inbound& in)
                 c.data.assign(in.data.begin() + off, in.data.begin() + off + std::min<size_t>(proto::kMaxChunk, in.data.size() - off));
                 s.net.relay(c, in.from);
             }
-            for (auto& n : applied) ui::toast("build_applied", {n, s.net.name_of ? s.net.name_of(in.from) : ""});
             refresh_cache();
         }
     }

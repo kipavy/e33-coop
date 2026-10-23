@@ -18,7 +18,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 - Version du mod affichée au menu principal (sous les boutons) et en bas du panneau Coop (F9).
 
 ### Suppressions
-- Bannière « L'hôte commence une nouvelle partie : l'intro démarre… » chez le client (inutile).
+- Bannières inutiles : « L'hôte commence une nouvelle partie… » (client), « Nouvelle partie : N joueur(s) regardent
+  l'intro avec vous » (hôte), « X a modifié <personnage> » à chaque changement de build de l'autre joueur.
+
+### Modifications
+- La bannière « Équipe : … » ne s'affiche plus que quand la répartition des personnages change (plus à chaque
+  arrivée ou rechargement d'un joueur) ; le rappel « F7 pour ouvrir votre partie » une seule fois par lancement du jeu.
 
 ## [0.6.4] - 2026-10-23
 

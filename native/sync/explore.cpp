@@ -1477,7 +1477,6 @@ void subscribe()
             ++n;
         }
         bump("new_games_announced");
-        if (n > 0) ui::toast("new_game_shared", {std::to_string(n)});
         log().write("coop_new_game", JsonObj().add("players_following", n));
     });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:OnInitialCinematicCompleted", [](HookCtx&, UFunction*) {
