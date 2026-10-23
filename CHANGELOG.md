@@ -14,6 +14,8 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.5] - 2026-10-23
+
 ### Ajouts
 - Cinématiques en même temps : quand le meneur déclenche une scène, elle démarre aussitôt chez les autres joueurs (au
   lieu de se jouer l'une après l'autre) ; passer une scène la passe chez tout le monde.
@@ -85,7 +87,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.4...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/kipavy/e33-coop/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/kipavy/e33-coop/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/kipavy/e33-coop/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/kipavy/e33-coop/compare/v0.6.1...v0.6.2
