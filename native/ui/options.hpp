@@ -2,7 +2,7 @@
 //  - F9 : ligne suivante (personnages de l'équipe pour l'hôte hors combat, puis options) ; après la dernière, fermé ;
 //  - Maj+F9 : changer la ligne choisie (personnage -> joueur suivant, comme F6 ; option -> valeur suivante, enregistrée).
 // Dans le menu pause, la sélection est surlignée dans le panneau « Coop » (owners_ui) ; ailleurs, une carte la montre.
-// Le panneau est aussi navigable (owners_ui, D24) : la ligne qui a le focus devient la ligne choisie, et inversement ;
+// Le panneau est aussi navigable (owners_ui, D25) : la ligne qui a le focus devient la ligne choisie, et inversement ;
 // clic / Entrée / A = change(), gauche / droite = change(-1 / +1).
 // Options d'hôte (parade en duo, minuteur) : lecture seule chez un client (la valeur de l'hôte voyage dans BattleStart).
 // Touches coupées en mode test (le testeur pilote par select / change).

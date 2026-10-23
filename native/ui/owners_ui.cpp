@@ -42,7 +42,7 @@
 // pointeur gardé d'un passage à l'autre, donc rien de périmé quand le jeu détruit son HUD).
 // Bouton « Coop » dans la liste du menu pause : écarté (boutons CommonUI liés au graphe BP et à la navigation manette) ;
 // le panneau s'affiche donc de lui-même à droite dès que le menu pause est ouvert.
-// Navigation (D24) : chaque ligne modifiable (personnage de l'équipe chez l'hôte hors combat, option) est un vrai bouton
+// Navigation (D25) : chaque ligne modifiable (personnage de l'équipe chez l'hôte hors combat, option) est un vrai bouton
 // du jeu (WBP_BaseButton_C réglé comme « Paramètres » du menu pause, comme le bouton Rejoindre de l'écran titre) :
 // souris (survol, clic), flèches / croix / stick, Entrée / A. Le bouton est en navigation contrainte horizontale
 // (USFUIButtonBase, comme les lignes de l'écran Paramètres) : gauche / droite ne déplacent pas le focus, le jeu diffuse
