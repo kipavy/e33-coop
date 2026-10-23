@@ -18,6 +18,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <vector>
 
 #include "../common/cmdline.hpp"
@@ -1077,9 +1078,12 @@ void mt_close(const char* why)
         .add("starts", mt.starts).add("stops", mt.stops).add("paused_ms", static_cast<int64_t>(mt.paused_s * 1000.0))
         .add("ticked_ms", static_cast<int64_t>(mt.ticked_s * 1000.0)).add("mod_slow", mt.mod_slow).add("mod_max_ms", std::round(mt.mod_max_ms * 100.0) / 100.0).add("slow_frames", mt.slow));
     bump("map_transitions");
-    if (!done) bump("map_transitions_unfinished");
+    // Remplacée : nouveau MapChange avant l'arrivée (le pilote est reparti) ; le suiveur va directement au niveau suivant.
+    const bool superseded = !done && std::string_view(why) == "next";
+    if (superseded) bump("map_transitions_superseded");
+    else if (!done) bump("map_transitions_unfinished");
     if (mt.loads > mt.expect_loads) bump("map_loads_extra", mt.loads - mt.expect_loads);
-    if (mt.loads < mt.expect_loads) bump("map_loads_missing", mt.expect_loads - mt.loads);
+    if (mt.loads < mt.expect_loads && !superseded) bump("map_loads_missing", mt.expect_loads - mt.loads);
     bump_max("map_follow_delay_ms_max", mmax.delay, static_cast<int>(std::max<int64_t>(0, delay)));
     bump_max("map_follower_load_ms_max", mmax.load, static_cast<int>(std::max<int64_t>(0, load)));
     bump_max("map_after_pilot_ms_max", mmax.late, static_cast<int>(std::max<int64_t>(0, late)));
@@ -1211,13 +1215,6 @@ void apply_map_change(const proto::MapChange& mc)
                                                 .add("after_rx_s", wnow() - mt.rx_at));
 }
 
-// Dernier chargement d'ici pas encore arrivé : le jeu ne dit plus « chargement en cours » mais le pion de l'ancien
-// niveau est encore là quelques images (vu le 2026-10-23, chargements lents) ; un ChangeMap à ce moment est perdu.
-bool load_unfinished()
-{
-    return !load_in && !load_dest.empty() && load_fall_at >= 0 && wnow() - load_fall_at < 3.0 && game::current_level() != load_dest;
-}
-
 // Suiveur : MapChange appliqué tout de suite si possible ; sinon gardé (le dernier seulement) et appliqué dès que le
 // monde est prêt ici (pending_map_tick) : chargement d'un autre niveau en cours (pilote reparti avant notre arrivée),
 // combat pas encore fini ici, instantané en cours de chargement. Avant : second ChangeMap en plein chargement, ou
@@ -1253,7 +1250,7 @@ void on_map_change(const proto::MapChange& mc)
     s.last_pilot.reset();
     s.level_mismatch_since = -1;
     if (!zone_fix() && !sharing()) return;   // ancien comportement (mesure « avant ») : MapChange ignoré pendant la jonction
-    if (zone_fix() && (loading || load_unfinished() || game::in_battle() || !sharing() || !world_ready())) {
+    if (zone_fix() && (loading || game::in_battle() || !sharing() || !world_ready())) {
         s.pending_map = mc;
         mt.how = "deferred";
         bump("map_changes_deferred");
@@ -1267,7 +1264,7 @@ void on_map_change(const proto::MapChange& mc)
 void pending_map_tick()
 {
     if (!s.pending_map || is_pilot()) { s.pending_map.reset(); return; }
-    if (!sharing() || !world_ready() || load_unfinished()) return;
+    if (!sharing() || !world_ready()) return;
     const proto::MapChange mc = *s.pending_map;
     apply_map_change(mc);
 }
