@@ -8,6 +8,10 @@
 #include <utility>
 #include <vector>
 
+#include <Unreal/UObjectGlobals.hpp>
+#include <Unreal/UClass.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+
 #include "../common/jsonlog.hpp"
 #include "../hooks/game.hpp"
 #include "../hooks/hookbus.hpp"
@@ -298,32 +302,159 @@ bool insert(UObject* menu)
     return true;
 }
 
-// Version du mod au menu principal, en dernier dans ButtonsBox, dans le style du sous-titre « appuyez sur une touche ».
+// Version du mod au menu principal : petit texte en bas à droite, juste à gauche du numéro du jeu (BuildText), même
+// police, couleur et ombre. Posé dans le premier panneau Overlay ou CanvasPanel qui contient BuildText (ou un de ses
+// ancêtres), puis recalé à chaque passage (largeur du numéro connue après la mise en page, texte remis par le jeu).
 // On ne déréférence jamais un widget gardé d'un ancien menu : on compare seulement les pointeurs aux enfants vivants.
 UObject* g_version = nullptr;
 int g_version_errors = 0;
+constexpr float kVersionGap = 12.f;
 
-void place_version(UObject* title)
+void version_error(const char* what)
 {
-    if (g_version_errors >= 3) return;
-    UObject* box = ue::get_object(title, STR("ButtonsBox"));
-    UObject* tmpl = ue::get_object(title, STR("PressAnyButtonText"));
-    if (!box || !tmpl) { ++g_version_errors; log().write("ui_version_error", JsonObj().add("what", "widgets")); return; }
-    ue::Call all(box, STR("GetAllChildren"));
+    ++g_version_errors;
+    log().write("ui_version_error", JsonObj().add("what", what).add("count", static_cast<int64_t>(g_version_errors)));
+}
+
+// Copie brute d'une propriété de src dans le paramètre d'un setter de dst (tailles identiques), puis appel.
+void copy_to_setter(UObject* dst, const wchar_t* fn, const wchar_t* param, UObject* src, const wchar_t* prop)
+{
+    FProperty* fp = ue::prop(src, prop);
+    ue::Call c(dst, fn);
+    if (!c || !fp || c.param_size(param) != static_cast<size_t>(fp->GetSize())) return;
+    c.set_raw(param, fp->ContainerPtrToValuePtr<void>(src)).invoke();
+}
+
+// Résultat brut d'un getter (struct) passé tel quel à un setter.
+void getter_to_setter(UObject* src, const wchar_t* get, UObject* dst, const wchar_t* set, const wchar_t* param)
+{
+    ue::Call g(src, get);
+    ue::Call s(dst, set);
+    if (!g || !s || !g.invoke() || g.param_size(STR("ReturnValue")) != s.param_size(param)) return;
+    s.set_raw(param, g.param_ptr(STR("ReturnValue"))).invoke();
+}
+
+// Composantes d'un FVector2D renvoyé (doubles en UE5, floats sinon).
+bool vec2_out(ue::Call& c, double& x, double& y)
+{
+    const void* p = c.param_ptr(STR("ReturnValue"));
+    if (!p) return false;
+    if (c.param_size(STR("ReturnValue")) == 16) { x = static_cast<const double*>(p)[0]; y = static_cast<const double*>(p)[1]; return true; }
+    if (c.param_size(STR("ReturnValue")) == 8) { x = static_cast<const float*>(p)[0]; y = static_cast<const float*>(p)[1]; return true; }
+    return false;
+}
+
+void set_vec2(UObject* o, const wchar_t* fn, const wchar_t* param, double x, double y)
+{
+    ue::Call c(o, fn);
+    void* d = c.param_ptr(param);
+    if (!d) return;
+    if (c.param_size(param) == 16) { static_cast<double*>(d)[0] = x; static_cast<double*>(d)[1] = y; }
+    else if (c.param_size(param) == 8) { static_cast<float*>(d)[0] = static_cast<float>(x); static_cast<float*>(d)[1] = static_cast<float>(y); }
+    else return;
+    c.invoke();
+}
+
+void set_tb_text(UObject* tb, const std::string& s)
+{
+    std::vector<uint8_t> ft;
+    ue::Call c(tb, STR("SetText"));
+    if (c && make_text(s, ft) && c.param_size(STR("InText")) == ft.size()) c.set_raw(STR("InText"), ft.data()).invoke();
+}
+
+UObject* make_text_block(UObject* outer)
+{
+    auto* cls = static_cast<UClass*>(ue::find_object(STR("/Script/UMG.TextBlock")));
+    if (!cls || !outer) return nullptr;
+    static int seq = 0;
+    const std::wstring name = L"E33Coop_Version_" + std::to_wstring(++seq);
+    FStaticConstructObjectParameters p{cls, outer};
+    p.Name = FName(name.c_str(), FNAME_Add);
+    return UObjectGlobals::StaticConstructObject(p);
+}
+
+// Cale notre texte à gauche de anchor (enfant direct de panel). Renvoie false si la largeur n'est pas encore connue.
+bool position_version(UObject* panel, UObject* anchor, UObject* w)
+{
+    ue::Call ds(anchor, STR("GetDesiredSize"));
+    double aw = 0, ah = 0;
+    if (!ds || !ds.invoke() || !vec2_out(ds, aw, ah) || aw <= 0) return false;
+    UObject* aslot = ue::get_object(anchor, STR("Slot"));
+    UObject* slot = ue::get_object(w, STR("Slot"));
+    if (!aslot || !slot) return false;
+    if (ue::is_a(panel, STR("CanvasPanel"))) {
+        getter_to_setter(aslot, STR("GetAnchors"), slot, STR("SetAnchors"), STR("InAnchors"));
+        ue::Call al(aslot, STR("GetAlignment"));
+        ue::Call po(aslot, STR("GetPosition"));
+        double ax = 0, ay = 0, px = 0, py = 0;
+        if (!al || !al.invoke() || !vec2_out(al, ax, ay) || !po || !po.invoke() || !vec2_out(po, px, py)) return false;
+        ue::Call as(slot, STR("SetAutoSize"));
+        if (as) as.set_bool(STR("InbAutoSize"), true).invoke();
+        set_vec2(slot, STR("SetAlignment"), STR("InAlignment"), 1.0, ay);   // bord droit de notre texte calé
+        set_vec2(slot, STR("SetPosition"), STR("InPosition"), px - ax * aw - kVersionGap, py);
+        return true;
+    }
+    // Overlay : mêmes alignements et marges que le numéro, marge droite augmentée de sa largeur + écart.
+    SlotProps sp = read_slot(anchor);
+    auto it = sp.v.find(L"Padding");
+    if (it != sp.v.end() && it->second.size() == 16) {
+        float m[4];
+        std::memcpy(m, it->second.data(), sizeof m);
+        m[2] += static_cast<float>(aw) + kVersionGap;
+        std::memcpy(it->second.data(), m, sizeof m);
+    }
+    sp.v.erase(L"Size");
+    apply_slot(slot, sp);
+    ue::Call hz(slot, STR("SetHorizontalAlignment"));
+    if (hz) hz.set_int(STR("InHorizontalAlignment"), 2).invoke();   // HAlign_Right
+    return true;
+}
+
+void place_version(UObject* menu)
+{
+    if (g_version_errors >= 3 || !menu) return;
+    UObject* build = ue::get_object(menu, STR("BuildText"));
+    if (!build) { version_error("build_text"); return; }
+    // Premier ancêtre posé dans un panneau à plusieurs enfants où l'on sait se placer.
+    UObject* anchor = build;
+    UObject* panel = call_obj(build, STR("GetParent"));
+    for (int i = 0; i < 6 && panel && !ue::is_a(panel, STR("Overlay")) && !ue::is_a(panel, STR("CanvasPanel")); ++i) {
+        anchor = panel;
+        panel = call_obj(panel, STR("GetParent"));
+    }
+    if (!panel) { version_error("parent"); return; }
+    ue::Call all(panel, STR("GetAllChildren"));
     if (!all || !all.invoke()) return;
-    for (UObject* c : all.out_object_array(STR("ReturnValue")))
-        if (c && c == g_version) { set_text(c, std::string("E33 Coop ") + E33COOP_VERSION); return; }   // déjà là : texte reposé (Construct peut le remettre)
-    UObject* pc = call_obj(tmpl, STR("GetOwningPlayer"));
-    UObject* w = pc ? create(tmpl->GetClassPrivate(), pc) : nullptr;
-    if (!w) { ++g_version_errors; log().write("ui_version_error", JsonObj().add("what", "create")); return; }
-    copy_props(w, tmpl, {STR("TextStyle"), STR("TextMinDesiredWidth"), STR("TextMaxDesiredWidth"), STR("Justification"),
-                         STR("ReduceTextSizeWhenWrapping"), STR("WrappingFontSizePercentage"), STR("MobileFontSizeMultiplier")});
-    if (!add_child(box, w, nullptr)) { ++g_version_errors; log().write("ui_version_error", JsonObj().add("what", "add")); return; }
-    set_text(w, std::string("E33 Coop ") + E33COOP_VERSION);
+    UObject* w = nullptr;
+    for (UObject* c : all.out_object_array(STR("ReturnValue"))) if (c && c == g_version) w = c;
+    const bool fresh = w == nullptr;
+    if (fresh) {
+        w = make_text_block(panel);
+        if (!w) { version_error("create"); return; }
+        ue::Call add(panel, STR("AddChild"));
+        if (!add || !add.set_object(STR("Content"), w).invoke() || !add.out_object(STR("ReturnValue"))) { version_error("add"); return; }
+        copy_to_setter(w, STR("SetFont"), STR("InFontInfo"), build, STR("Font"));
+        copy_to_setter(w, STR("SetColorAndOpacity"), STR("InColorAndOpacity"), build, STR("ColorAndOpacity"));
+        copy_to_setter(w, STR("SetShadowOffset"), STR("InShadowOffset"), build, STR("ShadowOffset"));
+        copy_to_setter(w, STR("SetShadowColorAndOpacity"), STR("InShadowColorAndOpacity"), build, STR("ShadowColorAndOpacity"));
+        ue::Call j(w, STR("SetJustification"));
+        if (j) j.set_int(STR("InJustification"), 2).invoke();   // ETextJustify::Right
+        g_version = w;
+    }
+    set_tb_text(w, std::string("E33 Coop ") + E33COOP_VERSION);   // reposé à chaque passage (Construct peut le remettre)
+    const bool placed = position_version(panel, anchor, w);
+    // Invisible tant que la largeur du numéro est inconnue (sinon il le chevaucherait un instant).
     ue::Call op(w, STR("SetRenderOpacity"));
-    if (auto* v = static_cast<float*>(op ? op.param_ptr(STR("InOpacity")) : nullptr)) { *v = 0.45f; op.invoke(); }
-    g_version = w;
-    log().write("ui_version", JsonObj().add("version", E33COOP_VERSION));
+    if (auto* v = static_cast<float*>(op ? op.param_ptr(STR("InOpacity")) : nullptr)) {
+        *v = placed ? static_cast<float>(ue::get_double(build, STR("RenderOpacity"), 1.0)) : 0.f;
+        op.invoke();
+    }
+    if (fresh) {
+        UObject* aslot = ue::get_object(anchor, STR("Slot"));
+        log().write("ui_version", JsonObj().add("version", E33COOP_VERSION).add("parent", ue::short_name(panel->GetClassPrivate()))
+                                        .add("anchor", ue::short_name(anchor)).add("anchor_class", ue::short_name(anchor->GetClassPrivate()))
+                                        .add("slot", aslot ? ue::short_name(aslot->GetClassPrivate()) : std::string()).add("placed", placed));
+    }
 }
 
 bool any_focus(std::initializer_list<UObject*> ws)
@@ -354,7 +485,7 @@ void tick(double now, const std::string& friend_name)
     // touche » seulement) ; une fois par seconde, hors partie chargée (pas de contrôleur du monde), comme le mode neutre.
     if (static double next_version = 0; now >= next_version) {
         next_version = now + 1.0;
-        if (!game::controller()) if (UObject* m = game::main_menu()) if (UObject* t = ue::get_object(m, STR("TitleScreen"))) place_version(t);
+        if (!game::controller()) if (UObject* m = game::main_menu()) place_version(m);
     }
     // Repli clavier / souris (chaque image ; le focus et le survol sont relus 4 fois par seconde) : Entrée sur notre
     // bouton sélectionné, clic gauche dessus. Le hook du clic suffit normalement ; un double signal est sans effet.
@@ -413,7 +544,7 @@ void subscribe_version()
     if (done) return;
     done = true;
     HookBus::get().post(std::wstring(kTitle) + L"BP_GetDesiredFocusTarget", [](HookCtx& ctx, UFunction*) {
-        if (ctx.Context) place_version(ctx.Context);
+        if (ctx.Context) place_version(game::main_menu());
     });
 }
 

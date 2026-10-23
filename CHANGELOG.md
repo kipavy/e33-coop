@@ -14,6 +14,9 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Modifications
+- Version du mod au menu principal : en petit en bas à droite, à côté du numéro du jeu.
+
 ## [0.6.6] - 2026-10-23
 
 ### Corrections
