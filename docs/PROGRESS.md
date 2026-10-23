@@ -2,6 +2,15 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-23 soir — v0.6.6 publiée ; à reprendre
+
+- **v0.6.6 publiée** (main = `integ4` f664355) : D22 attentes de combat bornées, D23 suivi fluide, D24 dialogues ensemble, PA du combat engagé, petite version au menu. Batterie finale 25/25 verte (build 39993621393).
+- **Bug ouvert, D25 panneau Coop** : avec de vraies touches (`p6_panelnav_input_host`, `p6_panelnav_input_esc_host`, build 40018285353, runs `integ4/runs/20261023-2226*`), Échap réel ouvre bien le menu, « Reprendre » a le focus, mais **Droite n'entre pas dans le panneau** (`focused_row` reste -1, aucun `owners_ui_panel_focus`). La règle `SetNavigationRuleExplicit(Right → 1re ligne)` posée sur les boutons du menu n'est pas suivie par le jeu (piste : bouton du jeu en navigation contrainte, ou navigation propre au menu, `SD_OnNavigated`). Ligne retirée des notes de 0.6.6. Le runner tient maintenant un appui injecté 0,1 s (appui + relâchement dans la même image passaient inaperçus).
+- **Tests à vraies entrées** : le jeu lancé par Steam n'est pas au premier plan ; Killian doit cliquer sa barre de titre à l'ouverture (le contrôle `game:foreground` refuse sinon, sans rien envoyer).
+- **Branche `fix/zone-transitions` (D26)** prête, non fusionnée : 7 transitions de zone fluides, MapChange reçu pendant un chargement gardé puis appliqué. Seuils assouplis sur ses nouveaux tests (écart à la reprise 1200 u, deux mesures sans seuil) : à revalider PC au calme et à faire approuver par Killian.
+- **Inventaire différent** : empreinte sensible à la casse (« CritCHanceOnWeak » chez l'hôte, « CritChanceOnWeak » chez le client) → resynchros inutiles. Correction : minuscules dans `inventory_leaves` (`explore.cpp`), puis réenregistrer les tranches qui portent des empreintes d'exploration.
+- **Charge du PC** : VM Debian + émulateur Android = ~1 Go de RAM libre, gels du jeu de 30-90 s pendant les chargements. Demander à Killian avant de les arrêter.
+
 ## 2026-10-23 — dialogues joués ensemble (branche `fix/dialogue-sync`, D24)
 
 - Avant : seuls les dialogues lancés par une interaction (PNJ, `WorldInteract` rejoué) partaient ensemble ; un dialogue de zone (Maelle avant le duel du prologue : zone `…_UAID_581122C6E7A5400A02_1306934710`, action `DA_GA_MULTI_MaelleIntro_5`, `BP_Dialogue_Gardens_Maelle_FirstDuel_C`) n'existait que chez le pilote.
