@@ -41,7 +41,7 @@ bool ground(int m) { return m == kWalk || m == kNavWalk || m == kFall; }
 struct S {
     double now = 0;
     // Pilote : dernier état journalisé
-    int p_move = -2, p_custom = -1, p_flags = -1;
+    int p_move = -2, p_custom = -1, p_flags = -1, p_wm = -1;
     std::string p_cls;
     std::string other_cls;                 // pion possédé hors BP_jRPG_Character_World_C
     std::set<std::string> listed;          // classes dont les fonctions ont été journalisées
@@ -59,6 +59,18 @@ struct S {
     int mode_fixes = 0, teleports = 0;
     double next_dismount = 0;
     int dismount_tries = 0;
+    // Suiveur sur Esquie (D20) : montée, mode d'Esquie, conduite
+    bool last_p_mount = false;
+    double next_mount = 0;
+    int mount_tries = 0;
+    bool riding = false;
+    double ride_since = -1;
+    double next_wm_try = 0;
+    int wm_target = -1, wm_tries = 0;
+    int wm_changes = 0, ride_snaps = 0;
+    double ride_err_max = 0, ride_err_sum = 0, ride_err_max_all = 0;
+    int ride_ticks = 0;
+    double ride_stats_at = 0;
     // Suiveur : dernier état journalisé (pilote vu d'ici, et pion d'ici)
     int f_pmove = -2, f_pflags = -1, f_move = -2;
     bool f_mount = false;
@@ -163,14 +175,91 @@ void log_follow_changes(const proto::PilotState& p, const game::MoveInfo& me, co
                                          .add("attached", me.attached).add("pawn", me.cls).add("z", my_pos[2]).add("ghost", s.ghost));
 }
 
-// Suiveur sur Esquie, pilote à pied : on descend avec la fonction du contrôleur (OnDismountRequested, dump), comme la
-// touche du jeu. Rien pour monter : aucune fonction connue (voir coop_mount_functions au prochain essai).
-void try_dismount(const proto::PilotState& p, const game::MoveInfo& me, const Bump& bump)
+bool mount_sync_enabled()
 {
     static const bool enabled = cmdline::arg(L"e33mountsync") != L"0";
-    if (!enabled || !me.mount || (p.flags & proto::kPilotMount) || !ground(p.move)) return;
-    if (s.dismount_tries >= 3 || s.now < s.next_dismount) return;
-    s.next_dismount = s.now + 5.0;
+    return enabled;
+}
+
+// Esquie sur la carte du monde (2026-10-23, D20) : pion BP_WorldMapCharacter_C possédé par le contrôleur à la place du
+// pion à pied (BP_jRPG_Character_WorldMap_pawn_C). Son propre mode : CurrentMovementMode (0 marche, 2 vol ; changé par
+// TryChangeMovementMode, comme au décollage par la touche de saut).
+constexpr int kWmNone = 0xFF, kWmWalk = 0, kWmFly = 2;
+bool is_esquie(UObject* pawn) { return pawn && ue::prop(pawn, STR("CurrentMovementMode")) && ue::is_a(pawn, STR("BP_WorldMapCharacter_C")); }
+int wm_mode(UObject* pawn) { return is_esquie(pawn) ? static_cast<int>(ue::get_int(pawn, STR("CurrentMovementMode"), kWmNone)) : kWmNone; }
+UObject* wm_component() { return ue::get_object(game::controller(), STR("BP_WorldMapControllerComponent")); }
+// Montée ou descente en cours (animation), ou changement de mode d'Esquie en cours : on ne conduit pas.
+bool mount_busy(UObject* pawn)
+{
+    return ue::get_bool(wm_component(), STR("IsMountPerformingAnAnimation")) || (is_esquie(pawn) && ue::get_bool(pawn, STR("IsInTransition")));
+}
+
+// Pilote sur Esquie, suiveur à pied : on monte comme la touche du jeu (BP_WorldMapControllerComponent.OnInputMountPressed,
+// appelé par l'événement de la touche de monture du contrôleur ; repli : l'événement lui-même). 3 essais.
+void try_mount(const game::MoveInfo& me, const Bump& bump)
+{
+    if (s.mount_tries >= 3 || s.now < s.next_mount) return;
+    if (!ground(me.move)) {   // à la nage (ou en l'air) : pas de monture possible ici, repli sur le fantôme
+        s.mount_tries = 3;
+        log().write("coop_follower_mount", JsonObj().add("ok", false).add("why", "not_on_ground").add("move", me.move));
+        return;
+    }
+    s.next_mount = s.now + 1.5;
+    ++s.mount_tries;
+    bool called = false;
+    std::string how = "component";
+    {
+        ue::Call c(wm_component(), STR("OnInputMountPressed"));
+        called = c && c.invoke();
+    }
+    if (!called || !ue::get_bool(game::gi(), STR("IsMountInUse"))) {
+        ue::Call c(game::controller(), STR("InpActEvt_WorldMap_MountAction_K2Node_EnhancedInputActionEvent_2"));
+        if (c && c.invoke()) { called = true; how = "input_event"; }
+    }
+    const bool ok = ue::get_bool(game::gi(), STR("IsMountInUse"));
+    if (bump) bump(ok ? "follower_mounts" : "follower_mount_failures", 1);
+    log().write("coop_follower_mount", JsonObj().add("ok", ok).add("called", called).add("how", how).add("try", s.mount_tries)
+                                           .add("can_mount", ue::get_bool(ue::get_object(game::controller(), STR("BP_WorldMapUIManager")), STR("CanMount"))));
+}
+
+// Changement de mode d'Esquie ici (décollage, atterrissage…) : TryChangeMovementMode comme le jeu ; après 2 refus pour le
+// même mode, ChangeMovementMode (imposé). Au plus toutes les 0,5 s.
+void match_wm_mode(UObject* esq, int want, const Bump& bump)
+{
+    const int cur = wm_mode(esq);
+    if (want == kWmNone || cur == kWmNone || cur == want) { s.wm_tries = 0; return; }
+    if (s.now < s.next_wm_try) return;
+    s.next_wm_try = s.now + 0.5;
+    if (want != s.wm_target) { s.wm_target = want; s.wm_tries = 0; }
+    ++s.wm_tries;
+    bool changed = false;
+    const bool forced = s.wm_tries > 2;
+    if (!forced) {
+        ue::Call c(esq, STR("TryChangeMovementMode"));
+        if (c) {
+            c.set_int(STR("MovementMode"), want).set_int(STR("ZoneType"), ue::get_int(esq, STR("CurrentZoneType"), 0));
+            if (c.invoke()) changed = c.out_bool(STR("HasChanged"));
+        }
+    } else {
+        ue::Call c(esq, STR("ChangeMovementMode"));
+        if (c) { c.set_int(STR("MovementMode"), want); c.invoke(); }
+        changed = wm_mode(esq) == want;
+    }
+    ++s.wm_changes;
+    if (bump) bump(changed ? "follower_wm_changes" : "follower_wm_refused", 1);
+    if (s.wm_tries <= 6 || log_allowed())
+        log().write("coop_follower_wm_mode", JsonObj().add("from", cur).add("to", want).add("changed", changed).add("forced", forced)
+                                                 .add("try", s.wm_tries).add("now", wm_mode(esq)));
+}
+
+// Suiveur sur Esquie, pilote à pied : on atterrit (mode marche) puis on descend avec la fonction du contrôleur
+// (OnDismountRequested, comme la touche du jeu ; refusée tant qu'Esquie vole). 8 essais.
+void try_dismount(UObject* pawn, const proto::PilotState& p, const game::MoveInfo& me, const Bump& bump)
+{
+    if (!mount_sync_enabled() || !me.mount || (p.flags & proto::kPilotMount) || !ground(p.move)) return;
+    if (s.dismount_tries >= 8 || s.now < s.next_dismount || mount_busy(pawn)) return;
+    if (is_esquie(pawn) && wm_mode(pawn) != kWmWalk) { match_wm_mode(pawn, kWmWalk, bump); return; }
+    s.next_dismount = s.now + 1.5;
     ++s.dismount_tries;
     UObject* ctrl = game::controller();
     ue::Call c(ctrl, STR("OnDismountRequested"));
@@ -178,6 +267,71 @@ void try_dismount(const proto::PilotState& p, const game::MoveInfo& me, const Bu
     if (bump) bump("follower_dismounts", 1);
     log().write("coop_follower_dismount", JsonObj().add("ok", ok).add("try", s.dismount_tries)
                                               .add("mount_after", ue::get_bool(game::gi(), STR("IsMountInUse"))));
+}
+
+// Suiveur et pilote sur Esquie : même mode qu'Esquie du pilote, puis conduite. En vol, Esquie est placé sur la position
+// prédite et lissée du pilote à chaque image (vol à ~4000 u/s : une poursuite par entrées dépasserait ou traînerait) ;
+// au sol / sur l'eau, il est conduit par AddMovementInput (animations du jeu), recalé seulement s'il décroche.
+void ride(UObject* esq, const proto::PilotState& p, double age, const Bump& bump)
+{
+    if (!s.riding) {
+        s.riding = true;
+        s.ride_since = s.now;
+        s.have_tgt = false;
+        s.ride_stats_at = s.now;
+        if (bump) bump("follower_rides", 1);
+        log().write("coop_follower_ride", JsonObj().add("on", true).add("pilot_wm", static_cast<int>(p.wm_mode)).add("wm", wm_mode(esq)));
+    }
+    if (mount_busy(esq)) { s.have_tgt = false; return; }
+    match_wm_mode(esq, p.wm_mode, bump);
+    game::PawnState me;
+    if (!game::pawn_state(esq, me)) return;
+    const double a = std::clamp(age, 0.0, 0.25);
+    const double raw[3] = {p.x + p.vx * a, p.y + p.vy * a, p.z + p.vz * a};
+    const double dt = s.last_t < 0 ? 0.0 : std::clamp(s.now - s.last_t, 0.0, 0.25);
+    s.last_t = s.now;
+    const double jump = std::hypot(raw[0] - s.tgt[0], raw[1] - s.tgt[1], raw[2] - s.tgt[2]);
+    if (!s.have_tgt || jump > 1500) { for (int i = 0; i < 3; ++i) s.tgt[i] = raw[i]; s.have_tgt = true; }
+    else { const double k = 1.0 - std::exp(-dt / 0.1); for (int i = 0; i < 3; ++i) s.tgt[i] += (raw[i] - s.tgt[i]) * k; }
+    const double dx = s.tgt[0] - me.pos[0], dy = s.tgt[1] - me.pos[1], dz = s.tgt[2] - me.pos[2];
+    const double d2 = std::hypot(dx, dy), err = std::hypot(d2, dz);
+    // Statistiques (journal toutes les 15 s)
+    ++s.ride_ticks;
+    s.ride_err_sum += err;
+    s.ride_err_max = std::max(s.ride_err_max, err);
+    if (s.now - s.ride_since > 3.0) s.ride_err_max_all = std::max(s.ride_err_max_all, err);   // hors mise en place (montée, décollage)
+    if (s.now - s.ride_stats_at >= 15.0) {
+        log().write("coop_follower_ride_stats", JsonObj().add("ticks", s.ride_ticks).add("err_avg", s.ride_ticks ? s.ride_err_sum / s.ride_ticks : 0.0)
+                                                    .add("err_max", s.ride_err_max).add("snaps", s.ride_snaps).add("wm_changes", s.wm_changes)
+                                                    .add("wm", wm_mode(esq)).add("pilot_wm", static_cast<int>(p.wm_mode)));
+        s.ride_stats_at = s.now; s.ride_ticks = 0; s.ride_err_sum = 0; s.ride_err_max = 0;
+    }
+    const int mine = wm_mode(esq);
+    // Décollage pas encore fait ici : on attend le mode vol (placé en l'air en mode marche, Esquie retomberait).
+    if (p.wm_mode == kWmFly && mine != kWmFly) return;
+    const bool flying = mine == kWmFly;
+    if (flying || err > 1500) {
+        if (!flying) {   // au sol mais décroché : recalé (rare)
+            ++s.ride_snaps;
+            if (bump) bump("follower_ride_snaps", 1);
+            log().write("coop_follower_ride_snap", JsonObj().add("err", err).add("wm", wm_mode(esq)).add("pilot_move", static_cast<int>(p.move)));
+        }
+        game::teleport_pawn(esq, s.tgt, p.yaw);
+        return;
+    }
+    // Au sol / sur l'eau : poursuite comme le suivi à pied (vitesse du pilote plus rattrapage proportionnel à l'écart).
+    if (d2 < 40) return;
+    const double sp = std::hypot(p.vx, p.vy);
+    const double scale = std::clamp(sp / 350.0 + d2 / 300.0, 0.25, 1.0);
+    game::move_pawn(esq, dx / d2, dy / d2, scale);
+}
+
+void end_ride(const char* why)
+{
+    if (!s.riding) return;
+    s.riding = false;
+    log().write("coop_follower_ride", JsonObj().add("on", false).add("why", why).add("seconds", s.now - s.ride_since).add("snaps", s.ride_snaps)
+                                          .add("wm_changes", s.wm_changes));
 }
 
 } // namespace
@@ -192,13 +346,16 @@ void fill_pilot(UObject* pawn, proto::PilotState& m, double now)
     m.flags = static_cast<uint8_t>((mi.mount ? proto::kPilotMount : 0) | (mi.world_map ? proto::kPilotWorldMap : 0) |
                                    (mi.attached ? proto::kPilotAttached : 0));
     m.pawn = mi.cls;
+    const int wm = wm_mode(pawn);   // Esquie : son mode sur la carte du monde (D20)
+    m.wm_mode = static_cast<uint8_t>(wm < 0 || wm > 255 ? kWmNone : wm);
     s.other_cls.clear();
-    if (mi.move == s.p_move && mi.custom == s.p_custom && m.flags == s.p_flags && mi.cls == s.p_cls) return;
-    const bool big = m.flags != s.p_flags || mi.cls != s.p_cls;   // monture ou pion changés (pas un simple saut)
-    s.p_move = mi.move; s.p_custom = mi.custom; s.p_flags = m.flags; s.p_cls = mi.cls;
+    if (mi.move == s.p_move && mi.custom == s.p_custom && m.flags == s.p_flags && mi.cls == s.p_cls && m.wm_mode == s.p_wm) return;
+    const bool big = m.flags != s.p_flags || mi.cls != s.p_cls || m.wm_mode != s.p_wm;   // monture, pion ou mode d'Esquie changés
+    s.p_move = mi.move; s.p_custom = mi.custom; s.p_flags = m.flags; s.p_cls = mi.cls; s.p_wm = m.wm_mode;
     if (big || log_allowed())
         log().write("coop_pilot_move", JsonObj().add("level", m.level).add("move", mi.move).add("custom", mi.custom).add("mount", mi.mount)
-                                           .add("world_map", mi.world_map).add("attached", mi.attached).add("pawn", mi.cls).add("z", m.z).add("vz", m.vz));
+                                           .add("world_map", mi.world_map).add("attached", mi.attached).add("pawn", mi.cls).add("z", m.z).add("vz", m.vz)
+                                           .add("wm_mode", static_cast<int>(m.wm_mode)));
     if (big && (mi.mount || mi.world_map)) { list_functions(pawn, "pawn"); list_functions(game::controller(), "controller"); }
 }
 
@@ -230,8 +387,37 @@ bool follow(UObject* pawn, const proto::PilotState& p, double age, double now, c
     game::move_info(pawn, me);
     game::PawnState ps;
     game::pawn_state(pawn, ps);
+    // Compteurs des tests : changements de mode de déplacement du pion d'ici et du pilote (boucle eau / air = beaucoup
+    // de changements ici pour peu chez le pilote), passages en nage ici sans nage chez le pilote.
+    if (bump && s.f_move != -2 && me.move != s.f_move) bump("follower_move_changes", 1);
+    if (bump && s.f_pmove != -2 && p.move != s.f_pmove) bump("pilot_move_changes", 1);
+    if (bump && me.move == 4 && s.f_move != 4 && p.move != 4) bump("follower_swims_unexpected", 1);
     log_follow_changes(p, me, ps.pos);
-    try_dismount(p, me, bump);
+
+    // Monture reproduite ici (D20) : on monte sur Esquie quand le pilote y est, on le conduit comme lui (même mode : vol,
+    // marche…), on en descend quand il est à pied. Le fantôme ne sert plus qu'en repli (montée refusée 3 fois).
+    const bool world_map = (p.flags & proto::kPilotWorldMap) || me.world_map || p.level.find("WorldMap") != std::string::npos;
+    const bool p_mount = (p.flags & proto::kPilotMount) != 0;
+    if (p_mount != s.last_p_mount) { s.last_p_mount = p_mount; s.mount_tries = 0; s.dismount_tries = 0; s.next_mount = now + 0.3; }
+    if (world_map && mount_sync_enabled()) {
+        if (me.mount && is_esquie(pawn)) {
+            if (s.ghost) end_ghost(nullptr, "riding", nullptr, 0);
+            if (p_mount) { ride(pawn, p, age, bump); return true; }
+            if (s.dismount_tries < 8) {   // pilote à pied : on le rejoint au sol puis on descend
+                proto::PilotState q = p;
+                q.wm_mode = kWmWalk;
+                ride(pawn, q, age, bump);
+                try_dismount(pawn, p, me, bump);
+                return true;
+            }
+        } else {
+            end_ride(me.mount ? "not_esquie" : "dismounted");
+        }
+        if (p_mount && !me.mount && !s.ghost && s.mount_tries < 3) {   // montée en cours : pion laissé sur place
+            try_mount(me, bump);
+            return true;
+        }
+    }
 
     const std::string why = ghost_reason(p, me);
     if (!why.empty()) { s.clear_since = -1; if (s.want_since < 0) s.want_since = now; }
@@ -292,6 +478,7 @@ void tick(double now)
 {
     s.now = now;
     if (s.ghost && s.followed_at < now) release("not_following");
+    if (s.riding && s.followed_at < now) end_ride("not_following");
 }
 
 void release(const char* why)
@@ -737,6 +924,11 @@ bool test_step(const json::Value& st, double step_t, bool first, std::string& er
 
 int count(const std::string& name)
 {
+    // État du suiveur sur Esquie (scénarios client)
+    if (name == "ride_err_max") return static_cast<int>(s.ride_err_max_all);
+    if (name == "ride_snaps") return s.ride_snaps;
+    if (name == "riding") return s.riding ? 1 : 0;
+    if (name == "ghost") return s.ghost ? 1 : 0;
     auto it = b.counts.find(name);
     return it == b.counts.end() ? 0 : it->second;
 }

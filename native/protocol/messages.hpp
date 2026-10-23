@@ -252,6 +252,9 @@ struct PilotState {
     uint8_t custom = 0;                   // CustomMovementMode
     uint8_t flags = 0;                    // kPilotMount | kPilotWorldMap | kPilotAttached
     std::string pawn;                     // classe du pion possédé (nom court)
+    // Champ final facultatif (2026-10-23) : mode d'Esquie sur la carte du monde (BP_WorldMapCharacter_C.CurrentMovementMode :
+    // 0 marche, 2 vol…), 255 = pas sur Esquie / inconnu.
+    uint8_t wm_mode = 0xFF;
 };
 constexpr uint8_t kMoveUnknown = 0xFF;
 constexpr uint8_t kPilotMount = 1;        // GI.IsMountInUse : sur Esquie
