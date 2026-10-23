@@ -280,6 +280,12 @@ int metric(const std::string& name)
     if (name.rfind("ui:", 0) == 0) return ui::count(name.substr(3));   // textes affichés (phase 5)
     if (name.rfind("owners_ui:", 0) == 0) return owners_ui::count(name.substr(10));   // losanges, panneau Coop
     if (name.rfind("options:", 0) == 0) return options::count(name.substr(8));       // panneau Coop au clavier, options
+    // État du panneau navigable (valeurs, pas des compteurs) : ligne qui a le focus (-1 : aucune), ligne choisie, etc.
+    if (name == "panel:focused_row") return owners_ui::focused_row();
+    if (name == "panel:selected") return options::selected();
+    if (name == "panel:buttons") return owners_ui::panel_buttons();
+    if (name == "panel:menu_focus") return owners_ui::menu_has_focus() ? 1 : 0;
+    if (name == "panel:menu_visible") return game::pause_menu_visible() ? 1 : 0;
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
 }
@@ -956,6 +962,9 @@ void subscribe()
 //   {"do":"wait_key"}                     validation en jeu : attend la touche F9
 //   {"do":"trigger","players":1}          combat du scénario (encounter, party) dès que "players" clients sont connectés
 //   {"do":"build","character":"Verso","op":"reset_attributes"}   modifie un build (comme un menu)
+//   {"do":"panel_focus","row":1} | {"do":"panel_click","row":2} | {"do":"panel_nav","row":2,"dir":"left"} | {"do":"panel_back"}
+//                                         panneau Coop navigable par les fonctions du jeu (row -1 : menu du jeu) ;
+//                                         état lisible par "panel:focused_row", "panel:selected", "panel:menu_focus"…
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -1092,6 +1101,45 @@ void run_explore_step(float dt)
         if (st["change"].as_bool(false)) ok = options::change();
         ++g.metrics[ok ? "panel_ops" : "panel_refused"];
         log().write("tr_panel", JsonObj().add("row", options::selected()).add("change", st["change"].as_bool(false)).add("ok", ok));
+        next_step("done");
+    } else if (what == "panel_focus" || what == "panel_click" || what == "panel_nav" || what == "panel_back") {
+        // Panneau navigable par les fonctions du jeu, sans vraies touches : SetFocus (comme la navigation), clic
+        // (HandleButtonClicked : souris, Entrée, A), gauche / droite (diffusion de la navigation contrainte), Retour.
+        const int row = static_cast<int>(st["row"].as_int(0));
+        bool ok = false;
+        if (what == "panel_focus") ok = owners_ui::test_focus(row);
+        else if (what == "panel_click") ok = owners_ui::test_click(row);
+        else if (what == "panel_nav") ok = owners_ui::test_nav(row, st["dir"].as_string("right") == "left" ? -1 : 1);
+        else ok = owners_ui::test_back();
+        ++g.metrics[what + (ok ? "_ok" : "_failed")];
+        log().write("tr_panel_nav", JsonObj().add("do", what).add("row", row).add("ok", ok).add("focused", owners_ui::focused_row())
+                                        .add("buttons", owners_ui::panel_buttons()));
+        next_step("done");
+    } else if (what == "input") {
+        // VRAIES entrées dans la fenêtre du jeu (SendInput au premier plan, sinon messages postés), comme spam_local_input :
+        // seulement dans les scénarios marqués « injecte des entrées », lancés avec l'accord de Killian.
+        // {"key":"down"} (left, right, up, down, enter, escape, f9) | {"click":[fx,fy]} | {"move":[fx,fy]} (fractions de la fenêtre)
+        HWND w = game_window();
+        if (!w) { fail("input: no game window"); return; }
+        static const std::map<std::string, unsigned> keys = {{"left", VK_LEFT}, {"right", VK_RIGHT}, {"up", VK_UP}, {"down", VK_DOWN},
+                                                             {"enter", VK_RETURN}, {"escape", VK_ESCAPE}, {"f9", VK_F9}};
+        if (st["key"].is_string()) {
+            auto k = keys.find(st["key"].as_string(""));
+            if (k == keys.end()) { fail("input: unknown key " + st["key"].as_string("")); return; }
+            send_key(w, k->second, false);
+            send_key(w, k->second, true);
+        } else if (st["click"].is_array()) {
+            send_click(w, st["click"][0].as_number(0.5), st["click"][1].as_number(0.5), false, false);
+            send_click(w, st["click"][0].as_number(0.5), st["click"][1].as_number(0.5), false, true);
+        } else if (st["move"].is_array()) {
+            RECT rc{};
+            GetClientRect(w, &rc);
+            POINT p{static_cast<LONG>(st["move"][0].as_number(0.5) * rc.right), static_cast<LONG>(st["move"][1].as_number(0.5) * rc.bottom)};
+            if (GetForegroundWindow() == w) { POINT sp = p; ClientToScreen(w, &sp); SetCursorPos(sp.x, sp.y); }
+            else PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM(p.x, p.y));
+        }
+        ++g.metrics["inputs_injected"];
+        log().write("tr_input", JsonObj().add("key", st["key"].as_string("")).add("focused", owners_ui::focused_row()));
         next_step("done");
     } else if (what == "economy") {   // dépense / gain local, comme un achat ou une amélioration dans un menu (phase 5)
         std::string e1;

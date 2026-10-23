@@ -17,6 +17,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ### Ajouts
 - Cinématiques en même temps : quand le meneur déclenche une scène, elle démarre aussitôt chez les autres joueurs (au
   lieu de se jouer l'une après l'autre) ; passer une scène la passe chez tout le monde.
+- Panneau Coop du menu pause utilisable comme le menu du jeu : souris (survol, clic), flèches du clavier ou croix /
+  stick de la manette pour passer d'une ligne à l'autre (Droite depuis le menu pour y entrer), Entrée / A ou
+  Gauche / Droite pour changer la répartition d'un personnage ou une option, Échap / B pour revenir au menu.
+  F9 / Maj+F9 marchent toujours.
 
 ## [0.6.4] - 2026-10-23
 
