@@ -158,6 +158,11 @@ struct Battle {
     bool dep_finish_pending = false;                       // vérification du tour en attente de l'état de l'hôte
     double dep_recheck_at = -1;                            // vérification de secours après résolution (si le jeu écoute encore)
     uint32_t sct_seq = 0, ots_seq = 0, listen_seq = 0;     // StartCharacterTurn vus ; dernier suivi d'un OnTurnStart ; d'une écoute
+    // Hôte, essai -e33turnalign=1 : tour ennemi retenu (sans figer le jeu) jusqu'à ce que les clients l'aient commencé.
+    bool next_enemy = false, cur_enemy = false;            // acteur du prochain tour (StartCharacterTurn), du tour en cours
+    bool align_active = false;
+    uint32_t align_turn = 0;
+    double align_since = 0;
     bool strict = false;                                   // écart d'acteur vu dans ce combat : on revient à l'attente bloquante
     bool finalized = false;
     bool left = false;                                     // fuite : le dernier tour n'est pas comparable (l'hôte a pu en commencer un de plus)
@@ -262,6 +267,7 @@ struct State {
     bool turn_dep = false;                                 // -e33turndep=1 : attente du TurnStart par dépendance de début de tour (essai)
     double ready_idle_s = kReadyIdleTimeout;               // hôte : -e33readyidle=N
     double stuck_turn_s = kStuckTurnTimeout;               // hôte : -e33stuckturn=N
+    bool turn_align = false;                               // hôte : -e33turnalign=1 (essai, voir align_tick)
     double barrier_battle_since = -1;                      // diagnostic : barrière tenue pendant un combat engagé (depuis)
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     bool input_enabled = true;
@@ -1276,6 +1282,8 @@ void host_turn_start(UObject* actor)
         }
     }
     begin_turn_common();
+    b.ots_seq = b.sct_seq;   // essai -e33turnalign : OnTurnStart de ce tour passé
+    b.cur_enemy = !game::is_player(actor);
     const proto::Unit au = actor_unit(actor);
     turn_indicator(au);
     broadcast(proto::TurnStart{b.id, b.turn, au.kind, au.spot, game::char_class(actor)});
@@ -1813,6 +1821,50 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
                                          .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms).add("why", why), b.turn);
 }
 
+// --- Essai -e33turnalign=1 (hôte) : tours ennemis alignés sur les clients -----------------------------------------
+// L'hôte est en avance sur ses clients : chaque client attend son début de tour, et rejoue les actions des héros de
+// l'hôte avec un décalage (replay_lag_s, action_delay_s). Au tour ennemi qui suit, l'hôte frappe donc les héros d'un
+// client avant lui, et fige son image (defense_point) jusqu'à ce que le résultat de ce client arrive : avance + aller-
+// retour, souvent plus d'une seconde. Ici, l'hôte retient le tour ennemi (dépendance de début de tour : le jeu anime,
+// rien n'est figé) jusqu'à ce que chaque client qui a un héros vivant l'ait commencé chez lui (son StateHash du tour),
+// 4 s au plus. Le client est alors en avance d'un aller simple : l'hôte n'attend presque plus ses résultats, et le client
+// attend ceux des héros de l'hôte un aller-retour (~2 × la latence) au lieu de rien. Même résultat partout (D11).
+constexpr double kAlignTimeout = 4.0;
+
+// Clients de la partie qui ont un héros vivant dans ce combat et n'ont pas encore commencé ce tour (StateHash).
+std::vector<uint8_t> align_missing(uint32_t turn)
+{
+    auto& b = s.battle;
+    std::vector<uint8_t> out;
+    for (auto& p : s.peers) {
+        if (!in_game(p) || b.unresponsive.count(p.player_id) || (b.acks.count(turn) && b.acks[turn].count(p.player_id))) continue;
+        bool hero = false;
+        for (auto& [spot, owner] : b.owner_by_spot) {
+            if (owner != p.player_id) continue;
+            UObject* h = game::find_unit(true, spot);
+            if (h && !game::is_dead_fast(h)) hero = true;
+        }
+        if (hero) out.push_back(p.player_id);
+    }
+    return out;
+}
+
+void align_tick()
+{
+    auto& b = s.battle;
+    if (!b.align_active) return;
+    const bool done = !b.active || b.ending || align_missing(b.align_turn).empty();
+    const bool expired = s.now - b.align_since > kAlignTimeout;
+    if (!done && !expired) return;
+    b.align_active = false;
+    ue::Call solve(turn_deps(), STR("SolveDependency"));
+    if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
+    const int ms = static_cast<int>((s.now - b.align_since) * 1000.0);
+    bump_max("turn_align_max_ms", ms);
+    if (!done) bump("turn_align_timeouts");
+    log().write("coop_turn_aligned", JsonObj().add("turn", b.align_turn).add("waited_ms", ms).add("timeout", !done), b.align_turn);
+}
+
 // Parade en duo : pendant le tour qui finit, des héros d'au moins deux joueurs ont été touchés (attaque de groupe ou
 // coups enchaînés sur plusieurs héros) et tous les coups ont été parés -> +kDuoParryAP à chacun de ces héros.
 // Calculé sur chaque instance avec les mêmes données (résultat du propriétaire de chaque défense, propriétaires du
@@ -1953,6 +2005,12 @@ void subscribe()
     // (Steam, 2 PC), l'hôte a ouvert avec Maelle et le client avec Verso, puis chacun attendait l'autre. On attend
     // donc le TurnStart de l'hôte et on remplace le paramètre Character avant que le tour ne commence.
     bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Host && s.turn_align && !s.battle.ending) {   // essai -e33turnalign : qui joue le prochain tour
+            ++s.battle.sct_seq;
+            auto** slot = static_cast<UObject**>(ue::param_address(ctx, f, STR("Character")));
+            s.battle.next_enemy = slot && *slot && !game::is_player(*slot);
+            return;
+        }
         if (s.role != Role::Client || s.battle.ending) return;
         ++s.battle.sct_seq;
         if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
@@ -1998,6 +2056,24 @@ void subscribe()
     // Essai -e33turndep=1 : le jeu commence à attendre les dépendances du début de tour -> inscription du mod si l'état
     // de l'hôte pour ce tour n'est pas encore arrivé (résolue par le tick à son arrivée).
     bus.pre(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:StartListenToDependencies", [](HookCtx& ctx, UFunction*) {
+        // Hôte, essai -e33turnalign=1 : tour ennemi retenu tant qu'un client qui a des héros ne l'a pas commencé chez lui.
+        if (s.role == Role::Host) {
+            auto& b = s.battle;
+            if (!s.turn_align || !b.active || b.ending || b.hold || b.align_active || ctx.Context != turn_deps()) return;
+            if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
+            const bool after = b.ots_seq == b.sct_seq;   // OnTurnStart de ce tour déjà passé ?
+            const uint32_t turn = after ? b.turn : b.turn + 1;
+            if (turn <= 1 || !(after ? b.cur_enemy : b.next_enemy) || align_missing(turn).empty()) return;
+            ue::Call reg(ctx.Context, STR("Register Dependency"));
+            if (!reg) return;
+            reg.set_object(STR("Dependency"), game::save_manager()).invoke();
+            b.align_active = true;
+            b.align_turn = turn;
+            b.align_since = s.now;
+            bump("turn_aligns");
+            log().write("coop_turn_align", JsonObj().add("turn", turn).add("after_turn_start", after), turn);
+            return;
+        }
         if (s.role != Role::Client || !s.turn_dep || !s.battle.active || s.battle.strict || s.battle.ending) return;
         if (ctx.Context != turn_deps() || ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
         auto& b = s.battle;
@@ -2947,6 +3023,7 @@ void read_settings()
     s.duo_parry = arg(L"e33duoparry") != L"0";
     if (const std::wstring v = arg(L"e33readyidle"); !v.empty()) s.ready_idle_s = std::wcstod(v.c_str(), nullptr);
     if (const std::wstring v = arg(L"e33stuckturn"); !v.empty()) s.stuck_turn_s = std::wcstod(v.c_str(), nullptr);
+    s.turn_align = arg(L"e33turnalign") == L"1";
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
     ui::init();
@@ -3808,6 +3885,7 @@ void tick(double dt)
             log().write("coop_turn_dep_still_listening", JsonObj().add("turn", b.dep_turn), b.turn);
         }
     }
+    if (s.role == Role::Host) align_tick();   // essai -e33turnalign : tour ennemi relâché quand les clients l'ont commencé
     client_force_end_tick();
     // Fin sans victoire : clôture dès que le résultat de l'hôte est là (8 s au plus).
     if (auto& b = s.battle; b.end_flow_at >= 0 && !b.finalized && (s.role == Role::Host || b.host_end >= 0 || s.now - b.end_flow_at > 8.0))

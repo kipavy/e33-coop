@@ -1,0 +1,9 @@
+{
+  "player_name": "Proche",
+  "game_build": 23765773,
+  "mod_version": "current",
+  "gameplay_mods": [],
+  "actions": [{ "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "expect": { "ready_sent": "1" }
+}
