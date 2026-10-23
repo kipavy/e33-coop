@@ -397,7 +397,8 @@ void client_join_tick()
         if (!game::main_menu() && (game::in_dialogue() || game::playing_cinematic() || game::pause_menu_visible())) s.cj_calm_since = -1;
         else if (s.cj_calm_since < 0) s.cj_calm_since = s.now;
         if (s.now - s.cj_since < 20.0 && (s.cj_calm_since < 0 || s.now - s.cj_calm_since < 2.0)) return;
-        if (!game::main_menu() && game::pause_menu_visible()) { s.cj_since = s.now; return; }   // pause : on attend sa fermeture, sans limite        std::string err;
+        if (!game::main_menu() && game::pause_menu_visible()) { s.cj_since = s.now; return; }   // pause : on attend sa fermeture, sans limite
+        std::string err;
         if (!game::load_save_slot(kCoopSlot, err)) {
             bump("join_errors");
             log().write("coop_join_error", JsonObj().add("what", "load: " + err));
