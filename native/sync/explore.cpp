@@ -479,7 +479,7 @@ void pilot_tick()
 //  - mesures de fluidité en compteurs (follow_metrics), vérifiées par les scénarios p8_*.
 constexpr double kRenderDelay = 0.10;        // retard de rendu au-delà du transit minimal (horloge du pilote)
 constexpr double kRenderDelayNoClock = 0.12; // sans horloge (ancien enregistrement) : instants de réception
-constexpr double kExtrapolateMax = 0.35;     // position en retard : trajectoire prolongée au plus d'autant
+constexpr double kExtrapolateMax = 0.5;      // position en retard (pointe réseau) : trajectoire prolongée au plus d'autant
 constexpr double kFollowGain = 2.0;          // rattrapage : vitesse ajoutée par unité d'écart (1/s)
 constexpr double kCatchUpMax = 1.2;          // vitesse maximale = 1,2 x sprint pendant un rattrapage
 
@@ -864,8 +864,10 @@ void follow_tick()
     const double vmax = sprint_speed * kCatchUpMax;
     if (vc > vmax) { vx *= vmax / vc; vy *= vmax / vc; vc = vmax; }
     // Départ / arrêt (hystérésis) : arrêt seulement pilote arrêté et pion arrivé.
+    // Positions en retard (pointe réseau, < 1 s) : ni arrêt ni sortie du sprint (mesuré : arrêt puis freinage en plein sprint).
+    const bool late = R.starved && s.now - fc.last_arrival < 1.0;
     if (!fc.moving && (rv > 30 || err > 70)) { fc.moving = true; bump("follow_starts"); ++f.starts; }
-    else if (fc.moving && rv < 10 && err < 25) {
+    else if (fc.moving && rv < 10 && err < 25 && !late) {
         fc.moving = false;
         ++f.stops;
         if (s.now - fc.last_arrival < 0.3 && pilot_now_speed > 100 && s.now - fc.follow_since >= 2.0) {
@@ -899,7 +901,7 @@ void follow_tick()
     const bool want_sprint = fc.moving && (rv > run_speed * 1.1 || (err > 120 && vc > run_speed * 1.08));
     // Sortie du sprint seulement une fois la vitesse de sprint redescendue près de la course (rampe ci-dessous) : sinon
     // l'ALS freine d'un coup jusque sous la course (mesuré : 737 -> 206 u/s en 0,1 s).
-    const bool keep_sprint = fc.moving && (rv > run_speed * 1.03 || vc > run_speed * 1.03 || fc.sprint_set > run_speed + 30);
+    const bool keep_sprint = fc.moving && (late || rv > run_speed * 1.03 || vc > run_speed * 1.03 || fc.sprint_set > run_speed + 30);
     if (want_sprint && !fc.sprint) { fc.sprint = true; fc.sprint_set = std::max(own_speed, run_speed + 15); sprint_start(pawn); }
     else if (fc.sprint && !keep_sprint) sprint_stop(pawn);
     if (fc.sprint) {
