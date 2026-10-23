@@ -259,7 +259,7 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 5. **Installateur en un fichier** (`Installer E33 Coop.exe`, Win32, sans dépendance) : trouve le jeu par Steam (registre, `libraryfolders.vdf`, `appmanifest_1903340.acf`), télécharge le zip de la dernière release (HTTPS, hôtes GitHub seulement, redirections vérifiées), vérifie le SHA-256 contre `SHA256SUMS` de la même release, installe comme `install.ps1` (sauvegarde de l'ancien contenu, remise en place si échec), garde `settings.ini` et `remotetest.txt`. Rien n'est installé sans empreinte correspondante. Zip local + `SHA256SUMS` à côté de l'exe : hors ligne.
 6. **Mises à jour** (`updates = auto | ask | off`, défaut `auto`) : au menu principal, vérification en arrière-plan (une fois par lancement, erreurs réseau ignorées). `auto` : l'installateur du dossier du mod (chemin et arguments fixes : `--stage`) télécharge et vérifie, signale « prêt », puis installe à la fermeture du jeu ; jamais de redémarrage en pleine partie. `ask` : carte « U pour mettre à jour » au menu (`--update` : attend la fermeture, installe, relance par `steam://rungameid/1903340`). Écart de version à la jonction : le côté le plus ancien est prévenu ; client en `auto` avec une release plus récente publiée → mise à jour immédiate, relance et nouvelle jonction de l'ami (SteamID gardé 15 min dans `SaveGames\e33coop\rejoin.txt`) ; pas de mise à jour automatique en boucle si l'autre a une version de développement.
 7. **Options** : `ue4ss/Mods/E33Coop/settings.ini` (`lang`, `updates`, `aim_cam`, `turndep`, `duo_parry`, `turn_timer_s`) ; ordre : scénario de test seul → option de lancement → fichier → défaut. Le test à distance reste dans `remotetest.txt` à part : c'est une autorisation (SteamID de confiance, relance, mise à jour), écrite seulement par l'installation sur demande, qu'un réglage de confort ne doit pas pouvoir activer.
-8. **Panneau Coop au clavier** : **F9** choisit une ligne (personnages de l'équipe pour l'hôte hors combat, puis options), **Maj+F9** la change (personnage → joueur suivant, même chemin que F6 ; option → valeur suivante, enregistrée). Pas de flèches ni d'Entrée : le panneau n'a jamais le focus, le menu pause du jeu garde sa navigation. Hors du menu pause, une carte montre la ligne choisie. Options d'hôte en lecture seule chez un client.
+8. **Panneau Coop au clavier** : **F9** choisit une ligne (personnages de l'équipe pour l'hôte hors combat, puis options), **Maj+F9** la change (personnage → joueur suivant, même chemin que F6 ; option → valeur suivante, enregistrée). Pas de flèches ni d'Entrée : le panneau n'a jamais le focus, le menu pause du jeu garde sa navigation (**remplacé par D24** : panneau navigable, F9 / Maj+F9 restent des raccourcis). Hors du menu pause, une carte montre la ligne choisie. Options d'hôte en lecture seule chez un client.
 
 **Non vérifié en jeu** : tout le mode neutre (F7 hôte en pleine partie avec hooks accrochés tard, invitation, retour au neutre), la vérification de release et l'installateur lancé depuis le jeu (`CREATE_BREAKAWAY_FROM_JOB`, copie de l'exe dans `%TEMP%`), l'installation à la fermeture du jeu.
 
@@ -345,7 +345,37 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 
 ---
 
-## D24 — Changements de niveau : le suiveur ne change de niveau que sur MapChange, MapChange gardé si besoin (2026-10-23, demande de Killian, précise D12 point 4)
+## D24 — Dialogues : même synchro que les cinématiques (2026-10-23, demande de Killian, étend D20)
+
+**Constat** : D20 ne couvrait que `TriggerCinematic`. Un dialogue lancé par une zone ou une game action (Maelle avant le duel du prologue) n'avait lieu que chez le pilote ; le suiveur attendait sous la barrière.
+
+**Décision** :
+1. Le pilote publie aussi le début d'un dialogue : pré-hook de `BP_DialogueSystemComponent_C:ActivateDialogue(Dialogue)`, `SceneStart` avec le champ final facultatif `kind` = dialogue (absent = cinématique) et `sequence` = chemin de l'acteur `BP_Dialogue_C`. Même cause (zone, interaction, game action) ; jamais en combat ; même dialogue réactivé dans les 5 s ignoré.
+2. Le suiveur suit D20 (zone -> `TryExecuteGameActionOnOverlap`, repli action, puis téléportation), sauf : dialogue d'interaction -> rien (déjà rejoué par `WorldInteract`) ; zone déjà exécutée ici dans les 120 s -> rien (pas de double lecture, ex. dialogue qui suit une cinématique de la même zone, pour les cinématiques aussi).
+3. Les réponses restent rejouées par `DialogueChoice` (attente de la question `StartChoice`), vérifié sur ce dialogue.
+
+**Limite** : un dialogue qui lance un combat (duel) le lance aussi chez le suiveur ; le combat est accepté comme déjà engagé, avec 1 PA d'écart aux premiers tours (réparé par la resynchro).
+
+## D25 — Panneau Coop navigable comme le menu du jeu (2026-10-23, demande de Killian)
+
+**Constat** : le panneau « Expédition coop » du menu pause n'avait jamais le focus ; ses lignes se choisissaient avec F9 et se changeaient avec Maj+F9. Killian : « ça serait pas possible par la souris et les flèches du clavier/manette comme le menu natif ? »
+
+**Décision** :
+1. Chaque ligne modifiable (personnage de l'équipe chez l'hôte hors combat, option) est un **vrai bouton du jeu** : `WBP_BaseButton_C` créé à l'exécution, style copié de `SettingsButton` du menu pause (comme le bouton Rejoindre de l'écran titre), contenu « libellé …… valeur » dans `ButtonContent`. Focus, survol, sons et clic sont ceux du jeu. Lignes non modifiables (réserve, équipe en combat, client) : texte comme avant.
+2. **Valider** (clic, Entrée, A) : hook de `CommonButtonBase:HandleButtonClicked` -> `options::change()` (même chemin que Maj+F9 : `Owners` diffusé pour un personnage, settings.ini pour une option).
+3. **Gauche / droite** : bouton en navigation contrainte horizontale (`USFUIButtonBase::SetIsNavigationConstrained` + `SetConstrainOrientation`, mécanisme des lignes de l'écran Paramètres) : le jeu ne déplace pas le focus et diffuse `OnConstrainedNavigationTriggered(Direction)`. Le mod y abonne (`FMulticastDelegateProperty::AddDelegate`) la fonction `SetJustification` d'un TextBlock caché de la ligne (paramètre d'un octet, sans effet visible) et la reçoit par un hook. Gauche = valeur précédente, droite = suivante ; un personnage passe toujours au joueur suivant.
+4. **Entrer / sortir** : règle explicite « droite » des boutons du menu du jeu vers le panneau (remise par défaut quand le panneau disparaît) ; haut / bas bouclent dans le panneau. **Retour** (Échap / B) quand une ligne a le focus : le focus revient au dernier bouton du menu, le menu reste ouvert. Porte (`UFunction::Func` remplacée, comme les gardes d'intent.cpp) sur l'événement Retour du menu pause (`BndEvt_…_Back_…_5`) et sur `InpActEvt_IA_UI_Menu_Pause` du contrôleur (exploration) et du personnage de combat ; un même appui vu par deux chemins n'est avalé qu'une fois (0,3 s). Sans focus dans le panneau : appel d'origine.
+5. **Focus <-> ligne choisie** : la ligne qui a le focus devient `options::selected()` (plus d'oubli après 20 s tant qu'elle l'a) ; F9 choisit une ligne -> elle prend le focus ; F9 après la dernière -> retour au menu. Surlignage (chevron doré) mis à jour sans reconstruire ; reconstruction seulement quand le contenu change, la ligne qui avait le focus le reprend.
+6. Clics et flèches notés dans les hooks, traités au tick suivant (jamais de reconstruction pendant l'appel du jeu). Pointeurs gardés seulement déréférencés si notre racine est encore dans le `PausePanel` du menu courant.
+7. **Repli** : bouton impossible (classe, modèle, contenu) -> panneau en texte comme avant (F9 / Maj+F9), pour la session.
+
+**Limites** : l'appui sur Retour peut aussi passer par la gestion native de CommonUI (`NativeOnHandleBackAction`, sans UFunction) : dans ce cas Échap / B ferment le menu comme avant. Le survol ne déplace pas le focus (comme le menu du jeu). Non vérifié avec de vraies entrées (scénario `p6_panelnav_input_host`, à lancer avec l'accord de Killian ; manette à la main).
+
+**Remise en cause si** : `owners_ui_panel_back` absent alors qu'Échap a été pressé avec le focus dans le panneau (chemin Retour non couvert) ; `nav_bind_errors` > 0 ; ou un focus qui saute au mauvais bouton du menu.
+
+---
+
+## D26 — Changements de niveau : le suiveur ne change de niveau que sur MapChange, MapChange gardé si besoin (2026-10-23, demande de Killian, précise D12 point 4)
 
 **Constat** (`p9_zones_*`, tranche réelle de 7 transitions sur `TEST_LATE` : drapeau -> carte du monde, entrée de la carte
 du monde, sorties de zone, camp) : le suivi d'une transition simple était déjà fluide (1 chargement, début 33 ms après la

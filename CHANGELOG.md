@@ -16,13 +16,26 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ### Corrections
 - Changements de zone : quand le meneur change à nouveau de zone pendant que l'autre joueur charge encore la
-  précédente, celui-ci le rejoint dès son chargement fini (avant : il restait dans la mauvaise zone).
+  précédente, celui-ci le rejoint directement (avant : il pouvait rester dans la mauvaise zone).
 - Changements de zone : le perso de l'autre joueur ne prend plus de lui-même une sortie de zone en suivant le meneur ;
   il change de zone uniquement avec lui.
 
 ## [0.6.6] - 2026-10-23
 
+### Ajouts
+- Panneau Coop du menu pause utilisable comme le menu du jeu : souris (survol, clic), flèches du clavier ou croix /
+  stick de la manette pour passer d'une ligne à l'autre (Droite depuis le menu pour y entrer), Entrée / A ou
+  Gauche / Droite pour changer la répartition d'un personnage ou une option, Échap / B pour revenir au menu.
+  F9 / Maj+F9 marchent toujours.
+
+### Modifications
+- Version du mod au menu principal : en petit en bas à droite, à côté du numéro du jeu.
+
 ### Corrections
+- Combat lancé par un dialogue (ex. duel contre Maelle au prologue) : les points d'action du premier tour ne sautent
+  plus d'un point chez le joueur invité.
+- Dialogues en même temps : un dialogue déclenché par le meneur en passant à un endroit (ex. Maelle avant le duel du
+  prologue) démarre aussitôt chez les autres joueurs, au lieu de les laisser en attente.
 - Exploration : quand le meneur court ou sprinte, le perso de l'autre joueur le suit de façon fluide (plus d'à-coups,
   d'arrêts ni de téléportations), et la partie n'est plus rechargée pendant qu'on se déplace.
 - Duel du prologue contre Maelle en nouvelle partie ensemble : plus de blocage, l'autre joueur entre dans le combat

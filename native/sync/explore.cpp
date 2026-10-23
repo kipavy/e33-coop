@@ -1480,13 +1480,17 @@ void read_cinematic_params(RC::Unreal::UnrealScriptFunctionCallableContext& ctx,
     }
 }
 
-// Pilote : la cinématique commence ici -> SceneStart (cause la plus récente : zone, sinon interaction, sinon game action).
-void on_local_cinematic(const std::string& id, const std::string& seq)
+// Pilote : une cinématique (TriggerCinematic) ou un dialogue (ActivateDialogue, D24) commence ici -> SceneStart (cause la
+// plus récente : zone, sinon interaction, sinon game action). Dialogue : seq = chemin de l'acteur BP_Dialogue_C.
+void on_local_scene(proto::NarrativeKind kind, const std::string& id, const std::string& seq)
 {
-    sc.local_scene = scene_key(id, seq);
+    const bool dlg = kind == proto::NarrativeKind::Dialogue;
+    const std::string key = scene_key(id, seq);
+    if (dlg && sc.local_scene == key && s.now - sc.local_scene_at < 5.0) return;   // même dialogue réactivé (étapes)
+    sc.local_scene = key;
     sc.local_scene_at = s.now;
     proto::SceneStart m;
-    m.scene = id; m.sequence = seq;
+    m.scene = id; m.sequence = seq; m.kind = kind;
     auto recent = [](double at) { return at >= 0 && s.now - at < kSceneCauseWindow; };
     if (recent(sc.zone_at) && (!recent(sc.interaction_at) || sc.zone_at >= sc.interaction_at)) {
         m.cause = proto::SceneCause::Zone; m.cause_path = sc.zone; m.action = sc.zone_action;
@@ -1496,8 +1500,9 @@ void on_local_cinematic(const std::string& id, const std::string& seq)
     } else if (recent(sc.action_at)) {
         m.cause = proto::SceneCause::Action; m.action = sc.action;
     }
-    const bool publish = s.active && !s.ended && is_pilot() && sharing() && !s.replaying;
-    log().write("coop_cinematic_trigger", JsonObj().add("scene", id).add("sequence", seq).add("cause", static_cast<int>(m.cause))
+    // Pas en combat (dialogues des combats : joués par chacun dans son combat).
+    const bool publish = s.active && !s.ended && is_pilot() && sharing() && !s.replaying && !game::in_battle();
+    log().write(dlg ? "coop_dialogue_trigger" : "coop_cinematic_trigger", JsonObj().add("scene", id).add("sequence", seq).add("cause", static_cast<int>(m.cause))
                                               .add("cause_path", m.cause_path).add("action", m.action).add("published", publish)
                                               .add("zone_age_s", sc.zone_at < 0 ? -1.0 : s.now - sc.zone_at)
                                               .add("interaction_age_s", sc.interaction_at < 0 ? -1.0 : s.now - sc.interaction_at));
@@ -1509,7 +1514,7 @@ void on_local_cinematic(const std::string& id, const std::string& seq)
         if (game::pawn_state(pawn, ps)) { m.x = ps.pos[0]; m.y = ps.pos[1]; m.z = ps.pos[2]; }
     }
     s.net.publish(m, true);
-    bump("scenes_published");
+    bump(dlg ? "dialogues_published" : "scenes_published");
 }
 
 // Test (-e33nofollow=1) : pion suiveur laissé sur place, la scène ne peut venir que de la synchro (SceneStart).
@@ -1561,9 +1566,17 @@ void scene_tick()
     // Déjà dans une scène ici, ou même scène commencée ici récemment (le pion suiveur a traversé la zone) : rien.
     if (s.local_narr || game::playing_cinematic() || game::in_dialogue()) return drop("already_narrative");
     if (!key.empty() && sc.local_scene == key && s.now - sc.local_scene_at < 120) return drop("already_started");
+    // Même zone déjà exécutée ici (son action suit son cours, ex. dialogue après une cinématique) : pas de double lecture.
+    if (m.cause == proto::SceneCause::Zone && !m.cause_path.empty() && sc.zone == m.cause_path && s.now - sc.zone_at < 120)
+        return drop("zone_already_run");
     if (!world_ready()) { if (s.now - sc.pending_at > 15) drop("world_not_ready"); return; }
-    // Interaction : rejouée ici par WorldInteract, la scène doit suivre d'elle-même ; repli après 3 s.
-    if (m.cause == proto::SceneCause::Interaction && s.now - sc.pending_at < 3.0) return;
+    const bool dlg = m.kind == proto::NarrativeKind::Dialogue;
+    // Interaction : rejouée ici par WorldInteract, la scène doit suivre d'elle-même. Cinématique : repli après 3 s ;
+    // dialogue : rien de plus (une téléportation ne relance pas le dialogue d'un PNJ).
+    if (m.cause == proto::SceneCause::Interaction) {
+        if (dlg) return drop("interaction_replayed");
+        if (s.now - sc.pending_at < 3.0) return;
+    }
     int method = 0;
     if (m.cause == proto::SceneCause::Zone && !m.cause_path.empty()) {
         if (UObject* zone = ue::find_object(ue::from_utf8(m.cause_path).c_str())) {
@@ -1575,7 +1588,7 @@ void scene_tick()
             const bool playing = ue::get_bool(zone, STR("IsGameActionOnOverlapPlaying"));
             log().write("coop_scene_zone", JsonObj().add("zone", m.cause_path).add("done_before", done).add("called", called).add("playing", playing)
                                                .add("scene_started", sc.local_scene_at >= sc.pending_at));
-            if (playing || sc.local_scene_at >= sc.pending_at || game::playing_cinematic()) method = 1;
+            if (playing || sc.local_scene_at >= sc.pending_at || game::playing_cinematic() || game::in_dialogue()) method = 1;
             else if (!done) {
                 // La zone refuse (conditions d'entrée ?) : son action exécutée directement.
                 UObject* action = zone_overlap_action(zone);
@@ -1599,7 +1612,8 @@ void scene_tick()
         }
     }
     bump(method == 1 ? "scene_syncs_zone" : method == 2 ? "scene_syncs_action" : method == 3 ? "scene_syncs_teleport" : "scene_syncs_none");
-    log().write("coop_scene_sync", JsonObj().add("scene", key).add("cause", static_cast<int>(m.cause)).add("method", method)
+    if (dlg) bump("dialogue_syncs");
+    log().write("coop_scene_sync", JsonObj().add("scene", key).add("dialogue", dlg).add("cause", static_cast<int>(m.cause)).add("method", method)
                                        .add("after_s", s.now - sc.pending_at));
     sc.acted_scene = key; sc.acted_at = s.now; sc.acted_method = method; sc.acted_checked = false;
     sc.pending.reset();
@@ -2358,7 +2372,13 @@ void subscribe()
     bus.pre(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:TriggerCinematic", [](HookCtx& ctx, UFunction* f) {
         std::string id, seq;
         read_cinematic_params(ctx, f, id, seq);
-        on_local_cinematic(id, seq);
+        on_local_scene(proto::NarrativeKind::Cinematic, id, seq);
+    });
+    // Dialogue (D24) : ActivateDialogue(Dialogue) du composant de dialogue, quelle que soit sa cause (PNJ, zone, action).
+    bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:ActivateDialogue", [](HookCtx& ctx, UFunction* f) {
+        UObject* d = ue::read_param_object(ctx, f, STR("Dialogue"));
+        if (!d) return;
+        on_local_scene(proto::NarrativeKind::Dialogue, "", object_path(d));
     });
     // Passage : le jeu ignore parfois SkipCinematic (trop tôt, scène impossible à passer) ; on ne publie qu'un passage
     // effectif, vu à la fin de la séquence peu après l'appel (OnSequenceFinished, avant la transition de sortie).
