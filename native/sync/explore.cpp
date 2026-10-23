@@ -951,7 +951,9 @@ void scene_tick()
 {
     // Passage de la cinématique demandé par le pilote : tant qu'elle joue ici (au plus 10 s), une tentative par seconde.
     if (sc.skip_at >= 0 && s.now >= sc.next_skip_try) {
-        const bool playing = game::playing_cinematic();
+        // Séquence en cours (OnSequenceStarted -> OnSequenceFinished) : après sa fin, la transition de sortie suit, on
+        // n'y touche plus (une pause de cinématique pendant la transition n'est pas souhaitable).
+        const bool playing = s.sequence_playing && game::playing_cinematic();
         if (!playing && !sc.skip_seen_playing && s.now - sc.skip_at < 10.0) {
             sc.next_skip_try = s.now + 0.2;   // pas encore commencée ici : attente
         } else if (playing && s.now - sc.skip_at < 10.0) {
