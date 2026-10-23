@@ -6,6 +6,7 @@
 #include "presence.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <deque>
@@ -103,24 +104,22 @@ struct S {
     std::optional<proto::PilotState> last_pilot;  // suiveur
     double last_pilot_at = 0;
     double follow_error = -1;
-    // Suivi lissé (2026-10-21 : arrêts-redémarrages visibles quand l'hôte court, positions Steam irrégulières)
-    bool follow_moving = false;
-    bool follow_have_target = false;
-    double follow_target[3]{};
-    double follow_last_t = -1;
     // Sprint du suiveur (2026-10-22 : le pilote sprinte à ~720 u/s, le suiveur restait en course à ~350 u/s et était
-    // téléporté toutes les ~2,2 s à 800 u d'écart : les « freeze » vus quand l'hôte court).
+    // téléporté toutes les ~2,2 s à 800 u d'écart : les « freeze » vus quand l'hôte court). Suivi : FollowCtl (D20).
     bool follow_sprint = false;                   // sprint demandé au pion suiveur
     bool sprint_touched = false;                  // le mod a déjà changé l'allure de ce pion
-    int sprint_method = 0;                        // 1 SprintAction, 2 SetDesiredGait (repli)
+    int sprint_method = 0;                        // 2 SetDesiredGait (0 : échec)
     int gait_before = -1;                         // allure voulue avant le sprint (rendue ensuite)
     double sprint_since = -1;
-    double next_gait_check = 0;
     bool sprint_logged = false;
-    bool sprint_needs_gait = false;               // SprintAction seul n'a pas suffi : SetDesiredGait aussi
     // Vitesse du pion local (pilote ou suiveur), pour reporter les tâches lourdes pendant le mouvement
     double local_speed = 0;
     double local_speed_at = -1;
+    double last_motion_at = -100;                 // pilote ou pion local en mouvement (> 50 u/s) pour la dernière fois
+    // Client : resynchro (rechargement de 5-6 s) attendue jusqu'à l'arrêt du mouvement (essai du 2026-10-22 : deux
+    // rechargements en plein sprint de l'hôte, vus comme des « freeze »).
+    std::string resync_deferred;                  // parties en écart (vide : aucune demande en attente)
+    double resync_deferred_since = -1;
     double level_mismatch_since = -1;
     bool f8_down = false;
     // Interactions, dialogues, transitions (rejoués chez les suiveurs)
@@ -191,7 +190,7 @@ struct FollowStats {
     int ticks = 0, starts = 0, stops = 0, teleports = 0, sprints = 0, sprint_fallbacks = 0;
     double err_sum = 0, err_max = 0, age_max = 0, pilot_speed_max = 0, own_speed_sum = 0, own_speed_max = 0;
     int own_speed_n = 0;
-    double sprint_s = 0, sprint_gait_ok_s = 0, last_t = -1;
+    double sprint_s = 0, sprint_gait_ok_s = 0, starved_s = 0, last_t = -1;
 };
 FollowStats fstats;
 
@@ -212,7 +211,7 @@ void follow_stats_flush(bool force)
             .add("pilot_speed_max", r1(f.pilot_speed_max))
             .add("own_speed_avg", f.own_speed_n ? r1(f.own_speed_sum / f.own_speed_n) : 0.0).add("own_speed_max", r1(f.own_speed_max))
             .add("sprints", f.sprints).add("sprint_s", r1(f.sprint_s)).add("sprint_gait_ok_s", r1(f.sprint_gait_ok_s))
-            .add("sprint_fallbacks", f.sprint_fallbacks).add("sprint_method", s.sprint_method));
+            .add("sprint_method", s.sprint_method).add("starved_s", r1(f.starved_s)));
     }
     const double last_rx = f.last_rx;
     const uint32_t last_seq = f.last_seq;
@@ -248,6 +247,7 @@ void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
 // entré ; client : instantané chargé, ou session sans « rejoindre » des tests de combat).
 bool sharing();
 void touch();   // événement d'exploration : la partie n'est pas « calme » (hash d'état)
+void send_world_resync(const std::string& differ);
 
 bool world_ready()
 {
@@ -457,19 +457,194 @@ void pilot_tick()
     m.x = ps.pos[0]; m.y = ps.pos[1]; m.z = ps.pos[2]; m.yaw = ps.yaw;
     m.vx = ps.vel[0]; m.vy = ps.vel[1]; m.vz = ps.vel[2];
     mount::fill_pilot(pawn, m, s.now);   // mode de déplacement, monture (carte du monde)
+    m.t_ms = 1 + static_cast<uint32_t>(std::fmod(s.now * 1000.0, 4.0e9));   // horloge du pilote (tampon du suiveur)
     s.net.publish(m, false);
 }
 
-// Sprint du suiveur : demandé comme la touche du joueur (SprintAction), SetDesiredGait en repli si l'allure ne suit pas.
+// --- Suivi fluide du pilote (2026-10-23, « freeze » vus par le client quand l'hôte court, D20) -------------
+// Avant : cible extrapolée depuis la dernière position reçue + lissage exponentiel, échelle d'entrée approximative,
+// sprint par SprintAction (sans effet sur le pion suiveur : repli SetDesiredGait après 0,6 s, retard de ~200 u jamais
+// rattrapé puisque le suiveur n'allait pas plus vite que le pilote), téléportation fixe à 800 u.
+// Maintenant :
+//  - tampon d'interpolation : chaque position est placée à son instant d'envoi (PilotState.t_ms, horloge du pilote ;
+//    à défaut l'instant de réception). Le pion vise la trajectoire du pilote telle qu'elle était kRenderDelay avant la
+//    position la plus récente arrivée « à l'heure » (transit minimal) : courbe d'Hermite entre deux positions, sans la
+//    gigue du réseau ; prolongée au plus kExtrapolateMax si une position tarde (pointe réseau) ;
+//  - commande en vitesse : vitesse du pilote à cet instant + rattrapage proportionnel à l'écart. En course : échelle
+//    d'entrée = vitesse voulue / MaxWalkSpeed. En sprint : allure voulue Sprint (SetDesiredGait, directement), entrée
+//    pleine (l'ALS n'accorde le sprint qu'au-delà de 0,9) et MaxWalkSpeed = vitesse voulue (jusqu'à 1,2 x le sprint
+//    pour rattraper un retard), rendue à l'ALS à la sortie du sprint ;
+//  - téléportation seulement si elle se justifie : trou de données ou saut du pilote (« gap »), écart > 800 u qui ne
+//    se résorbe pas en 1 s ou > 1600 u, pion bloqué 2 s, écart vertical > 400 u pendant 0,5 s ;
+//  - mesures de fluidité en compteurs (follow_metrics), vérifiées par les scénarios p8_*.
+constexpr double kRenderDelay = 0.10;        // retard de rendu au-delà du transit minimal (horloge du pilote)
+constexpr double kRenderDelayNoClock = 0.12; // sans horloge (ancien enregistrement) : instants de réception
+constexpr double kExtrapolateMax = 0.35;     // position en retard : trajectoire prolongée au plus d'autant
+constexpr double kFollowGain = 2.0;          // rattrapage : vitesse ajoutée par unité d'écart (1/s)
+constexpr double kCatchUpMax = 1.2;          // vitesse maximale = 1,2 x sprint pendant un rattrapage
+
+struct PilotSample { double t = 0; double pos[3]{}; double vel[3]{}; double yaw = 0; };
+
+struct FollowCtl {
+    std::deque<PilotSample> buf;            // positions du pilote, triées par instant d'envoi
+    uint8_t pilot = 0xFF;
+    std::string level;
+    bool clock = false;                     // instants = horloge du pilote (sinon réception)
+    double off = 0;                         // réception - envoi, minimal (s)
+    int off_high = 0;
+    double last_arrival = -1;
+    double discontinuity_at = -100;         // trou de données / saut du pilote : téléportation « gap » permise
+    double teleport_at = -100;
+    // Conduite
+    bool moving = false;
+    bool sprint = false;
+    double sprint_low_since = -1;
+    double next_gait_assert = 0;
+    float base_max = 0;                     // MaxWalkSpeed avant la première écriture du mod
+    bool max_written = false;
+    game::GaitSpeeds speeds{};
+    bool speeds_ok = false;
+    bool speeds_logged = false;
+    double speeds_at = -100;
+    double far_since = -1, far_err0 = 0;
+    double dz_since = -1;
+    double stuck_since = -1;
+    double follow_since = -1;               // pion conduit depuis
+    // Mesures
+    double rv_move_since = -1;              // vitesse rendue du pilote > 150 depuis
+    double rv_fast_since = -1;              // > 300 depuis
+    double stall_since = -1; bool stall_counted = false;
+    double frozen_since = -1;
+    double dip_since = -1; bool dip_counted = false;
+    double rest_since = -1;
+    double last_drop_at = -10;
+    double last_event_log = -10;
+    std::deque<std::array<double, 3>> hist; // (instant, vitesse du pion, vitesse rendue du pilote) sur 0,3 s
+} fc;
+
+// Maximum d'une mesure, tenu dans un compteur (les scénarios vérifient les compteurs) : on ajoute la différence.
+void gauge_max(const char* name, double v)
+{
+    static std::map<std::string, int> mx;
+    const int iv = static_cast<int>(std::lround(v));
+    int& cur = mx[name];
+    if (iv > cur) { bump(name, iv - cur); cur = iv; }
+}
+
+void follow_buf_reset(const char* why)
+{
+    if (!fc.buf.empty()) log().write("coop_follow_buffer_reset", JsonObj().add("why", why).add("samples", static_cast<int64_t>(fc.buf.size())));
+    fc.buf.clear();
+    fc.off_high = 0;
+    fc.discontinuity_at = s.now;
+}
+
+// Suiveur : position du pilote reçue -> tampon.
+void follow_push(const proto::PilotState& p)
+{
+    const bool clock = p.t_ms != 0;
+    if (p.pilot != fc.pilot || p.level != fc.level || clock != fc.clock) {
+        follow_buf_reset(p.pilot != fc.pilot ? "pilot" : p.level != fc.level ? "level" : "clock");
+        fc.pilot = p.pilot; fc.level = p.level; fc.clock = clock;
+    }
+    PilotSample smp;
+    smp.t = clock ? p.t_ms / 1000.0 : s.now;
+    smp.pos[0] = p.x; smp.pos[1] = p.y; smp.pos[2] = p.z;
+    smp.vel[0] = p.vx; smp.vel[1] = p.vy; smp.vel[2] = p.vz;
+    smp.yaw = p.yaw;
+    if (!fc.buf.empty()) {
+        const PilotSample& last = fc.buf.back();
+        if (!clock && smp.t <= last.t + 0.005) smp.t = last.t + 0.01;   // deux positions lues dans la même image
+        if (clock && smp.t <= last.t) {
+            // En retard (réordonnée) : rangée à sa place si elle sert encore, sinon ignorée.
+            if (smp.t <= fc.buf.front().t) return;
+            auto it = std::upper_bound(fc.buf.begin(), fc.buf.end(), smp.t, [](double t, const PilotSample& x) { return t < x.t; });
+            if (it != fc.buf.begin() && std::prev(it)->t == smp.t) return;
+            fc.buf.insert(it, smp);
+            return;
+        }
+        // Trou de données (pilote en chargement, client qui recharge) ou saut du pilote (téléportation, grappin) :
+        // pas d'interpolation à travers ; le suiveur peut alors être téléporté (classé « gap »).
+        const double gap = smp.t - last.t;
+        const double px = last.pos[0] + last.vel[0] * std::min(gap, 0.5), py = last.pos[1] + last.vel[1] * std::min(gap, 0.5);
+        const double jump = std::hypot(smp.pos[0] - px, smp.pos[1] - py);
+        if (gap > 1.0 || jump > 400 || std::fabs(smp.pos[2] - last.pos[2]) > 400) {
+            bump("follow_discontinuities");
+            log().write("coop_follow_discontinuity", JsonObj().add("gap_ms", static_cast<int64_t>(gap * 1000.0)).add("jump", std::round(jump)));
+            follow_buf_reset("discontinuity");
+        }
+    }
+    // Transit minimal (horloge du pilote -> la nôtre). Une latence durablement plus haute (> 0,5 s, 3 fois de suite) ou
+    // une autre horloge du pilote réinitialise la référence.
+    const double o = s.now - smp.t;
+    if (fc.buf.empty()) { fc.off = o; fc.off_high = 0; }
+    else if (o < fc.off) { fc.off = o; fc.off_high = 0; }
+    else if (o > fc.off + 0.5) {
+        if (++fc.off_high >= 3) {
+            log().write("coop_follow_clock_reset", JsonObj().add("shift_ms", static_cast<int64_t>((o - fc.off) * 1000.0)));
+            fc.off = o;
+            fc.off_high = 0;
+        }
+    } else fc.off_high = 0;
+    fc.buf.push_back(smp);
+    fc.last_arrival = s.now;
+    while (fc.buf.size() > 2 && fc.buf.back().t - fc.buf.front().t > 2.0) fc.buf.pop_front();
+}
+
+// Position et vitesse du pilote à l'instant r (horloge du tampon). starved : r au-delà de la dernière position ;
+// stale : au-delà de la prolongation permise (pilote considéré arrêté là où on l'a prolongé).
+struct Rendered { double pos[3]{}; double vel[3]{}; double yaw = 0; bool starved = false; bool stale = false; };
+
+bool follow_render(double r, Rendered& out)
+{
+    if (fc.buf.empty()) return false;
+    const PilotSample& front = fc.buf.front();
+    const PilotSample& back = fc.buf.back();
+    if (r <= front.t) {
+        for (int i = 0; i < 3; ++i) { out.pos[i] = front.pos[i]; out.vel[i] = front.vel[i]; }
+        out.yaw = front.yaw;
+        return true;
+    }
+    if (r >= back.t) {
+        const double ex = r - back.t;
+        out.starved = ex > 0.0;
+        out.stale = ex > kExtrapolateMax;
+        const double k = std::min(ex, kExtrapolateMax);
+        for (int i = 0; i < 3; ++i) { out.pos[i] = back.pos[i] + back.vel[i] * k; out.vel[i] = out.stale ? 0.0 : back.vel[i]; }
+        out.yaw = back.yaw;
+        return true;
+    }
+    auto it = std::upper_bound(fc.buf.begin(), fc.buf.end(), r, [](double t, const PilotSample& x) { return t < x.t; });
+    const PilotSample& b = *it;
+    const PilotSample& a = *std::prev(it);
+    const double h = std::max(1e-3, b.t - a.t), f = std::clamp((r - a.t) / h, 0.0, 1.0);
+    const double h00 = 2 * f * f * f - 3 * f * f + 1, h10 = f * f * f - 2 * f * f + f, h01 = -2 * f * f * f + 3 * f * f, h11 = f * f * f - f * f;
+    for (int i = 0; i < 3; ++i) {
+        out.pos[i] = h00 * a.pos[i] + h10 * h * a.vel[i] + h01 * b.pos[i] + h11 * h * b.vel[i];
+        out.vel[i] = a.vel[i] + (b.vel[i] - a.vel[i]) * f;
+    }
+    out.yaw = a.yaw + (std::fmod(b.yaw - a.yaw + 540.0, 360.0) - 180.0) * f;
+    return true;
+}
+
+// MaxWalkSpeed réglée par le mod (sprint du suiveur) -> rendue (vitesse de course de l'ALS).
+void max_speed_restore(UObject* pawn)
+{
+    if (!fc.max_written || !pawn) return;
+    fc.max_written = false;
+    if (float* mws = game::pawn_max_walk_speed(pawn)) *mws = fc.speeds_ok ? fc.speeds.run : fc.base_max;
+}
+
 void sprint_start(UObject* pawn)
 {
-    s.gait_before = s.sprint_touched ? s.gait_before : game::pawn_gait(pawn, true);
+    if (!s.sprint_touched) s.gait_before = game::pawn_gait(pawn, true);
     s.sprint_touched = true;
     s.follow_sprint = true;
     s.sprint_since = s.now;
-    s.sprint_method = game::pawn_sprint_action(pawn, true) ? 1 : 0;
-    if ((!s.sprint_method || s.sprint_needs_gait) && game::set_pawn_desired_gait(pawn, 2)) s.sprint_method = 2;
-    s.next_gait_check = s.now + 0.6;
+    // SetDesiredGait directement : SprintAction (la touche du joueur) restait sans effet sur le pion suiveur (repli
+    // systématique après 0,6 s dans p8_sprint_client, 2026-10-23).
+    s.sprint_method = game::set_pawn_desired_gait(pawn, 2) ? 2 : 0;
+    fc.next_gait_assert = s.now + 0.5;
     ++fstats.sprints;
     bump("follow_sprints");
     if (!s.sprint_logged) {   // une fois par session (le résumé compte les suivants)
@@ -481,29 +656,114 @@ void sprint_start(UObject* pawn)
 
 void sprint_off(UObject* pawn)
 {
-    game::pawn_sprint_action(pawn, false);
     if (game::pawn_gait(pawn, true) == 2) game::set_pawn_desired_gait(pawn, s.gait_before >= 0 && s.gait_before != 2 ? s.gait_before : 1);
+    max_speed_restore(pawn);
 }
 
 void sprint_stop(UObject* pawn)
 {
-    if (!s.follow_sprint) return;
+    fc.sprint = false;
+    fc.sprint_low_since = -1;
+    if (!s.follow_sprint) { max_speed_restore(pawn); return; }
     s.follow_sprint = false;
     if (pawn) sprint_off(pawn);
 }
 
-// Plus suiveur (pilote, combat, chargement, fin) : sprint rendu au pion s'il est encore là.
+// Plus suiveur (pilote, combat, chargement, fin) : sprint et vitesse rendus au pion s'il est encore là.
 void sprint_release()
 {
-    if (!s.follow_sprint) return;
+    fc.moving = false;
+    fc.follow_since = -1;
+    if (!s.follow_sprint && !fc.max_written) return;
     sprint_stop(game::in_battle() ? nullptr : game::explore_pawn());
+}
+
+// Défaut de fluidité journalisé (au plus un par seconde ; les compteurs comptent tout).
+void follow_event(const char* what, double v, double rv, double own, double gap)
+{
+    if (s.now - fc.last_event_log < 1.0) return;
+    fc.last_event_log = s.now;
+    log().write("coop_follow_glitch", JsonObj().add("what", what).add("value", std::round(v)).add("pilot_speed", std::round(rv))
+                                         .add("own_speed", std::round(own)).add("gap", std::round(gap)).add("sprint", fc.sprint)
+                                         .add("starved", s.now - fc.last_arrival));
+}
+
+// Mesures de fluidité chez le suiveur (compteurs vérifiés par les scénarios ; D20) :
+//  - follow_gap_max_{walk,run,sprint} : écart max (u) au pilote (sa dernière position prolongée jusqu'à maintenant),
+//    allure du pilote stable (vitesse rendue et actuelle dans la même classe : marche 40-260, course 260-500, sprint
+//    > 500) ; follow_gap_rest_max : écart au pilote arrêté depuis 2 s ;
+//  - follow_stalls : pion presque arrêté (< 30 % de la vitesse du pilote) >= 150 ms alors que le pilote bouge (> 150
+//    u/s depuis 0,5 s) ; follow_frozen_ms_max : plus longue immobilité du pion (< 20 u/s) pilote en mouvement (> 100) ;
+//  - follow_dips : vitesse du pion < 60 % de celle du pilote >= 150 ms pendant une course / un sprint continu (> 300
+//    u/s depuis 1 s) ; follow_speed_drops : chute de vitesse du pion > 250 u/s en 0,1 s sans ralentissement du pilote ;
+//  - follow_parasitic_stops (follow_tick) : arrêt du pion alors que le pilote bouge et que ses positions arrivent.
+// Hors mesure : 2 s après un trou de données ou une téléportation, positions vieilles de plus de 0,5 s, 2 premières s.
+void follow_metrics(const Rendered& R, double rv, double own, double gap_now, double rest_gap, double pilot_now_speed)
+{
+    const bool excluded = s.now - fc.discontinuity_at < 2.0 || s.now - fc.teleport_at < 2.0 || s.now - fc.last_arrival > 0.5 ||
+                          fc.follow_since < 0 || s.now - fc.follow_since < 2.0 || R.stale;
+    fc.hist.push_back({s.now, own, rv});
+    while (!fc.hist.empty() && s.now - fc.hist.front()[0] > 0.3) fc.hist.pop_front();
+    if (rv > 150) { if (fc.rv_move_since < 0) fc.rv_move_since = s.now; } else fc.rv_move_since = -1;
+    if (rv > 300) { if (fc.rv_fast_since < 0) fc.rv_fast_since = s.now; } else fc.rv_fast_since = -1;
+    if (excluded) { fc.stall_since = fc.frozen_since = fc.dip_since = fc.rest_since = -1; return; }
+    // Écarts par allure du pilote
+    auto cls = [](double v) { return v < 5 ? 0 : v <= 40 ? -1 : v <= 260 ? 1 : v <= 500 ? 2 : 3; };
+    const int c1 = cls(rv), c2 = cls(pilot_now_speed);
+    if (c1 == c2 && c1 > 0) gauge_max(c1 == 1 ? "follow_gap_max_walk" : c1 == 2 ? "follow_gap_max_run" : "follow_gap_max_sprint", gap_now);
+    if (c1 == 0 && c2 == 0) { if (fc.rest_since < 0) fc.rest_since = s.now; else if (s.now - fc.rest_since >= 2.0) gauge_max("follow_gap_rest_max", rest_gap); }
+    else fc.rest_since = -1;
+    // Pion arrêté alors que le pilote bouge
+    if (fc.rv_move_since >= 0 && s.now - fc.rv_move_since >= 0.5 && own < 0.3 * rv) {
+        if (fc.stall_since < 0) { fc.stall_since = s.now; fc.stall_counted = false; }
+        const double ms = (s.now - fc.stall_since) * 1000.0;
+        gauge_max("follow_stall_ms_max", ms);
+        if (ms >= 150 && !fc.stall_counted) { fc.stall_counted = true; bump("follow_stalls"); follow_event("stall", ms, rv, own, gap_now); }
+    } else fc.stall_since = -1;
+    if (rv > 100 && own < 20) {
+        if (fc.frozen_since < 0) fc.frozen_since = s.now;
+        gauge_max("follow_frozen_ms_max", (s.now - fc.frozen_since) * 1000.0);
+    } else fc.frozen_since = -1;
+    // Creux de vitesse pendant une course / un sprint continu
+    if (fc.rv_fast_since >= 0 && s.now - fc.rv_fast_since >= 1.0 && own < 0.6 * rv) {
+        if (fc.dip_since < 0) { fc.dip_since = s.now; fc.dip_counted = false; }
+        if (s.now - fc.dip_since >= 0.15 && !fc.dip_counted) { fc.dip_counted = true; bump("follow_dips"); follow_event("dip", own / std::max(1.0, rv) * 100.0, rv, own, gap_now); }
+    } else fc.dip_since = -1;
+    // Chute brusque de la vitesse du pion (à-coup) sans ralentissement du pilote : comparée à il y a ~0,1 s.
+    for (const auto& h : fc.hist) {
+        if (s.now - h[0] > 0.13) continue;
+        if (s.now - h[0] < 0.09) break;
+        if (rv > 150 && h[1] - own > 250 && std::fabs(h[2] - rv) < 60 && s.now - fc.last_drop_at > 0.3) {
+            fc.last_drop_at = s.now;
+            bump("follow_speed_drops");
+            follow_event("speed_drop", h[1] - own, rv, own, gap_now);
+        }
+        break;
+    }
+}
+
+void teleport_follower(UObject* pawn, const Rendered& R, const char* why, double err, double dz, double rv, double own_speed)
+{
+    game::teleport_pawn(pawn, R.pos, R.yaw);
+    bump("follower_teleports");
+    if (std::string(why) != "gap") bump("follower_teleports_nogap");
+    ++fstats.teleports;
+    fc.teleport_at = s.now;
+    fc.far_since = fc.dz_since = fc.stuck_since = -1;
+    log().write("coop_follower_teleport", JsonObj().add("why", why).add("distance", err).add("dz", dz).add("pilot_speed", rv).add("own_speed", own_speed)
+                                             .add("gait", game::pawn_gait(pawn)).add("sprint", s.follow_sprint)
+                                             .add("age_ms", static_cast<int64_t>((s.now - s.last_pilot_at) * 1000.0)));
 }
 
 void follow_tick()
 {
     if (!s.last_pilot || s.last_pilot->pilot != s.pilot) { sprint_release(); return; }
     if (!s.host && s.want_join && s.cj != S::ClientJoin::Joined) return;
-    if (game::map_change_in_progress() || game::in_battle()) { s.follow_sprint = false; return; }
+    if (game::map_change_in_progress() || game::in_battle()) {
+        // MaxWalkSpeed éventuellement réglée : rendue au retour du pion (max_written gardé).
+        s.follow_sprint = false; fc.sprint = false; fc.moving = false; fc.follow_since = -1;
+        return;
+    }
     UObject* pawn = game::explore_pawn();
     if (!pawn) return;
     const auto& p = *s.last_pilot;
@@ -523,89 +783,127 @@ void follow_tick()
     }
     s.level_mismatch_since = -1;
     // Carte du monde : pilote sur Esquie (vol, nage) non reproductible ici -> pion tenu en fantôme sur le pilote (D19).
-    if (mount::follow(pawn, p, s.now - s.last_pilot_at, s.now, s.net.bump)) { s.follow_have_target = false; s.follow_moving = false; return; }
+    if (mount::follow(pawn, p, s.now - s.last_pilot_at, s.now, s.net.bump)) {
+        if (fc.sprint || fc.max_written || s.follow_sprint) sprint_stop(pawn);
+        fc.moving = false;
+        fc.follow_since = -1;
+        return;
+    }
+    if (fc.buf.empty()) return;
     game::PawnState me;
     if (!game::pawn_state(pawn, me)) return;
     const double own_speed = std::hypot(me.vel[0], me.vel[1]);
     s.local_speed = own_speed;
     s.local_speed_at = s.now;
-    const double real_age = std::max(0.0, s.now - s.last_pilot_at);
-    const double age = std::min(0.25, real_age);
-    const double raw[3] = {p.x + p.vx * age, p.y + p.vy * age, p.z + p.vz * age};
-    // Cible lissée (~0,12 s) : les positions reçues par Steam arrivent par à-coups ; un saut net (> 3 m) est pris tel quel.
-    const double dt = s.follow_last_t < 0 ? 0.0 : std::clamp(s.now - s.follow_last_t, 0.0, 0.25);
-    s.follow_last_t = s.now;
-    const double jump = std::hypot(raw[0] - s.follow_target[0], raw[1] - s.follow_target[1]);
-    if (!s.follow_have_target || jump > 300) { for (int i = 0; i < 3; ++i) s.follow_target[i] = raw[i]; s.follow_have_target = true; }
-    else { const double k = 1.0 - std::exp(-dt / 0.12); for (int i = 0; i < 3; ++i) s.follow_target[i] += (raw[i] - s.follow_target[i]) * k; }
-    const double tx = s.follow_target[0], ty = s.follow_target[1], tz = s.follow_target[2];
-    const double dx = tx - me.pos[0], dy = ty - me.pos[1], dz = tz - me.pos[2];
-    const double d = std::sqrt(dx * dx + dy * dy);
-    s.follow_error = std::sqrt(d * d + dz * dz);
-    const double sp = std::hypot(p.vx, p.vy);
+    if (fc.follow_since < 0) fc.follow_since = s.now;
+    // Vitesses ALS du pion (relues toutes les 2 s)
+    if (s.now - fc.speeds_at > 2.0) {
+        fc.speeds_at = s.now;
+        fc.speeds_ok = game::pawn_gait_speeds(pawn, fc.speeds);
+        if (!fc.speeds_logged) {
+            fc.speeds_logged = true;
+            const float* mws = game::pawn_max_walk_speed(pawn);
+            log().write("coop_follow_als", JsonObj().add("ok", fc.speeds_ok).add("walk", fc.speeds.walk).add("run", fc.speeds.run)
+                                              .add("sprint", fc.speeds.sprint).add("max_walk", mws ? static_cast<double>(*mws) : -1.0)
+                                              .add("gait", game::pawn_gait(pawn)).add("desired", game::pawn_gait(pawn, true))
+                                              .add("clock", fc.clock));
+        }
+    }
+    const double run_speed = fc.speeds_ok ? fc.speeds.run : 350.0, sprint_speed = fc.speeds_ok ? fc.speeds.sprint : 720.0;
+    // Pilote rendu (tampon d'interpolation)
+    Rendered R;
+    if (!follow_render(s.now - fc.off - (fc.clock ? kRenderDelay : kRenderDelayNoClock), R)) return;
+    const PilotSample& last = fc.buf.back();
+    const double ex_now = std::clamp(s.now - fc.off - last.t, 0.0, 0.25);
+    const double pilot_now_speed = std::hypot(last.vel[0], last.vel[1]);
+    const double ex = R.pos[0] - me.pos[0], ey = R.pos[1] - me.pos[1], dz = R.pos[2] - me.pos[2];
+    const double err = std::hypot(ex, ey);
+    const double gap_now = std::hypot(last.pos[0] + last.vel[0] * ex_now - me.pos[0], last.pos[1] + last.vel[1] * ex_now - me.pos[1]);
+    const double rest_gap = std::hypot(last.pos[0] - me.pos[0], last.pos[1] - me.pos[1]);
+    s.follow_error = gap_now;
+    const double rv = std::hypot(R.vel[0], R.vel[1]);
     // Statistiques (résumé toutes les 15 s)
     auto& f = fstats;
     if (f.since < 0) f.since = s.now;
     const double fdt = f.last_t < 0 ? 0.0 : std::clamp(s.now - f.last_t, 0.0, 0.25);
     f.last_t = s.now;
     ++f.ticks;
-    f.err_sum += s.follow_error;
-    f.err_max = std::max(f.err_max, s.follow_error);
-    f.age_max = std::max(f.age_max, real_age);
-    f.pilot_speed_max = std::max(f.pilot_speed_max, sp);
-    if (s.follow_moving) { f.own_speed_sum += own_speed; ++f.own_speed_n; }
+    f.err_sum += gap_now;
+    f.err_max = std::max(f.err_max, gap_now);
+    f.age_max = std::max(f.age_max, s.now - s.last_pilot_at);
+    f.pilot_speed_max = std::max(f.pilot_speed_max, pilot_now_speed);
+    if (fc.moving) { f.own_speed_sum += own_speed; ++f.own_speed_n; }
     f.own_speed_max = std::max(f.own_speed_max, own_speed);
-    if (d > kTeleportDistance || std::fabs(dz) > 400) {
-        const double pos[3] = {tx, ty, tz};
-        game::teleport_pawn(pawn, pos, p.yaw);
-        bump("follower_teleports");
-        ++f.teleports;
-        log().write("coop_follower_teleport", JsonObj().add("distance", d).add("dz", dz).add("pilot_speed", sp).add("own_speed", own_speed)
-                                                 .add("gait", game::pawn_gait(pawn)).add("sprint", s.follow_sprint).add("age_ms", static_cast<int64_t>(real_age * 1000.0)));
-        return;
+    if (R.starved) f.starved_s += fdt;
+    // Téléportation
+    const char* tp = nullptr;
+    const bool after_gap = s.now - fc.discontinuity_at < 3.0;
+    if (err > kTeleportDistance && after_gap) tp = "gap";
+    else if (err > 2 * kTeleportDistance) tp = "far";
+    else if (err > kTeleportDistance) {
+        if (fc.far_since < 0) { fc.far_since = s.now; fc.far_err0 = err; }
+        else if (s.now - fc.far_since > 1.0) { if (err > fc.far_err0 - 50) tp = "far"; else { fc.far_since = s.now; fc.far_err0 = err; } }
+    } else fc.far_since = -1;
+    if (!tp) {
+        if (std::fabs(dz) > 400) { if (fc.dz_since < 0) fc.dz_since = s.now; else if (s.now - fc.dz_since > 0.5) tp = after_gap ? "gap" : "dz"; }
+        else fc.dz_since = -1;
     }
-    // Arrêt seulement quand le pilote s'arrête vraiment et qu'on est arrivé ; reprise dès qu'il bouge ou s'éloigne
-    // (avant : un seul seuil à 60 u, donc arrêt-redémarrage plusieurs fois par seconde quand il court).
-    if (!s.follow_moving && (d > 120 || sp > 80)) { s.follow_moving = true; bump("follow_starts"); ++f.starts; }
-    else if (s.follow_moving && d < 40 && sp < 30) { s.follow_moving = false; ++f.stops; }
-    // Allure : sprint quand le pilote sprinte (course ~350 u/s, sprint ~720 u/s mesurés le 2026-10-22) ou pour
-    // rattraper un retard pendant qu'il court ; rendu quand il ralentit et qu'on l'a rattrapé.
-    const bool want_sprint = s.follow_moving && (sp > 450 || (sp > 200 && d > 300));
-    const bool drop_sprint = !s.follow_moving || (sp < 400 && d < 150);
-    if (want_sprint && !s.follow_sprint) sprint_start(pawn);
-    else if (s.follow_sprint && drop_sprint) sprint_stop(pawn);
-    if (s.follow_sprint) {
-        f.sprint_s += fdt;
-        if (own_speed > 500) f.sprint_gait_ok_s += fdt;
-    }
-    if (s.sprint_touched && s.now >= s.next_gait_check) {
-        s.next_gait_check = s.now + 0.5;
-        const int gait = game::pawn_gait(pawn);
-        if (s.follow_sprint && gait >= 0 && gait != 2 && s.sprint_method == 1 && s.now - s.sprint_since > 0.6 && own_speed < 450) {
-            // SprintAction sans effet (pion sans entrée du joueur ?) : allure voulue imposée.
-            if (game::set_pawn_desired_gait(pawn, 2)) s.sprint_method = 2;
-            ++f.sprint_fallbacks;
-            bump("follow_sprint_fallbacks");
-            if (!s.sprint_needs_gait)   // une fois : les sprints suivants passent directement par SetDesiredGait
-                log().write("coop_follow_sprint_fallback", JsonObj().add("gait", gait).add("own_speed", own_speed).add("ok", s.sprint_method == 2));
-            s.sprint_needs_gait = true;
-        } else if (!s.follow_sprint && gait == 2) {
-            sprint_off(pawn);   // sprint resté après un combat ou un chargement
+    if (tp) { teleport_follower(pawn, R, tp, err, dz, rv, own_speed); return; }
+    // Vitesse voulue : celle du pilote rendu + rattrapage de l'écart, plafonnée.
+    double vx = R.vel[0] + kFollowGain * ex, vy = R.vel[1] + kFollowGain * ey;
+    double vc = std::hypot(vx, vy);
+    const double vmax = sprint_speed * kCatchUpMax;
+    if (vc > vmax) { vx *= vmax / vc; vy *= vmax / vc; vc = vmax; }
+    // Départ / arrêt (hystérésis) : arrêt seulement pilote arrêté et pion arrivé.
+    if (!fc.moving && (rv > 30 || err > 70)) { fc.moving = true; bump("follow_starts"); ++f.starts; }
+    else if (fc.moving && rv < 10 && err < 25) {
+        fc.moving = false;
+        ++f.stops;
+        if (s.now - fc.last_arrival < 0.3 && pilot_now_speed > 40 && s.now - fc.follow_since >= 2.0) {
+            bump("follow_parasitic_stops");
+            follow_event("parasitic_stop", pilot_now_speed, rv, own_speed, gap_now);
         }
     }
-    if (!s.follow_moving || d < 1) return;
-    // Direction : vers la cible, mêlée à la direction du pilote quand on est tout près (pas de demi-tours sur place).
-    double ux = dx / d, uy = dy / d;
-    if (sp > 30) {
-        const double w = std::clamp(1.0 - d / 150.0, 0.0, 1.0);
-        ux = ux * (1 - w) + (p.vx / sp) * w;
-        uy = uy * (1 - w) + (p.vy / sp) * w;
-        const double n = std::hypot(ux, uy);
-        if (n > 1e-3) { ux /= n; uy /= n; }
+    follow_metrics(R, rv, own_speed, gap_now, rest_gap, pilot_now_speed);
+    // Pion bloqué (obstacle) : vitesse voulue nette mais immobile 2 s -> téléportation.
+    if (fc.moving && vc > 200 && own_speed < 40 && err > 150) {
+        if (fc.stuck_since < 0) fc.stuck_since = s.now;
+        else if (s.now - fc.stuck_since > 2.0) { teleport_follower(pawn, R, "stuck", err, dz, rv, own_speed); return; }
+    } else fc.stuck_since = -1;
+    // Allure : sprint au-delà de la course (hystérésis 0,92-1,08 x course ; 0,3 s sous le seuil pour en sortir).
+    if (fc.moving && vc > run_speed * 1.08) { fc.sprint_low_since = -1; if (!fc.sprint) { fc.sprint = true; sprint_start(pawn); } }
+    else if (fc.sprint && !fc.moving) sprint_stop(pawn);
+    else if (fc.sprint && vc < run_speed * 0.92) {
+        if (fc.sprint_low_since < 0) fc.sprint_low_since = s.now;
+        else if (s.now - fc.sprint_low_since > 0.3) sprint_stop(pawn);
+    } else fc.sprint_low_since = -1;
+    if (fc.sprint) {
+        f.sprint_s += fdt;
+        if (own_speed > run_speed + 50) f.sprint_gait_ok_s += fdt;
+        if (s.now >= fc.next_gait_assert) {   // le jeu peut remettre l'allure (fin de dialogue, zone…)
+            fc.next_gait_assert = s.now + 0.5;
+            if (game::pawn_gait(pawn, true) != 2) game::set_pawn_desired_gait(pawn, 2);
+        }
+    } else if (s.sprint_touched && s.now >= fc.next_gait_assert) {
+        fc.next_gait_assert = s.now + 0.5;
+        if (game::pawn_gait(pawn, true) == 2) sprint_off(pawn);   // sprint resté après un combat ou un chargement
     }
-    // Vitesse : celle du pilote (course comprise) plus un rattrapage proportionnel à l'écart.
-    const double scale = std::clamp(sp / 500.0 + d / 300.0, 0.25, 1.0);
-    game::move_pawn(pawn, ux, uy, scale);
+    float* mws = game::pawn_max_walk_speed(pawn);
+    if (!fc.sprint && fc.max_written) max_speed_restore(pawn);
+    if (!fc.moving || vc < 1) return;
+    double scale;
+    if (fc.sprint) {
+        // Entrée pleine (l'ALS n'accorde le sprint qu'au-delà de 0,9) ; la vitesse est réglée par MaxWalkSpeed.
+        scale = 1.0;
+        if (mws) {
+            if (!fc.max_written) { fc.base_max = *mws; fc.max_written = true; }
+            *mws = static_cast<float>(std::clamp(vc, run_speed + 15.0, vmax));
+        }
+    } else {
+        const double cap = mws && *mws > 10.0f ? static_cast<double>(*mws) : run_speed;
+        scale = std::clamp(vc / cap, 0.0, 1.0);
+    }
+    game::move_pawn(pawn, vx / vc, vy / vc, scale);
 }
 
 void set_pilot(uint8_t p, const char* why)
@@ -1147,16 +1445,42 @@ void world_hash_tick()
     if (s.world_mismatch_streak >= 2) {
         s.world_mismatch_streak = 0;
         bump("world_resyncs");
-        ui::set_status("session", "resyncing");
         // Diagnostic : toutes les feuilles locales des parties en écart (l'hôte journalise les siennes à la réception de
         // la demande, coop_world_leaves) : comparer les deux journaux hors ligne.
         for (const std::string& part : parts)
             if (auto it = leaves.find(part); it != leaves.end()) log_world_leaves(part, it->second, host.seq);
         s.resync_parts = std::set<std::string>(parts.begin(), parts.end());
-        s.resync_at = s.now;
-        s.net.publish(proto::ResyncRequest{"world state differs: " + differ}, true);
-        log().write("coop_world_resync", JsonObj().add("parts", differ));
+        // Rechargement (5-6 s d'écran figé) jamais en plein mouvement : attendu jusqu'à l'arrêt (world_resync_tick).
+        if (s.now - s.last_motion_at < 1.5) {
+            if (s.resync_deferred.empty()) {
+                s.resync_deferred_since = s.now;
+                bump("resyncs_deferred_moving");
+                log().write("coop_world_resync_deferred", JsonObj().add("parts", differ));
+            }
+            s.resync_deferred = differ;
+            return;
+        }
+        send_world_resync(differ);
     }
+}
+
+void send_world_resync(const std::string& differ)
+{
+    s.resync_deferred.clear();
+    if (s.now - s.last_motion_at < 0.5) bump("resyncs_while_moving");
+    ui::set_status("session", "resyncing");
+    s.resync_at = s.now;
+    s.net.publish(proto::ResyncRequest{"world state differs: " + differ}, true);
+    log().write("coop_world_resync", JsonObj().add("parts", differ).add("deferred_s", s.resync_deferred_since >= 0 ? s.now - s.resync_deferred_since : 0.0));
+    s.resync_deferred_since = -1;
+}
+
+// Client : resynchro attendue -> envoyée après 1,5 s sans mouvement (pilote et pion), ou au bout de 120 s.
+void world_resync_tick()
+{
+    if (s.host || s.resync_deferred.empty()) return;
+    if (s.cj != S::ClientJoin::Joined && s.want_join) { s.resync_deferred.clear(); s.resync_deferred_since = -1; return; }
+    if (s.now - s.last_motion_at >= 1.5 || s.now - s.resync_deferred_since > 120.0) send_world_resync(s.resync_deferred);
 }
 
 // Test de resynchro (-e33perturbworld=N) : une fois entré, le client fausse son or de N (l'écart doit être détecté,
@@ -1191,7 +1515,9 @@ void init(bool host, bool want_join, const Net& net)
                           "interactions_published", "interactions_replayed", "interactions_missing", "choices_published", "choices_replayed",
                           "map_changes_published", "map_changes_followed", "narratives_started", "narratives_finished", "barrier_waits",
                           "barrier_timeouts", "barrier_releases", "snapshot_errors", "snapshot_hash_errors", "snapshot_chunk_errors", "join_errors",
-                          "interaction_errors", "choice_errors", "choice_timeouts", "map_change_errors", "local_actions_on_follower"})
+                          "interaction_errors", "choice_errors", "choice_timeouts", "map_change_errors", "local_actions_on_follower",
+                          "follower_teleports_nogap", "follow_stalls", "follow_dips", "follow_speed_drops", "follow_parasitic_stops",
+                          "resyncs_while_moving", "resyncs_deferred_moving", "explore_hitches_moving", "explore_hitches_mod"})
         bump(c, 0);
 }
 
@@ -1204,6 +1530,7 @@ void reset()
     fresh.choice_pending = s.choice_pending;
     s = std::move(fresh);
     fstats = FollowStats{};
+    fc = FollowCtl{};
 }
 
 void set_player_id(uint8_t id) { s.me = id; }
@@ -1332,6 +1659,7 @@ bool handle(uint8_t from, const proto::Message& m)
         if (p->pilot == s.me) return true;
         follow_stats_rx(*p);
         if (!s.last_pilot || p->seq > s.last_pilot->seq || p->pilot != s.last_pilot->pilot) { s.last_pilot = *p; s.last_pilot_at = s.now; }
+        follow_push(*p);
         return true;
     }
     if (auto* pr = std::get_if<proto::PilotRequest>(&m)) {
@@ -1394,9 +1722,15 @@ void tick(double now)
     else { prof::Scope p("follow"); follow_tick(); }
     mount::tick(s.now);   // pion fantôme rendu si le suivi s'est arrêté
     follow_stats_flush(false);
+    {   // Mouvement en cours (pilote vu d'ici, ou pion local) : pas de rechargement d'instantané (world_resync_tick).
+        const bool pilot_moving = !fc.buf.empty() && s.now - fc.last_arrival < 0.5 && std::hypot(fc.buf.back().vel[0], fc.buf.back().vel[1]) > 50;
+        const bool local_moving_now = s.local_speed_at >= 0 && s.now - s.local_speed_at < 0.5 && s.local_speed > 50;
+        if (pilot_moving || local_moving_now) s.last_motion_at = s.now;
+    }
     replay_tick();
     { prof::Scope p("explore_poll"); poll_tick(); }
     world_hash_tick();
+    world_resync_tick();
     if (!s.host) perturb_world_tick();
 }
 
@@ -1525,6 +1859,7 @@ bool sequence_playing() { return s.sequence_playing; }
 double last_event_age() { return s.now - s.last_event_at; }
 bool remote_paused() { return s.remote_paused_game; }
 double follow_error() { return s.follow_error; }
+bool motion_recent() { return s.active && !s.ended && s.now - s.last_motion_at < 0.5; }
 bool local_moving() { return s.active && !s.ended && s.local_speed_at >= 0 && s.now - s.local_speed_at < 1.0 && s.local_speed > 150; }
 bool calm(double secs) { return s.active && !s.ended && quiet(secs); }
 std::string take_world_enemy()

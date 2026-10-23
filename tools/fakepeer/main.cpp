@@ -15,6 +15,7 @@
 //   fakepeer slice --in rec.jsonl --out tranche.jsonl --xfer N [--to T] [--snapshot snapshot-N.sav]
 //     Tranche d'un enregistrement réel : session ouverte (Hello, Welcome, Roster), instantané n° N (SaveOffer) et
 //     tout ce qui suit jusqu'au temps T (temps de l'enregistrement). Noms des joueurs anonymisés ("Host", "Client").
+//     --no-resync 1 : resynchros du client retirées (session continue). --pilot-clock 0 (hôte) : PilotState sans t_ms.
 //
 // Code de sortie : 0 = scénario déroulé sans erreur ni désync ; 1 = échec ; 2 = usage.
 
@@ -92,6 +93,8 @@ struct Args {
     std::string in, out;       // slice : enregistrement source, tranche écrite
     int xfer = 0;              // slice : n° de l'instantané de départ
     double to = 1e18;          // slice : fin de la tranche (temps de l'enregistrement)
+    bool no_resync = false;    // slice : retire les resynchros du client (ResyncRequest, SaveOffer suivant, JoinReady, PilotChange)
+    bool pilot_clock = true;   // hôte --paced : horloge du pilote (PilotState.t_ms) = temps de l'enregistrement
     int port = 7777;
     double timeout = 900;
 };
@@ -866,8 +869,12 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     if (a.paced && now_s() - pace_now < l.t - pace_rec) break;
                     if (auto* sh = std::get_if<proto::StateHash>(&l.msg)) host_hash[key(sh->battle_id, sh->turn)] = sh->hash;
                     if (auto* ps = std::get_if<proto::PilotState>(&l.msg)) {
-                        // Comme le vrai mod : positions non fiables (une perte n'est pas renvoyée).
-                        link->send(l.msg, false);
+                        // Comme le vrai mod : positions non fiables (une perte n'est pas renvoyée). Horloge du pilote
+                        // (t_ms) = temps de l'enregistrement, comme le vrai pilote qui la note à l'envoi.
+                        proto::PilotState out = *ps;
+                        if (a.paced && a.pilot_clock) out.t_ms = 1000 + static_cast<uint32_t>(l.t * 1000.0);
+                        else if (!a.pilot_clock) out.t_ms = 0;
+                        link->send(out, false);
                         up_a.reset();
                         up_b.reset();
                         if (a.pilot_rate > 0 && a.paced) {
@@ -973,6 +980,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     const uint32_t seq = up_a->seq + 1 + static_cast<uint32_t>(f * (up_b->seq - up_a->seq - 1));
                     if (seq > up_last_seq && seq < up_b->seq) {
                         st.seq = seq;
+                        st.t_ms = a.pilot_clock ? 1000 + static_cast<uint32_t>(rec_now * 1000.0) : 0;
                         up_last_seq = seq;
                         link->send(st, false);
                         ++interpolated;
@@ -1046,7 +1054,21 @@ int run_slice(const Args& a)
         else if (welcome && !roster && std::holds_alternative<proto::Roster>(l.msg)) { out.push_back({l.dir, anon(l.msg), 0.0}); roster = true; }
     }
     std::map<std::string, int> counts;
+    // --no-resync 1 : resynchros du client retirées (ResyncRequest, instantané suivant, JoinReady et PilotChange qui
+    // le suivent) : le rejeu reste une seule session continue. Pendant le rechargement réel, l'hôte n'envoyait pas de
+    // positions : le trou reste (le pilote « saute » à la reprise).
+    uint32_t dropped_xfer = 0;
     for (size_t i = start; i < lines.size() && lines[i].t <= a.to; ++i) {
+        if (a.no_resync && i > start) {
+            const auto& m = lines[i].msg;
+            bool drop = false;
+            if (std::holds_alternative<proto::ResyncRequest>(m) && lines[i].dir == "c2h") drop = true;
+            else if (auto* so = std::get_if<proto::SaveOffer>(&m)) { dropped_xfer = so->xfer; drop = true; }
+            else if (auto* jr = std::get_if<proto::JoinReady>(&m); jr && dropped_xfer && jr->xfer == dropped_xfer) drop = true;
+            else if (std::holds_alternative<proto::PilotChange>(m) && i > 0 && std::holds_alternative<proto::JoinReady>(lines[i - 1].msg) &&
+                     dropped_xfer && std::get<proto::JoinReady>(lines[i - 1].msg).xfer == dropped_xfer) drop = true;
+            if (drop) { ++counts["dropped " + std::string(proto::type_name(proto::type_of(m)))]; continue; }
+        }
         out.push_back({lines[i].dir, anon(lines[i].msg), lines[i].t - t0});
         ++counts[std::string(lines[i].dir) + " " + proto::type_name(proto::type_of(lines[i].msg))];
     }
@@ -1094,6 +1116,8 @@ int main(int argc, char** argv)
         else if (k == "--out") a.out = v;
         else if (k == "--xfer") a.xfer = std::atoi(v.c_str());
         else if (k == "--to") a.to = std::atof(v.c_str());
+        else if (k == "--no-resync") a.no_resync = v == "1";
+        else if (k == "--pilot-clock") a.pilot_clock = v == "1";
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
     if (a.mode == "slice") return a.in.empty() || a.out.empty() || !a.xfer ? 2 : run_slice(a);

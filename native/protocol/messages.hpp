@@ -252,6 +252,9 @@ struct PilotState {
     uint8_t custom = 0;                   // CustomMovementMode
     uint8_t flags = 0;                    // kPilotMount | kPilotWorldMap | kPilotAttached
     std::string pawn;                     // classe du pion possédé (nom court)
+    // Champ final facultatif (2026-10-23, suivi fluide) : horloge du pilote à l'envoi (ms, 0 = absent). Le suiveur place
+    // chaque position à son instant réel (tampon d'interpolation), sans la gigue de réception.
+    uint32_t t_ms = 0;
 };
 constexpr uint8_t kMoveUnknown = 0xFF;
 constexpr uint8_t kPilotMount = 1;        // GI.IsMountInUse : sur Esquie

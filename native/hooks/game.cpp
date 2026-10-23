@@ -771,6 +771,23 @@ bool set_pawn_desired_gait(UObject* pawn, int gait)
     return c.invoke();
 }
 
+bool pawn_gait_speeds(UObject* pawn, GaitSpeeds& out)
+{
+    // UALSCharacterMovementComponent::CurrentMovementSettings (FALSMovementSettings : WalkSpeed, RunSpeed, SprintSpeed
+    // en tête, dump ALSV4_CPP).
+    UObject* cmc = pawn ? ue::get_object(pawn, STR("CharacterMovement")) : nullptr;
+    const auto* st = ue::value_ptr<float>(cmc, STR("CurrentMovementSettings"));
+    if (!st) return false;
+    out.walk = st[0]; out.run = st[1]; out.sprint = st[2];
+    return out.run > 0 && out.sprint >= out.run && out.sprint < 5000;
+}
+
+float* pawn_max_walk_speed(UObject* pawn)
+{
+    UObject* cmc = pawn ? ue::get_object(pawn, STR("CharacterMovement")) : nullptr;
+    return ue::value_ptr<float>(cmc, STR("MaxWalkSpeed"));
+}
+
 bool move_info(UObject* pawn, MoveInfo& out)
 {
     if (!pawn) return false;
