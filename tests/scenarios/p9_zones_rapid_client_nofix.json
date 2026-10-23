@@ -1,0 +1,18 @@
+{
+  "name": "p9_zones_rapid_client_nofix",
+  "description": "Mesure « avant » (corrections coupées par -e33zonefix=0), pas dans la batterie. Changements de zone enchaînés (2026-10-23) : tranche zones_rapid = zones_tour où le pilote repart de la carte du monde 1 s après son MapChange (hôte plus rapide que le client) : le second MapChange arrive pendant le chargement du client. Il doit être gardé et appliqué à l arrivée (un seul chargement de plus, pas de ChangeMap en plein chargement, pas de resynchro de niveau), puis les transitions suivantes sont suivies normalement.",
+  "join": true,
+  "timeout_s": 900,
+  "shots_every_s": 5,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "until": "map_transitions", "is": ">=7", "timeout": 400 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33zonefix=0"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/zones_rapid.jsonl", "--snapshot", "{repo}/.tools/testsaves/p9_zones_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "900"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "snapshot_hash_errors": "0", "join_errors": "0", "world_resyncs": "0", "level_resyncs": "0",
+              "map_transitions": ">=7", "map_transitions_unfinished": "<=1", "map_loads_extra": "0", "map_loads_missing": "0", "map_change_errors": "0",
+              "map_follow_delay_ms_max": "any", "map_after_pilot_ms_max": "any", "map_arrival_err_max": "any", "map_catchup_ms_max": "any",
+              "map_arrival_teleports": "any", "map_arrival_paused_ms_max": "any", "map_arrival_mod_slow": "any", "map_arrival_no_follow": "any" }
+}

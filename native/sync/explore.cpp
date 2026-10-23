@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <deque>
 #include <filesystem>
@@ -710,6 +711,8 @@ struct MapTrans {
     double paused_s = 0, mod_max_ms = 0;
 };
 MapTrans mt;
+// Horloge murale (s) : un chargement bloque le thread de jeu, les mesures de transition se font en temps réel.
+double wnow() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 bool load_in = false;                 // chargement de niveau en cours ici (IsMapChangeInProgress)
 double load_rise_at = -1;
 std::string load_dest;
@@ -722,7 +725,7 @@ struct MapMax { int delay = 0, late = 0, load = 0, err = 0, catchup = 0, paused 
 constexpr double kMapWindow = 12.0;   // fenêtre d'observation après l'arrivée (et celle du pilote)
 
 double mt_window_start() { return std::max(mt.arrived_at, mt.pilot_at); }
-bool mt_in_window() { return mt.open && mt.arrived_at >= 0 && s.now - mt.arrived_at < 30.0; }
+bool mt_in_window() { return mt.open && mt.arrived_at >= 0 && wnow() - mt.arrived_at < 30.0; }
 
 void mt_close(const char* why)
 {
@@ -731,7 +734,7 @@ void mt_close(const char* why)
     const bool done = mt.arrived_at >= 0;
     auto ms = [](double a, double b) { return a >= 0 && b >= 0 ? static_cast<int64_t>((a - b) * 1000.0) : -1; };
     const int64_t delay = ms(mt.load_at, mt.rx_at), load = ms(mt.arrived_at, mt.load_at), late = ms(mt.arrived_at, mt.pilot_at);
-    const int64_t catchup = mt.caught_at >= 0 ? ms(mt.caught_at, mt.follow_at) : (mt.follow_at >= 0 ? ms(s.now, mt.follow_at) : -1);
+    const int64_t catchup = mt.caught_at >= 0 ? ms(mt.caught_at, mt.follow_at) : (mt.follow_at >= 0 ? ms(wnow(), mt.follow_at) : -1);
     log().write("coop_map_transition", JsonObj().add("level", mt.level).add("spawn", mt.spawn).add("how", mt.how).add("why", why).add("arrived", done)
         .add("loads", mt.loads).add("expect_loads", mt.expect_loads).add("delay_ms", delay).add("load_ms", load)
         .add("pilot_ready_ms", ms(mt.pilot_at, mt.rx_at)).add("after_pilot_ms", late)
@@ -763,15 +766,15 @@ void map_tick()
     const bool in = game::map_change_in_progress();
     if (in && !load_in) {
         load_in = true;
-        load_rise_at = s.now;
+        load_rise_at = wnow();
         std::string tag;
         if (!game::map_destination(load_dest, tag)) load_dest.clear();
         bump("map_loads_local");
         log().write("coop_map_load_start", JsonObj().add("level", load_dest).add("spawn", tag).add("pilot", is_pilot()).add("from", game::current_level()));
-        if (mt.open) { ++mt.loads; if (mt.load_at < 0) mt.load_at = s.now; }   // après l'arrivée : chargement de trop
+        if (mt.open) { ++mt.loads; if (mt.load_at < 0) mt.load_at = wnow(); }   // après l'arrivée : chargement de trop
     } else if (!in && load_in) {
         load_in = false;
-        log().write("coop_map_load_end", JsonObj().add("level", load_dest).add("load_s", s.now - load_rise_at).add("pilot", is_pilot()));
+        log().write("coop_map_load_end", JsonObj().add("level", load_dest).add("load_s", wnow() - load_rise_at).add("pilot", is_pilot()));
     }
     // Suiveur : boîtes de passage du niveau coupées. Son pion, conduit derrière le pilote, ne change de niveau que sur
     // MapChange (sinon : passage par une autre sortie que le pilote, ou second déclenchement de la même pendant le
@@ -795,10 +798,10 @@ void map_tick()
     if (!mt.open) return;
     if (mt.arrived_at < 0) {
         if (!in && (mt.loads > 0 || mt.expect_loads == 0) && world_ready() && game::current_level() == mt.level) {
-            mt.arrived_at = s.now;
-            log().write("coop_map_arrived", JsonObj().add("level", mt.level).add("after_rx_s", s.now - mt.rx_at)
+            mt.arrived_at = wnow();
+            log().write("coop_map_arrived", JsonObj().add("level", mt.level).add("after_rx_s", wnow() - mt.rx_at)
                                                 .add("pilot_here", mt.pilot_at >= 0).add("loads", mt.loads));
-        } else if (s.now - mt.rx_at > 180.0) mt_close("never_arrived");
+        } else if (wnow() - mt.rx_at > 180.0) mt_close("never_arrived");
         return;
     }
     // Fenêtre d'observation : pause, images lentes (mod > 20 ms, image > 80 ms hors chargement).
@@ -807,8 +810,8 @@ void map_tick()
     mt.mod_max_ms = std::max(mt.mod_max_ms, mod_ms);
     if (mod_ms > 20.0) ++mt.mod_slow;
     if (dt > 0.08 && dt < 3.0 && !in) ++mt.slow;
-    if (mt.pilot_at >= 0 && s.now - mt_window_start() > kMapWindow) mt_close("done");
-    else if (s.now - mt.arrived_at > 60.0) mt_close("pilot_absent");
+    if (mt.pilot_at >= 0 && wnow() - mt_window_start() > kMapWindow) mt_close("done");
+    else if (wnow() - mt.arrived_at > 60.0) mt_close("pilot_absent");
 }
 
 // Suiveur : chaque image de suivi après l'arrivée (écart au pilote, téléportation, arrêt / reprise).
@@ -816,12 +819,12 @@ void mt_follow(double err, bool teleported, int started, int stopped)
 {
     if (!mt_in_window() || mt.pilot_at < 0) return;
     if (mt.follow_at < 0) {
-        mt.follow_at = s.now;
+        mt.follow_at = wnow();
         mt.err0 = err;
         log().write("coop_map_follow_resumed", JsonObj().add("level", mt.level).add("err", static_cast<int64_t>(err))
-                                                   .add("after_arrival_s", s.now - mt.arrived_at).add("after_pilot_s", s.now - mt.pilot_at));
+                                                   .add("after_arrival_s", wnow() - mt.arrived_at).add("after_pilot_s", wnow() - mt.pilot_at));
     }
-    if (mt.caught_at < 0 && err < 250) mt.caught_at = s.now;
+    if (mt.caught_at < 0 && err < 250) mt.caught_at = wnow();
     mt.teleports += teleported ? 1 : 0;
     mt.starts += started;
     mt.stops += stopped;
@@ -849,7 +852,7 @@ void apply_map_change(const proto::MapChange& mc)
     s.replaying = false;
     bump(ok ? "map_changes_followed" : "map_change_errors");
     log().write("coop_map_change_followed", JsonObj().add("level", mc.level).add("spawn", mc.spawn_tag).add("ok", ok).add("how", mt.how)
-                                                .add("after_rx_s", s.now - mt.rx_at));
+                                                .add("after_rx_s", wnow() - mt.rx_at));
 }
 
 // Suiveur : MapChange appliqué tout de suite si possible ; sinon gardé (le dernier seulement) et appliqué dès que le
@@ -871,7 +874,7 @@ void on_map_change(const proto::MapChange& mc)
     mt.open = true;
     mt.level = mc.level;
     mt.spawn = mc.spawn_tag;
-    mt.rx_at = s.now;
+    mt.rx_at = wnow();
     std::string dest, tag;
     const bool loading = game::map_change_in_progress();
     if (loading && game::map_destination(dest, tag) && dest == mc.level) {
@@ -1779,7 +1782,7 @@ bool handle(uint8_t from, const proto::Message& m)
             else { bump("pilot_states_old_level"); return true; }
         }
         if (!s.last_pilot || p->seq > s.last_pilot->seq || p->pilot != s.last_pilot->pilot) { s.last_pilot = *p; s.last_pilot_at = s.now; }
-        if (mt.open && mt.pilot_at < 0 && p->level == mt.level && p->pilot == s.pilot) mt.pilot_at = s.now;   // pilote arrivé
+        if (mt.open && mt.pilot_at < 0 && p->level == mt.level && p->pilot == s.pilot) mt.pilot_at = wnow();   // pilote arrivé
         return true;
     }
     if (auto* pr = std::get_if<proto::PilotRequest>(&m)) {
