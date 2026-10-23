@@ -71,7 +71,8 @@ std::string hex64(uint64_t h)
 // InGame : client accepté sans « rejoindre » (tests de combat) : il participe d'emblée, sans instantané.
 enum class JoinState { None, Pending, Waiting, Sent, Joined, InGame };
 
-struct PeerJoin { JoinState state = JoinState::None; double since = 0; bool wait_sent = false; };
+// resync : client entré qui a demandé un nouvel instantané ; il reste dans la partie (combats compris) jusqu'à l'envoi.
+struct PeerJoin { JoinState state = JoinState::None; double since = 0; bool wait_sent = false; bool resync = false; };
 
 struct Inbound {                                  // client : instantané en cours de réception
     uint32_t xfer = 0;
@@ -141,6 +142,7 @@ struct S {
     uint32_t narr_seq = 0;
     std::map<uint8_t, bool> remote_narr;
     std::map<uint8_t, double> remote_narr_since;  // début de la narration en cours de chaque autre joueur
+    std::map<uint8_t, double> remote_narr_end;    // fin de la dernière narration de chaque autre joueur
     double local_narr_end = -1;                   // fin de la dernière narration d'ici
     bool barrier_paused = false;
     double barrier_since = -1;
@@ -259,6 +261,12 @@ bool world_ready()
     return game::controller() && !game::map_change_in_progress() && game::explore_pawn() && !game::in_battle();
 }
 
+// Client : moment où demander une resynchro (ni dialogue, ni cinématique, ni combat).
+bool resync_calm()
+{
+    return !game::in_dialogue() && !game::playing_cinematic() && !game::in_battle();
+}
+
 bool safe_point()
 {
     return world_ready() && !game::in_dialogue() && !game::playing_cinematic() && !s.intro;
@@ -306,9 +314,18 @@ void host_join_tick()
 {
     for (auto& [player, pj] : s.peers) presence::set_joining(player, pj.state == JoinState::Sent, s.now);   // charge notre instantané
     for (auto& [player, pj] : s.peers) {
+        // Instantané jamais envoyé pendant la narration du client ni dans les 3 s qui suivent : le 2026-10-23 (essai à
+        // deux PC), deux chargements demandés dans la seconde de la fin d'un dialogue sont restés sur l'écran noir.
+        auto end = s.remote_narr_end.find(player);
+        const bool client_calm = !s.remote_narr[player] && (end == s.remote_narr_end.end() || s.now - end->second >= 3.0);
+        if (pj.state == JoinState::Joined && pj.resync) {
+            // Client entré qui veut une resynchro : il joue avec nous jusqu'à l'envoi (aucun combat joué seul chez lui).
+            if (safe_point() && client_calm) { pj.resync = false; send_snapshot(player); }
+            continue;
+        }
         if (pj.state != JoinState::Pending && pj.state != JoinState::Waiting) continue;
         // Client encore dans l'intro de sa nouvelle partie : on attend sa fin (l'instantané la couperait).
-        if (safe_point() && !s.remote_narr[player]) { send_snapshot(player); continue; }
+        if (safe_point() && client_calm) { send_snapshot(player); continue; }
         if (!pj.wait_sent) {
             const char* why = game::in_battle() ? "battle" : game::map_change_in_progress() ? "loading" : "narrative";
             s.net.send_to(player, proto::JoinWait{why});
@@ -1554,7 +1571,8 @@ bool sharing() { return s.host ? joined_players() > 0 : (!s.want_join || s.cj ==
 // compare au même point calme ; deux écarts de suite -> nouvel instantané au prochain point sûr (ResyncRequest).
 struct WorldPart { const char* name; const wchar_t* field; };
 constexpr WorldPart kWorldParts[] = {
-    {"gold", L"Gold"}, {"inventory", L"Inventory"}, {"interacted", L"InteractedObjects"}, {"battled", L"BattledEnemies"},
+    {"gold", L"Gold"}, {"inventory2", L"Inventory"},   // inventory2 : nouvelle empreinte (minuscules, sans tenues), 2026-10-23
+     {"interacted", L"InteractedObjects"}, {"battled", L"BattledEnemies"},
     {"flags", L"NamedIDsStates"}, {"gpe", L"GPE_States"}, {"cinematics", L"InteractedCinematics"}, {"dialogs", L"InteractedDialogs"},
 };
 
@@ -1562,13 +1580,23 @@ constexpr WorldPart kWorldParts[] = {
 // trié par nom. Avant : réflexion brute de GI.Inventory (~11 700 feuilles : ordre des piles, données statiques
 // recopiées, pointeurs d'objets) ; l'hôte en avait 11 741 et le client 11 342 juste après avoir chargé l'instantané de
 // l'hôte (2026-10-22) : écart permanent, donc nouvel instantané (rechargement de 5-6 s) toutes les 1 à 2 min.
+// Noms en minuscules : le jeu écrit parfois le même objet avec une casse différente selon le PC (« CritCHanceOnWeak »
+// / « CritChanceOnWeak »). Tenues et coiffures (Skin*, Face*) ignorées : elles viennent des éditions / DLC du compte,
+// pas de la partie (l'hôte en a, le client non : resynchros sans fin, essai à deux PC du 2026-10-23).
 reflect::Leaves inventory_leaves()
 {
     std::map<std::string, int64_t> eco;
     game::economy_sample(eco);
+    std::map<std::string, int64_t> low;
+    for (auto& [k, v] : eco) {
+        if (k == "gold" || v == 0) continue;
+        std::string n = k;
+        for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (n.rfind("item:skin", 0) == 0 || n.rfind("item:face", 0) == 0) continue;
+        low[n] += v;
+    }
     reflect::Leaves l;
-    for (auto& [k, v] : eco)
-        if (k != "gold" && v != 0) l.emplace_back(k, std::to_string(v));
+    for (auto& [k, v] : low) l.emplace_back(k, std::to_string(v));
     return l;
 }
 
@@ -1580,7 +1608,7 @@ std::vector<proto::HashPart> world_parts(std::map<std::string, reflect::Leaves>*
     prof::Scope prof_scope("world_parts");
     s.last_world_compute = s.now;
     for (const auto& p : kWorldParts) {
-        reflect::Leaves l = std::string_view(p.name) == "inventory" ? inventory_leaves() : reflect::field(gi, p.field);
+        reflect::Leaves l = std::string_view(p.name) == "inventory2" ? inventory_leaves() : reflect::field(gi, p.field);
         out.push_back({p.name, reflect::hash(l)});
         if (leaves) (*leaves)[p.name] = std::move(l);
     }
@@ -1657,7 +1685,7 @@ void world_hash_tick()
         for (auto& p : parts) all = all * 31 + p.value;
         if (all == s.last_world_sent && s.now - s.last_world_sent_at < 60.0) return;
         uint64_t prev_inventory = 0;
-        for (auto& p : s.last_world_parts) if (p.name == "inventory") prev_inventory = p.value;
+        for (auto& p : s.last_world_parts) if (p.name == "inventory2") prev_inventory = p.value;
         s.last_world_sent = all;
         s.last_world_sent_at = s.now;
         proto::WorldHash wh{++s.world_seq, game::current_level(), parts};
@@ -1668,7 +1696,7 @@ void world_hash_tick()
         JsonObj o;
         o.raw("msg", proto::to_json(wh)).raw("leaves", sizes + "}");
         // Inventaire résumé quand il change (à comparer à celui d'un client en écart).
-        for (auto& p : parts) if (p.name == "inventory" && p.value != prev_inventory) o.add("inventory", leaves_line(leaves["inventory"]));
+        for (auto& p : parts) if (p.name == "inventory2" && p.value != prev_inventory) o.add("inventory", leaves_line(leaves["inventory2"]));
         s.last_world_parts = parts;
         log().write("coop_world_hash", o);
         return;
@@ -1756,7 +1784,7 @@ void world_hash_tick()
     }
     JsonObj diff_log;
     diff_log.add("seq", host.seq).add("parts", differ).add("ignored", ignored).add("streak", s.world_mismatch_streak).raw("leaves", sizes + "}").raw("mine", detail + "}");
-    if (differ.find("inventory") != std::string::npos) diff_log.add("inventory", leaves_line(leaves["inventory"]));   // à comparer au coop_world_hash de l'hôte
+    if (differ.find("inventory") != std::string::npos) diff_log.add("inventory", leaves_line(leaves["inventory2"]));   // à comparer au coop_world_hash de l'hôte
     log().write("coop_world_hash_diff", diff_log);
     if (s.world_mismatch_streak >= 2) {
         s.world_mismatch_streak = 0;
@@ -1767,7 +1795,8 @@ void world_hash_tick()
             if (auto it = leaves.find(part); it != leaves.end()) log_world_leaves(part, it->second, host.seq);
         s.resync_parts = std::set<std::string>(parts.begin(), parts.end());
         // Rechargement (5-6 s d'écran figé) jamais en plein mouvement : attendu jusqu'à l'arrêt (world_resync_tick).
-        if (s.now - s.last_motion_at < 1.5) {
+        // Ni en dialogue, cinématique ou combat : l'instantané arriverait à leur fin (chargement bloqué, 2026-10-23).
+        if (s.now - s.last_motion_at < 1.5 || !resync_calm()) {
             if (s.resync_deferred.empty()) {
                 s.resync_deferred_since = s.now;
                 bump("resyncs_deferred_moving");
@@ -1796,7 +1825,7 @@ void world_resync_tick()
 {
     if (s.host || s.resync_deferred.empty()) return;
     if (s.cj != S::ClientJoin::Joined && s.want_join) { s.resync_deferred.clear(); s.resync_deferred_since = -1; return; }
-    if (s.now - s.last_motion_at >= 1.5 || s.now - s.resync_deferred_since > 120.0) send_world_resync(s.resync_deferred);
+    if ((s.now - s.last_motion_at >= 1.5 && resync_calm()) || s.now - s.resync_deferred_since > 120.0) send_world_resync(s.resync_deferred);
 }
 
 // Test de resynchro (-e33perturbworld=N) : une fois entré, le client fausse son or de N (l'écart doit être détecté,
@@ -1940,8 +1969,11 @@ bool handle(uint8_t from, const proto::Message& m)
     }
     if (auto* rr = std::get_if<proto::ResyncRequest>(&m)) {
         if (!s.host) return true;
-        // Le client recharge un instantané : il ne participe plus jusqu'à son JoinReady.
-        s.peers[from] = PeerJoin{JoinState::Pending, s.now, false};
+        // Client entré : il reste dans la partie jusqu'à l'envoi de l'instantané (avant : retiré aussitôt, puis un combat
+        // lancé par le dialogue en cours était joué seul de chaque côté, essai à deux PC du 2026-10-23). Sinon : il ne
+        // participe plus jusqu'à son JoinReady.
+        if (auto it = s.peers.find(from); it != s.peers.end() && it->second.state == JoinState::Joined) it->second.resync = true;
+        else s.peers[from] = PeerJoin{JoinState::Pending, s.now, false};
         bump("resyncs_requested");
         log().write("coop_resync_requested", JsonObj().add("player", static_cast<int>(from)).add("reason", rr->reason));
         // Diagnostic : feuilles de l'hôte des parties en écart (le client journalise les siennes avant sa demande).
@@ -2013,7 +2045,7 @@ bool handle(uint8_t from, const proto::Message& m)
     if (auto* ns = std::get_if<proto::NarrativeState>(&m)) {
         if (s.host) { if (ns->player != from) return true; s.net.relay(m, from, true); }
         if (ns->active && !s.remote_narr[ns->player]) s.remote_narr_since[ns->player] = s.now;
-        if (!ns->active && s.remote_narr[ns->player]) sc.remote_end_at[ns->player] = s.now;
+        if (!ns->active && s.remote_narr[ns->player]) { sc.remote_end_at[ns->player] = s.now; s.remote_narr_end[ns->player] = s.now; }
         s.remote_narr[ns->player] = ns->active;
         presence::set_narrative(ns->player, ns->active, ns->kind == proto::NarrativeKind::Cinematic, s.now);
         log().write("coop_narrative_remote", JsonObj().add("player", static_cast<int>(ns->player)).add("active", ns->active).add("seq", ns->seq));
