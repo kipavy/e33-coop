@@ -164,6 +164,8 @@ struct TeleportPoint {
     double pos[3]{}, box[3]{};      // acteur, boîte de passage (TeleportBox)
 };
 std::vector<TeleportPoint> teleport_points();
+// Boîtes de passage actives ou non (SetGenerateOverlapEvents) : le pion suiveur ne change pas de niveau de lui-même.
+int set_teleport_points_active(bool on);
 // Classes Blueprint chargées dont le nom contient l'un des mots (insensible à la casse) : diagnostic (parcours complet).
 std::vector<std::string> loaded_bp_classes(const std::vector<std::string>& needles);
 std::vector<UObject*> actor_instances(const std::wstring& cls);   // instances d'une classe, hors objet par défaut

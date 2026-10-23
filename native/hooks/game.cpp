@@ -881,6 +881,19 @@ std::vector<TeleportPoint> teleport_points()
     return out;
 }
 
+int set_teleport_points_active(bool on)
+{
+    int n = 0;
+    for (UObject* o : actor_instances(STR("BP_jRPG_MapTeleportPoint_C"))) {
+        UObject* box = ue::get_object(o, STR("TeleportBox"));
+        ue::Call c(box, STR("SetGenerateOverlapEvents"));
+        if (!c) continue;
+        c.set_bool(STR("bInGenerateOverlapEvents"), on);
+        if (c.invoke()) ++n;
+    }
+    return n;
+}
+
 std::vector<std::string> loaded_bp_classes(const std::vector<std::string>& needles)
 {
     // FindAllOf("BlueprintGeneratedClass") ne rend rien : parcours de tous les objets (lent, diagnostic seulement).

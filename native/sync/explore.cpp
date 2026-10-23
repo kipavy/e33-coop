@@ -712,6 +712,10 @@ bool load_in = false;                 // chargement de niveau en cours ici (IsMa
 double load_rise_at = -1;
 std::string load_dest;
 double prev_now = -1;
+std::string tp_level;                 // niveau où l'état des boîtes de passage a été appliqué
+bool tp_off = false;                  // boîtes de passage coupées (suiveur)
+double tp_at = -1;
+int tp_count = -1;
 struct MapMax { int delay = 0, late = 0, load = 0, err = 0, catchup = 0, paused = 0, mod = 0; } mmax;
 constexpr double kMapWindow = 12.0;   // fenêtre d'observation après l'arrivée (et celle du pilote)
 
@@ -766,6 +770,25 @@ void map_tick()
     } else if (!in && load_in) {
         load_in = false;
         log().write("coop_map_load_end", JsonObj().add("level", load_dest).add("load_s", s.now - load_rise_at).add("pilot", is_pilot()));
+    }
+    // Suiveur : boîtes de passage du niveau coupées. Son pion, conduit derrière le pilote, ne change de niveau que sur
+    // MapChange (sinon : passage par une autre sortie que le pilote, ou second déclenchement de la même pendant le
+    // chargement). Rendues quand il redevient pilote. Une fois par niveau (FindAllOf parcourt tous les objets).
+    {
+        const bool want_off = sharing() && !is_pilot();
+        if (!in && world_ready()) {
+            const std::string lvl = game::current_level();
+            // Reprise toutes les 10 s (seule tâche lourde de son image) : parties de niveau chargées ensuite.
+            const bool again = want_off && s.now - tp_at > 10.0 && !local_moving() && prof::claim_heavy("teleport_points");
+            if ((lvl != tp_level && want_off) || want_off != tp_off || again) {
+                tp_at = s.now;
+                const int n = game::set_teleport_points_active(!want_off);
+                if (!again || n != tp_count) log().write("coop_teleport_points", JsonObj().add("level", lvl).add("active", !want_off).add("count", n));
+                tp_level = lvl;
+                tp_count = n;
+                tp_off = want_off;
+            }
+        }
     }
     if (!mt.open) return;
     if (mt.arrived_at < 0) {
@@ -1610,6 +1633,9 @@ void reset()
     fstats = FollowStats{};
     sc = SceneSync{};
     mt = MapTrans{};
+    if (tp_off && game::controller()) game::set_teleport_points_active(true);
+    tp_off = false;
+    tp_level.clear();
     mmax = MapMax{};
     load_in = false;
     prev_now = -1;
@@ -1646,6 +1672,9 @@ void on_session_end()
     s.pilot = s.me;            // plus de pilote distant : le déplacement local est rendu (movement_lock_tick)
     mount::release("session_end");
     movement_lock_tick();
+    if (tp_off && game::controller()) game::set_teleport_points_active(true);   // boîtes de passage rendues
+    tp_off = false;
+    tp_level.clear();
     ui::clear_status("pause");
     ui::clear_status("wait");
     ui::clear_status("waited");
