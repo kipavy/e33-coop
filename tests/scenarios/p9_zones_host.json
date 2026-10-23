@@ -1,6 +1,6 @@
 {
   "name": "p9_zones_host",
-  "description": "Changements de zone (2026-10-23) : vrai jeu hôte (pilote) face au faux client. Save de fin de partie TEST_LATE (tour de Cléa). Le pilote enchaîne : drapeau d'expédition -> carte du monde (OnTeleportToWorldMap du drapeau, comme son menu), carte du monde -> tour de Cléa (entrée de la carte du monde si elle existe, sinon ChangeMap), puis de vrais passages du jeu (BP_jRPG_MapTeleportPoint : il marche dans la boîte) tour -> rez-de-chaussée -> carte du monde, camp (ChangeMap direct) et retour sur la carte du monde. Produit l'enregistrement rejoué par p9_zones_client.",
+  "description": "Changements de zone (2026-10-23) : vrai jeu hôte (pilote) face au faux client. Save de fin de partie TEST_LATE (tour de Cléa). Le pilote enchaîne 7 transitions : drapeau d'expédition -> carte du monde (OnTeleportToWorldMap du drapeau, comme son menu) ; carte du monde -> rez-de-chaussée de la tour (entrée de la carte du monde, ProcessChangeMap comme son interaction) ; puis de vrais passages du jeu (BP_jRPG_MapTeleportPoint : il marche dans la boîte) rez-de-chaussée -> tour -> rez-de-chaussée -> carte du monde ; camp (ChangeMap direct) et retour sur la carte du monde. Produit l'enregistrement rejoué par p9_zones_client.",
   "save": "e33coop-test/TEST_LATE",
   "timeout_s": 900,
   "shots_every_s": 5,
@@ -16,7 +16,12 @@
     { "do": "wait", "s": 4 },
     { "do": "move", "dir": [0, 1], "s": 3 },
     { "do": "wait", "s": 2 },
-    { "do": "map_exit", "match": "cleas", "approach": 600, "call_after": 15, "fallback_level": "Level_Side_CleasTower", "fallback_spawn": "Level.SpawnPoint.CleasTower.Entrance", "timeout": 60 },
+    { "do": "map_exit", "match": "SideLevel_CleasTower_Entrance", "how": "call", "timeout": 60 },
+    { "do": "wait", "s": 2 },
+    { "do": "wait_world", "s": 3, "timeout": 240 },
+    { "do": "wait", "s": 4 },
+    { "do": "move", "dir": [1, 0], "s": 2 },
+    { "do": "map_exit", "match": "SideLevel_CleasTower", "approach": 500, "call_after": 12, "timeout": 60 },
     { "do": "wait", "s": 2 },
     { "do": "wait_world", "s": 3, "timeout": 240 },
     { "do": "wait", "s": 4 },
@@ -46,5 +51,5 @@
   ],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_follow.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
-  "expect": { "snapshots_sent": "1", "joined_players": "1", "map_changes_published": ">=6", "map_exits": ">=2" }
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "map_changes_published": ">=7", "map_exits": ">=4" }
 }
