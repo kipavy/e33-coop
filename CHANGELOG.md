@@ -17,6 +17,17 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ### Ajouts
 - Cinématiques en même temps : quand le meneur déclenche une scène, elle démarre aussitôt chez les autres joueurs (au
   lieu de se jouer l'une après l'autre) ; passer une scène la passe chez tout le monde.
+- Version du mod affichée au menu principal (sous les boutons) et en bas du panneau Coop (F9).
+- Carte du monde : le perso de l'autre joueur monte sur Esquie avec le meneur et le suit en marche, en vol et sur
+  l'eau (au lieu de « nager en l'air »).
+
+### Modifications
+- La bannière « Équipe : … » ne s'affiche plus que quand la répartition des personnages change (plus à chaque
+  arrivée ou rechargement d'un joueur) ; le rappel « F7 pour ouvrir votre partie » une seule fois par lancement du jeu.
+
+### Suppressions
+- Bannières inutiles : « L'hôte commence une nouvelle partie… » (client), « Nouvelle partie : N joueur(s) regardent
+  l'intro avec vous » (hôte), « X a modifié <personnage> » à chaque changement de build de l'autre joueur.
 
 ## [0.6.4] - 2026-10-23
 

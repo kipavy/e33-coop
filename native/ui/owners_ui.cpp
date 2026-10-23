@@ -450,6 +450,7 @@ void tick_pause()
     if (!foot.empty()) add_vb(vb, text(outer, foot, kDim, 14, font), 12, 0);
     add_vb(vb, text(outer, ui::text("coop_options"), kGold, 18, font), 16, 4);
     for (auto& o : opts) add_row(outer, vb, font, o.label, o.value, o.editable ? kInk : kDim, o.editable ? kGold : kDim, false, o.selected, 16);
+    add_vb(vb, text(outer, std::string("E33 Coop ") + E33COOP_VERSION, kDim, 13, font), 14, 0);   // version installée
     add_child(bg, L"SetContent", vb);
     add_child(root, L"SetContent", bg);
     call_int(root, L"SetVisibility", L"InVisibility", kHitTestInvisible);
