@@ -2,6 +2,14 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-23 — panneau Coop navigable comme le menu du jeu (branche `feat/coop-panel-nav`, D22)
+
+- **Demande de Killian** : naviguer dans le panneau « Expédition coop » à la souris et aux flèches / à la manette, comme le menu natif.
+- **Fait** : lignes modifiables = vrais boutons du jeu (`WBP_BaseButton_C`, style de « Paramètres ») ; clic / Entrée / A = changer (même chemin que Maj+F9) ; gauche / droite = valeur précédente / suivante par la navigation contrainte du jeu (`OnConstrainedNavigationTriggered`, comme l'écran Paramètres) ; Droite depuis le menu du jeu entre dans le panneau, haut / bas bouclent ; Retour (Échap / B) rend le focus au menu sans le fermer (portes sur l'événement Retour du menu et la touche pause) ; F9 / Maj+F9 gardés (la ligne choisie prend le focus). Repli en texte si un bouton ne peut être fait.
+- **Preuves** (build 39949812607, après fusion d'`integ4`) : `p6_panelnav_host` vert (focus par `SetFocus`, clic par `HandleButtonClicked`, gauche / droite par diffusion du délégué, Retour par l'événement du bouton Retour : 2 réattributions de Monoco, 2 options changées, focus suivi, menu toujours ouvert après Retour, focus sur « Reprendre ») ; `p6_panel_host` vert (inchangé). Captures : focus visible sur la ligne (trait de pinceau du jeu).
+- **À vérifier avec de vraies entrées** (accord de Killian) : `p6_panelnav_input_host` (injecte touches et clics : Droite, Bas, Entrée, Gauche, Échap, survol + clic) ; manette à la main (croix, stick, A, B). Point ouvert : si Échap / B passent par la gestion native de CommonUI (sans UFunction), ils ferment encore le menu au lieu de revenir à la liste (journal `owners_ui_panel_back` absent).
+- Runs de 12:02 à 12:56 invalides (verrou du jeu cédé, plusieurs jeux en même temps) : une perte de focus vue alors n'est pas reproduite.
+
 ## 2026-10-23 — Esquie : le suiveur monte et vole comme le pilote (branche `fix/esquie-mount`, D21)
 
 - **Save** : `TEST_LATE` (copie d'une save de fin de partie de Killian, tour de Cléa, `.tools/testsaves`), puis `change_map` vers `Level_WorldMap_Main_V2` (apparition à `LastWorldMapTransform`). Esquie vole déjà.
