@@ -136,6 +136,7 @@ void encode_payload(const Message& m, wire::Writer& w)
         } else if constexpr (std::is_same_v<T, SceneStart>) {
             w.u8(x.player); w.u32(x.seq); w.str(x.scene); w.str(x.sequence); w.u8(static_cast<uint8_t>(x.cause)); w.str(x.cause_path);
             w.str(x.action); w.f64(x.x); w.f64(x.y); w.f64(x.z);
+            w.u8(static_cast<uint8_t>(x.kind));   // champ final facultatif
         } else if constexpr (std::is_same_v<T, SceneSkip>) {
             w.u8(x.player); w.u32(x.seq); w.str(x.scene);
         } else if constexpr (std::is_same_v<T, BarrierRelease>) {
@@ -329,6 +330,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         const uint8_t c = r.u8(); x.cause_path = r.str(kMaxStr); x.action = r.str(kMaxStr);
         x.x = r.f64(); x.y = r.f64(); x.z = r.f64();
         for (double v : {x.x, x.y, x.z}) if (!std::isfinite(v)) r.fail();
+        if (r.ok() && !r.at_end()) { const uint8_t k = r.u8(); if (k > 1) r.fail(); x.kind = static_cast<NarrativeKind>(k); }
         if (c > static_cast<uint8_t>(SceneCause::Action) || x.player > 3) r.fail();
         x.cause = static_cast<SceneCause>(c); return finish(x);
     }
@@ -593,7 +595,8 @@ std::string to_json(const Message& m)
         } else if constexpr (std::is_same_v<T, BarrierRelease>) { o.add("seq", x.seq); }
         else if constexpr (std::is_same_v<T, SceneStart>) {
             o.add("player", static_cast<int>(x.player)).add("seq", x.seq).add("scene", x.scene).add("sequence", x.sequence)
-                .add("cause", static_cast<int>(x.cause)).add("cause_path", x.cause_path).add("action", x.action).add("x", x.x).add("y", x.y).add("z", x.z);
+                .add("cause", static_cast<int>(x.cause)).add("cause_path", x.cause_path).add("action", x.action).add("x", x.x).add("y", x.y).add("z", x.z)
+                .add("kind", static_cast<int>(x.kind));
         } else if constexpr (std::is_same_v<T, SceneSkip>) {
             o.add("player", static_cast<int>(x.player)).add("seq", x.seq).add("scene", x.scene);
         }

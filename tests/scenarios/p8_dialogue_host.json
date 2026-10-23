@@ -1,0 +1,24 @@
+{
+  "name": "p8_dialogue_host",
+  "description": "Dialogue de zone côté hôte/pilote (D24) : partie chargée depuis l'instantané réel p8_prologue_snapshot (Lumière, avant le grappin). Après l'entrée du faux client, le pilote est posé avant la zone du dialogue de Maelle et y marche ; l'hôte doit publier le dialogue et sa cause (SceneStart, dialogue, zone), puis répond (choix 1) et joue le duel qui suit. Produit l'enregistrement rejoué par p8_dialogue_sync_client.",
+  "save": "e33coop-test/p8_prologue_snapshot",
+  "timeout_s": 700,
+  "shots_every_s": 5,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 5 },
+    { "do": "teleport", "pos": [10900, -28750, 8660], "yaw": -90 },
+    { "do": "wait", "s": 2 },
+    { "do": "move", "dir": [0, -1], "s": 5 },
+    { "do": "wait", "until": "narratives_started", "is": ">=1", "timeout": 30 },
+    { "do": "choose", "index": 1, "timeout": 120 },
+    { "do": "battle", "timeout": 150 },
+    { "do": "wait", "s": 15 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_duel.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "700"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "narratives_started": ">=1", "dialogues_published": ">=1", "choices_published": ">=1",
+              "battle_end": "any", "snapshot_errors": "0" }
+}

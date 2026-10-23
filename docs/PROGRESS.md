@@ -2,6 +2,13 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-23 — dialogues joués ensemble (branche `fix/dialogue-sync`, D24)
+
+- Avant : seuls les dialogues lancés par une interaction (PNJ, `WorldInteract` rejoué) partaient ensemble ; un dialogue de zone (Maelle avant le duel du prologue : zone `…_UAID_581122C6E7A5400A02_1306934710`, action `DA_GA_MULTI_MaelleIntro_5`, `BP_Dialogue_Gardens_Maelle_FirstDuel_C`) n'existait que chez le pilote.
+- Corrigé : le pilote publie aussi le début d'un dialogue (`ActivateDialogue`) dans `SceneStart` (champ final `kind`) ; le suiveur déclenche la même zone (même chemin que D20). Rien de plus pour une interaction (déjà rejouée), rien en combat ; une zone déjà exécutée ici n'est jamais relancée.
+- `p8_dialogue_host` vert (dialogue publié, cause zone). `p8_dialogue_sync_client` (pion immobile) : dialogue commencé **0,12 s** après le `SceneStart`, par la zone, 0 pause de barrière, choix de l'hôte rejoué (0,02 s), duel engagé par le dialogue du client (`already_engaged`) et fini (défaite = résultat de l'hôte). Seul écart : 1 PA de Gustave aux tours 1-2 (réparé par la resynchro, `raw_hash_diffs` 2, toléré dans ce nouveau test) : suivi côté combat.
+- Non-régression verte (build 39959179473) : `p8_cutscene_sync_client`, `p8_cutscene_host`, `p4_session_client`, `p8_prologue_client`, `p6_newgame_client`.
+
 ## 2026-10-23 — suivi fluide quand l'hôte court / sprinte (branche `fix/follow-smooth`, D23)
 
 - **Causes des « freeze » (journaux réels du client, 0.6.1)** : téléportations toutes les ~2,2 s pendant le sprint de l'hôte, et **deux rechargements d'instantané (5-6 s chacun) en plein sprint** (resynchro d'inventaire). En 0.6.4 (`p8_sprint_client`) : sprint du suiveur seulement par le repli après 0,6 s, retard ~200 u jamais rattrapé, et une resynchro encore envoyée en plein sprint.

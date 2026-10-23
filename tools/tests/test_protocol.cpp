@@ -59,7 +59,9 @@ static std::vector<proto::Message> samples()
             proto::MenuState{7, 3, 2, 7, proto::MenuPage::Actions, 0, -1, 0, "", false, 0, {}},
             proto::SceneStart{0, 3, "SQT_Lumiere_Sophie", "/Game/Cinematics/X.X", proto::SceneCause::Zone,
                               "/Game/Levels/X.X:PersistentLevel.BP_GameActionTriggerZone_C_UAID_1", "/Game/GA/DA_GA_X.DA_GA_X", 13511.25, -44700.5, 6952.0},
-            proto::SceneStart{1, 4, "", "", proto::SceneCause::Unknown, "", "", 0, 0, 0}, proto::SceneSkip{0, 5, "SQT_Lumiere_Sophie"}};
+            proto::SceneStart{1, 4, "", "", proto::SceneCause::Unknown, "", "", 0, 0, 0},
+            proto::SceneStart{0, 6, "", "/Game/Levels/X.X:PersistentLevel.BP_Dialogue_C_1", proto::SceneCause::Zone, "/Game/Levels/X.X:PersistentLevel.Zone_1", "",
+                              1, 2, 3, proto::NarrativeKind::Dialogue},proto::SceneSkip{0, 5, "SQT_Lumiere_Sophie"}};
 }
 
 static void test_roundtrip()
