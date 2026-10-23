@@ -276,6 +276,8 @@ struct State {
     double barrier_battle_since = -1;                      // diagnostic : barrière tenue pendant un combat engagé (depuis)
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     bool input_enabled = true;
+    int defense_try_logs = 0;                              // diagnostic : appuis de défense du propriétaire journalisés
+    int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
     UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
     std::map<UObject*, int> removed_contexts;              // contextes d'entrée retirés pendant le blocage -> priorité
     std::map<std::string, int> counters;
@@ -2344,7 +2346,16 @@ void subscribe()
         bump("free_aims_published");
         publish(fa_event(proto::FreeAimKind::Start, 0, {}));
     });
+    // Diagnostic (2026-10-24 : TOTOFFF vise mais ne tire pas, à la manette) : bouton de tir vu par le héros.
+    bus.pre(fn(game::path::BattleChar, L"InpActEvt_IA_Battle_FreeAim_Shoot_K2Node_EnhancedInputActionEvent_6"), [](HookCtx& ctx, UFunction*) {
+        if (s.role == Role::Solo || !s.battle.active || ++s.shoot_input_logs > 60) return;
+        UObject* fa = ue::get_object(ctx.Context, STR("BP_FreeAimShooterBattleComponent"));
+        log().write("coop_free_aim_shoot_input", JsonObj().add("spot", game::spot(ctx.Context)).add("mine", controls(game::spot(ctx.Context)))
+                                                    .add("aiming", ue::get_bool(fa, STR("IsAiming"))).add("own_active", s.fa_own.active), s.battle.turn);
+    });
     bus.pre(fn(game::FreeAimComp, L"OnFreeAimShootAction"), [fa_event](HookCtx& ctx, UFunction*) {
+        if (s.role != Role::Solo && s.battle.active && s.fa_own.active && ++s.shoot_input_logs <= 60)
+            log().write("coop_free_aim_shoot_action", JsonObj().add("spot", s.fa_own.spot).add("mine", ue::component_owner(ctx.Context) == game::find_unit(true, s.fa_own.spot)), s.battle.turn);
         if (!s.fa_own.active || ue::component_owner(ctx.Context) != game::find_unit(true, s.fa_own.spot)) return;
         publish(fa_event(proto::FreeAimKind::Fire, ++s.fa_own.fires, s.fa_own.point));
     });
@@ -2501,7 +2512,15 @@ void subscribe()
         bus.post(fn(game::path::BattleChar, name), [name](HookCtx& ctx, UFunction*) {
             if (s.role == Role::Solo || !s.battle.active || s.imposing) return;
             UObject* hero = ctx.Context;
-            if (!game::is_player(hero) || controls(game::spot(hero))) return;
+            if (!game::is_player(hero)) return;
+            if (controls(game::spot(hero))) {
+                // Diagnostic (2026-10-24, TOTOFFF à la manette : esquive OK, parade sans animation) : appui du
+                // propriétaire vu par le jeu, et blocage des défenses du combat.
+                if (++s.defense_try_logs <= 60)
+                    log().write("coop_defense_try", JsonObj().add("fn", ue::to_utf8(name)).add("spot", game::spot(hero))
+                                                       .add("block_all", ue::get_bool(game::battle_manager(), STR("BlockAllDefensiveMoves"))), s.battle.turn);
+                return;
+            }
             game::cancel_defense(hero);
             bump("stray_defenses_undone");
             log().write("coop_stray_defense", JsonObj().add("fn", ue::to_utf8(name)).add("spot", game::spot(hero)), s.battle.turn);

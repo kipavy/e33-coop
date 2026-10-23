@@ -264,7 +264,8 @@ bool world_ready()
 // Client : moment où demander une resynchro (ni dialogue, ni cinématique, ni combat).
 bool resync_calm()
 {
-    return !game::in_dialogue() && !game::playing_cinematic() && !game::in_battle();
+    // Ni en pause : un chargement demandé menu pause ouvert reste bloqué (essai à deux PC du 2026-10-24, 00:12).
+    return !game::in_dialogue() && !game::playing_cinematic() && !game::in_battle() && !game::pause_menu_visible();
 }
 
 bool safe_point()
@@ -317,7 +318,8 @@ void host_join_tick()
         // Instantané jamais envoyé pendant la narration du client ni dans les 3 s qui suivent : le 2026-10-23 (essai à
         // deux PC), deux chargements demandés dans la seconde de la fin d'un dialogue sont restés sur l'écran noir.
         auto end = s.remote_narr_end.find(player);
-        const bool client_calm = !s.remote_narr[player] && (end == s.remote_narr_end.end() || s.now - end->second >= 3.0);
+        // Ni pendant sa pause (chargement bloqué menu pause ouvert, 2026-10-24).
+        const bool client_calm = !s.remote_narr[player] && !s.remote_pause[player] && (end == s.remote_narr_end.end() || s.now - end->second >= 3.0);
         if (pj.state == JoinState::Joined && pj.resync) {
             // Client entré qui veut une resynchro : il joue avec nous jusqu'à l'envoi (aucun combat joué seul chez lui).
             if (safe_point() && client_calm) { pj.resync = false; send_snapshot(player); }
@@ -392,10 +394,10 @@ void client_join_tick()
         // Pas de chargement pendant un dialogue / une cinématique ni juste après : le 2026-10-23 (essai à deux PC),
         // un chargement demandé dans la même seconde que la fin d'un dialogue est resté sur l'écran noir.
         // Calme de 2 s exigé, 20 s d'attente au plus après l'instantané.
-        if (!game::main_menu() && (game::in_dialogue() || game::playing_cinematic())) s.cj_calm_since = -1;
+        if (!game::main_menu() && (game::in_dialogue() || game::playing_cinematic() || game::pause_menu_visible())) s.cj_calm_since = -1;
         else if (s.cj_calm_since < 0) s.cj_calm_since = s.now;
         if (s.now - s.cj_since < 20.0 && (s.cj_calm_since < 0 || s.now - s.cj_calm_since < 2.0)) return;
-        std::string err;
+        if (!game::main_menu() && game::pause_menu_visible()) { s.cj_since = s.now; return; }   // pause : on attend sa fermeture, sans limite        std::string err;
         if (!game::load_save_slot(kCoopSlot, err)) {
             bump("join_errors");
             log().write("coop_join_error", JsonObj().add("what", "load: " + err));
