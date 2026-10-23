@@ -257,6 +257,9 @@ struct PilotState {
     // Champ final facultatif (2026-10-23) : mode d'Esquie sur la carte du monde (BP_WorldMapCharacter_C.CurrentMovementMode :
     // 0 marche, 2 vol…), 255 = pas sur Esquie / inconnu.
     uint8_t wm_mode = 0xFF;
+    // Champ final facultatif (2026-10-23, suivi fluide) : horloge du pilote à l'envoi (ms, 0 = absent). Le suiveur place
+    // chaque position à son instant réel (tampon d'interpolation), sans la gigue de réception.
+    uint32_t t_ms = 0;
 };
 constexpr uint8_t kMoveUnknown = 0xFF;
 constexpr uint8_t kPilotMount = 1;        // GI.IsMountInUse : sur Esquie

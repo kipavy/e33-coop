@@ -771,6 +771,36 @@ bool set_pawn_desired_gait(UObject* pawn, int gait)
     return c.invoke();
 }
 
+bool pawn_gait_speeds(UObject* pawn, GaitSpeeds& out)
+{
+    // UALSCharacterMovementComponent::CurrentMovementSettings (FALSMovementSettings : WalkSpeed, RunSpeed, SprintSpeed
+    // en tête, dump ALSV4_CPP).
+    UObject* cmc = pawn ? ue::get_object(pawn, STR("CharacterMovement")) : nullptr;
+    const auto* st = ue::value_ptr<float>(cmc, STR("CurrentMovementSettings"));
+    if (!st) return false;
+    out.walk = st[0]; out.run = st[1]; out.sprint = st[2];
+    return out.run > 0 && out.sprint >= out.run && out.sprint < 5000;
+}
+
+float* pawn_max_walk_speed(UObject* pawn)
+{
+    UObject* cmc = pawn ? ue::get_object(pawn, STR("CharacterMovement")) : nullptr;
+    return ue::value_ptr<float>(cmc, STR("MaxWalkSpeed"));
+}
+
+bool set_pawn_sprint_speed(UObject* pawn, float speed)
+{
+    // Vitesse de sprint des réglages ALS du pion (MaxWalkSpeed écrite directement est ignorée : mesuré le 2026-10-23,
+    // le pion restait à 720 avec MaxWalkSpeed à 365 ou 864). bRequestMovementSettingsChange : l'ALS recalcule
+    // MaxWalkSpeed depuis ces réglages à la fin du mouvement de l'image.
+    UObject* cmc = pawn ? ue::get_object(pawn, STR("CharacterMovement")) : nullptr;
+    auto* st = ue::value_ptr<float>(cmc, STR("CurrentMovementSettings"));
+    if (!st) return false;
+    st[2] = speed;
+    if (!ue::set_bool(cmc, STR("bRequestMovementSettingsChange"), true)) ue::set_int(cmc, STR("bRequestMovementSettingsChange"), 1);
+    return true;
+}
+
 bool move_info(UObject* pawn, MoveInfo& out)
 {
     if (!pawn) return false;

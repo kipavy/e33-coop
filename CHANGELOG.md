@@ -14,6 +14,16 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.6] - 2026-10-23
+
+### Corrections
+- Exploration : quand le meneur court ou sprinte, le perso de l'autre joueur le suit de façon fluide (plus d'à-coups,
+  d'arrêts ni de téléportations), et la partie n'est plus rechargée pendant qu'on se déplace.
+- Duel du prologue contre Maelle en nouvelle partie ensemble : plus de blocage, l'autre joueur entre dans le combat
+  même si le meneur est encore dans le dialogue.
+- Combat : plus aucune attente sans fin. Un joueur qui charge, regarde une scène ou choisit son action est toujours
+  attendu ; aucune action n'est jouée à sa place tant que son jeu montre qu'il est là.
+
 ## [0.6.5] - 2026-10-23
 
 ### Ajouts
@@ -87,7 +97,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.5...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/kipavy/e33-coop/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/kipavy/e33-coop/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/kipavy/e33-coop/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/kipavy/e33-coop/compare/v0.6.2...v0.6.3

@@ -298,6 +298,8 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 
 **Remise en cause si** : `coop_scene_sync` en méthode 3 (téléportation) fréquente, ou `scene_syncs_failed` ; ou une zone dont l'action dépend du pion qui la traverse.
 
+---
+
 ## D21 — Carte du monde : le suiveur monte sur Esquie et le conduit comme le pilote (2026-10-23, demande de Killian)
 
 **Données du jeu (en jeu, save `TEST_LATE`)** : pion à pied `BP_jRPG_Character_WorldMap_pawn_C`, Esquie = pion `BP_WorldMapCharacter_C` (sous-classe de `BP_jRPG_Character_World_C`) possédé à la montée. `BP_WorldMapControllerComponent` du contrôleur : `OnInputMountPressed` -> `OnMountRequested` -> `ProcessMountRequest` (montée), `OnDismountRequested` (descente, refusée en vol), `MountIsInUse`, `IsMountPerformingAnAnimation`. Esquie : `CurrentMovementMode` (0 marche, 1 eau, 2 vol), `TryChangeMovementMode(MovementMode, ZoneType)` (décollage / atterrissage, appelé par l'événement de saut), `ChangeMovementMode` (imposé), `IsInTransition`.
@@ -310,3 +312,33 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 5. Le fantôme de D19 reste en repli (montée impossible, ex. pion à la nage) ; `-e33mountsync=0` coupe montée et descente.
 
 **Remise en cause si** : `coop_follower_mount` échoue souvent (`can_mount` faux), ou `coop_follower_wm_mode` `forced` fréquent (mode refusé par le jeu), ou Esquie placé qui saccade visiblement en vol (passer à une poursuite par entrées).
+
+---
+
+## D22 — Aucune attente sans fin en combat ; action automatique seulement sur preuve positive (2026-10-23, exigence de Killian)
+
+**Constat** : duel du prologue (2026-10-22) : client tenu par la barrière, hôte figé 10 min au plus en attendant son `BattleReady`. Audit des attentes : seules celles du thread de jeu (`wait_for`) figent l'image ; toutes sont bornées (tour 15 s, défense et QTE 3 s, tir 2 s, récompenses 5 + 4 s) ; les attentes non figées (démarrage coordonné 600 s, barrière 600 s, tour d'un autre joueur sans minuteur : illimitée) pouvaient tenir la partie pour un joueur dont le jeu ne suit plus.
+
+**Décision** :
+1. **Démarrage coordonné** : l'hôte attend toujours un joueur qui charge, regarde une scène, est dans un menu ou se reconnecte (10 min au plus). Un joueur **inactif** (rien de tout ça) qui n'entre pas dans le combat depuis 60 s continues (`-e33readyidle=N`) : le combat commence sans lui (toast), il suivra en arrivant. Un client sain entre en ~6 s sans action du joueur.
+2. **Tour d'un autre joueur** : jamais d'action automatique pour un joueur qui réfléchit, fouille ses menus, est en pause, alt-tab ou lit une description, même longtemps. Attaque automatique (`-e33stuckturn=N`, 60 s de temps de jeu, pauses exclues) seulement si le lien est vivant, qu'il ne charge ni ne se reconnecte, **et** qu'aucun signe de ce tour n'est venu de lui : ni `StateHash` du tour (envoyé par son jeu au début de chaque tour), ni `MenuState`, `IntentPreview`, `AimView`, `FreeAimEvent`, `ActionCommand`, `ComboResult`, `DefenseResult` de ce tour. Le minuteur de tour reste une option de l'hôte, coupée.
+3. **Joueur bloqué** (tour forcé, ou délai de défense dépassé sur un tour qu'il n'a pas commencé) : ses défenses et QTE ne sont plus attendus (échec imposé, l'état de l'hôte fait foi, D11) jusqu'à son prochain signe de tour.
+4. **Client** : les attentes bloquantes s'arrêtent au `BattleEnd` de l'hôte (aucun résultat ne viendra).
+5. **Mesure** : chaque attente bloquante est journalisée au-delà de 250 ms avec son origine (`coop_wait_long`).
+6. Essai `-e33turnalign=1` (désactivé) : tours ennemis retenus chez l'hôte (dépendance de début de tour, jeu animé) jusqu'au `StateHash` des clients qui ont un héros vivant, 4 s au plus : l'hôte n'est plus en avance (~1 s après les tours de ses héros, rejoués avec décalage chez le client), donc ne fige plus son image en attendant leurs parades ; le client attend celles de l'hôte un aller-retour.
+
+**Remise en cause si** : `turn_stuck_forced` ou `battle_ready_idle_timeouts` apparaît dans une partie normale à deux PC (faux positif) ; ou `coop_wait_long` site `defense` fréquent au-delà de 300 ms (activer `-e33turnalign`).
+
+## D23 — Suivi du pilote : tampon d'interpolation, commande en vitesse, critères de fluidité (2026-10-23, demande de Killian)
+
+**Constat** (essai à deux PC du 2026-10-22, journaux du client en 0.6.1) : quand l'hôte courait, l'ami voyait des « freeze ». Causes trouvées côté mod : téléportations toutes les ~2,2 s (sprint non suivi, seuil fixe de 800 u) et **deux rechargements d'instantané de 5-6 s en plein sprint** (resynchro d'inventaire demandée sans regarder le mouvement) ; en 0.6.4 encore (`p8_sprint_client`) : sprint du suiveur obtenu seulement par le repli `SetDesiredGait` après 0,6 s, retard moyen de 200 u jamais rattrapé (le suiveur ne peut pas aller plus vite que le pilote), départs/arrêts répétés en marche, et une resynchro envoyée en plein sprint.
+
+**Décision** :
+1. `PilotState` gagne un champ final facultatif `t_ms` (horloge du pilote à l'envoi). Ancien message : décodé avec `t_ms` = 0 (instants de réception utilisés).
+2. Le suiveur garde les positions du pilote dans un tampon trié par `t_ms` et vise la trajectoire du pilote 100 ms après le transit minimal (120 ms sans horloge) : interpolation d'Hermite (positions + vitesses), prolongée au plus 0,5 s si une position tarde (sans arrêt ni sortie du sprint tant que le retard reste < 1 s), puis pilote tenu arrêté. Un trou > 1 s ou un saut > 400 u n'est pas interpolé (téléportation « gap » permise).
+3. Commande en vitesse : vitesse voulue = vitesse du pilote rendu + 2 x écart (1/s), plafonnée à 1,2 x sprint. En course : échelle d'entrée = vitesse voulue / `MaxWalkSpeed`. Sprint quand le pilote rendu dépasse 1,1 x la course (ou retard > 120 u) : allure voulue Sprint par `SetDesiredGait` (plus de `SprintAction`, sans effet sur le pion suiveur), entrée pleine (l'ALS n'accorde le sprint qu'au-delà de 0,9) et vitesse réglée par `CharacterMovement.CurrentMovementSettings.SprintSpeed` = vitesse voulue (de la course + 15 à 1,2 x le sprint) + `bRequestMovementSettingsChange` ; rendue (720) à la sortie. **Mesuré** : écrire `MaxWalkSpeed` directement est sans effet (le pion restait à 720 avec 365 ou 864 écrits). Sortie du sprint dès que pilote et vitesse voulue repassent sous 1,03 x la course, sans délai : le pion ralentit avec le pilote (avant : 720 gardé puis freinage de 662 à 185 u/s en 0,1 s).
+4. Téléportation : trou de données (« gap »), écart > 800 u qui ne baisse pas de 50 u en 1 s ou > 1600 u, pion bloqué 2 s, écart vertical > 400 u pendant 0,5 s.
+5. Client : une resynchro (rechargement) n'est jamais demandée pendant un mouvement (pilote ou pion local > 50 u/s dans les 1,5 s) : attendue jusqu'à l'arrêt, au plus 120 s.
+6. **Critères de fluidité** mesurés par le mod chez le suiveur (compteurs, vérifiés par les scénarios `p8_sprint_*`) : 0 téléportation hors trou de données ; écart au pilote < 250 u en sprint, < 150 u en course, < 120 u en marche, < 60 u à l'arrêt ; 0 « stall » (pion < 30 % de la vitesse du pilote pendant 150 ms, pilote en mouvement), immobilité du pion pilote en mouvement <= 150 ms ; 0 creux (< 60 %, 150 ms) et 0 chute brusque (> 250 u/s en 0,1 s) pendant une course continue ; 0 arrêt du pion pilote en mouvement ; 0 image > 50 ms due au mod pendant le mouvement ; 0 resynchro envoyée pendant le mouvement. Pourquoi ces seuils : à 720 u/s, 0,2-0,3 s de retard (transit + tampon + réaction de l'ALS) font 150-220 u ; 150 ms d'immobilité est le seuil où un arrêt se voit ; à l'arrêt, 60 u = un pas.
+
+**Remise en cause si** : le jeu impose sa vitesse de sprint autrement (rattrapage sans effet : `own_speed_max` jamais au-dessus de 720 dans `coop_follow_stats`) ; ou si l'écart en sprint reste > 250 u à deux PC (tampon trop long pour le réseau réel : réduire `kRenderDelay`).
