@@ -281,6 +281,23 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     proto::NarrativeKind narr_kind = proto::NarrativeKind::Cinematic;
     uint32_t pilot_seq = 0;
     std::vector<std::pair<double, proto::Message>> later;   // envois différés (aperçu de l'action, puis l'action)
+    // Attentes de l'hôte (essai à deux PC du 2026-10-22, client figé par la barrière, hôte figé en attente) :
+    //   "no_ready": true                    ne jamais envoyer BattleReady (client qui n'entre jamais dans le combat) ;
+    //   "narrative": {"on":"welcome"|"battle_notice"|"battle_start","after_s":2,"s":30,"kind":"dialogue"|"cinematic"}
+    //                                       scène propre au faux client, after_s après l'événement "on" ;
+    //   "ready_after_narrative": true       BattleReady retenu tant que cette scène dure (on ne lance pas un combat en pleine scène) ;
+    //   "stuck_at_turn": N                  à partir du tour N : plus rien (ni tour, ni hash, ni défense), lien gardé vivant ;
+    //   "defense_delay_ms": D, "defense_delay_every": K   une défense sur K envoyée D ms après la demande (propriétaire en retard).
+    const bool no_ready = script["no_ready"].as_bool(false);
+    const bool ready_after_narr = script["ready_after_narrative"].as_bool(false);
+    const json::Value& own_narr = script["narrative"];
+    const std::string own_narr_on = own_narr["on"].as_string("welcome");
+    double own_narr_from = -1, own_narr_end = -1;   // instant de l'événement "on", fin de la scène
+    int own_narr_state = 0;   // 0 pas commencée, 1 en cours, 2 finie
+    const int stuck_at = static_cast<int>(script["stuck_at_turn"].as_int(0));
+    bool stuck = false;
+    const double def_delay_s = script["defense_delay_ms"].as_number(0) / 1000.0;
+    const int def_delay_every = std::max<int>(1, static_cast<int>(script["defense_delay_every"].as_int(1)));
 
     std::vector<std::string> defense;
     for (size_t i = 0; i < script["defense"].size(); ++i) defense.push_back(script["defense"][i].as_string("fail"));
@@ -352,6 +369,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
         while (lp->pop(m)) {
             if (auto* w = std::get_if<proto::Welcome>(&m)) {
                 my_id = w->player_id;
+                if (own_narr_on == "welcome" && own_narr_from < 0) own_narr_from = now_s();
                 ++counts["welcomes"];
             } else if (auto* r = std::get_if<proto::Reject>(&m)) {
                 log.write("rejected", JsonObj().add("detail", r->detail).add("reason", static_cast<int>(r->reason)));
@@ -386,11 +404,14 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++counts["owner_updates"];
             } else if (auto* notice = std::get_if<proto::BattleStart>(&m); notice && notice->battle_id == 0) {
                 ++counts["battle_notices"];   // avis précoce de l'hôte : le vrai BattleStart suit
+                if (own_narr_on == "battle_notice" && own_narr_from < 0) own_narr_from = now_s();
             } else if (auto* bs = std::get_if<proto::BattleStart>(&m)) {
                 owners = bs->owners;
                 ++counts["battle_starts"];
+                if (own_narr_on == "battle_start" && own_narr_from < 0) own_narr_from = now_s();
                 // Démarrage coordonné : le faux client est « dans » le combat (ou un peu plus tard : "ready_delay_s").
-                ready_at = now_s() + script["ready_delay_s"].as_number(0);
+                ready_at = no_ready ? -1 : now_s() + script["ready_delay_s"].as_number(0);
+                if (no_ready) ++counts["ready_withheld"];
                 ready_battle = bs->battle_id;
                 if (!bs->world_enemy.empty()) ++counts["world_battles"];
             } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
@@ -415,6 +436,12 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     pause_off_at = now_s() + script["pause_in_battle"]["s"].as_number(3);
                     ++counts["pauses_sent"];
                 }
+                if (stuck_at > 0 && !stuck && ts->turn >= static_cast<uint32_t>(stuck_at)) {
+                    stuck = true;
+                    ++counts["stuck"];
+                    log.write("stuck", JsonObj().add("turn", ts->turn));
+                }
+                if (stuck) continue;
                 bool mine = false;
                 for (auto& o : owners) if (ts->kind == proto::ActorKind::Hero && o.spot == ts->index && o.player_id == my_id) mine = true;
                 if (!mine) continue;
@@ -561,15 +588,18 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 }
                 ++turns_played;
             } else if (auto* dq = std::get_if<proto::DefenseRequest>(&m)) {
+                if (stuck) continue;
                 proto::DefenseResult dr;
                 dr.battle_id = dq->battle_id;
                 dr.turn = dq->turn;
                 dr.spot = dq->spot;
                 dr.hit = dq->hit;
-                dr.result = defense_of(defense[static_cast<size_t>(defense_index++) % defense.size()], dq->jumpable != 0);
-                lp->send(dr);
+                const int idx = defense_index++;
+                dr.result = defense_of(defense[static_cast<size_t>(idx) % defense.size()], dq->jumpable != 0);
+                if (def_delay_s > 0 && idx % def_delay_every == 0) { later.emplace_back(now_s() + def_delay_s, dr); ++counts["defenses_delayed"]; }
+                else lp->send(dr);
             } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
-                lp->send(*sh);   // le faux client n'a pas d'état propre : il renvoie le hash de l'hôte
+                if (!stuck) lp->send(*sh);   // le faux client n'a pas d'état propre : il renvoie le hash de l'hôte
             } else if (std::get_if<proto::BattleEnd>(&m)) {
                 ++counts["battle_ends"];
                 if (!session) {
@@ -674,7 +704,22 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
             lp->send(d);
             ++counts["economy_sent"];
         }
-        if (ready_at >= 0 && now_s() >= ready_at) { lp->send(proto::BattleReady{ready_battle, my_id}); ready_at = -1; ++counts["ready_sent"]; }
+        // Scène propre au faux client ("narrative"), comme un dialogue ou une cinématique que l'hôte n'a pas.
+        if (own_narr.is_object() && own_narr_from >= 0 && my_id != 0xFF) {
+            const auto kind = own_narr["kind"].as_string("dialogue") == "cinematic" ? proto::NarrativeKind::Cinematic : proto::NarrativeKind::Dialogue;
+            if (own_narr_state == 0 && now_s() - own_narr_from >= own_narr["after_s"].as_number(0)) {
+                lp->send(proto::NarrativeState{my_id, kind, true, ++narr_seq});
+                own_narr_state = 1;
+                own_narr_end = now_s() + own_narr["s"].as_number(30);
+                ++counts["own_narratives"];
+            } else if (own_narr_state == 1 && now_s() >= own_narr_end) {
+                lp->send(proto::NarrativeState{my_id, kind, false, ++narr_seq});
+                own_narr_state = 2;
+            }
+        }
+        if (ready_at >= 0 && now_s() >= ready_at && !(ready_after_narr && own_narr_state == 1)) {
+            lp->send(proto::BattleReady{ready_battle, my_id}); ready_at = -1; ++counts["ready_sent"];
+        }
         // "resync_after_s" : une fois entré, demande un nouvel instantané (désync d'exploration simulée).
         if (joined_at >= 0 && counts["resyncs_sent"] == 0 &&
             ((script["resync_after_s"].is_number() && now_s() - joined_at > script["resync_after_s"].as_number(10)) ||

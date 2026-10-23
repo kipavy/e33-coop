@@ -1,0 +1,17 @@
+{
+  "name": "p8_prologue_host",
+  "description": "Pendant du duel du prologue côté hôte (essai à deux PC du 2026-10-22) : l'hôte lance un combat pendant que le client est dans une scène à lui (dialogue de 25 s qui commence à la réception du BattleStart ; il n'entre dans le combat qu'à la fin). L'hôte n'est jamais tenu par la barrière narrative pendant le combat ; son premier tour attend le client (raison affichée : en pleine conversation, sans délai d'inactivité) puis repart dès son BattleReady. Réseau simulé chez le faux client.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 700,
+  "wait_players": 1,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [{ "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=8", "-e33readyidle=15"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_prologue.json", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },
+  "expect": { "battle_end": "any", "battle_holds": "1", "battle_holds_released": "1", "battle_ready_timeouts": "0", "battle_hold_max_ms": ">=20000",
+              "barrier_holds_in_battle": "0", "remote_actions": ">=1", "battle_frame_max_ms": "<3500", "game_thread_stalls_battle": "0" }
+}

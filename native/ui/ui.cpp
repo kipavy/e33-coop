@@ -103,6 +103,9 @@ constexpr Entry kTexts[] = {
     {"wait_reconnecting", "En attente de {0}, qui se reconnecte…", "Waiting for {0} to reconnect…"},
     {"wait_battle_prep", "En attente de {0}, qui entre en combat…", "Waiting for {0} to enter the battle…"},
     {"wait_generic", "En attente de {0}…", "Waiting for {0}…"},
+    // Attentes bornées : la partie ne reste jamais figée sur un joueur qui ne répond plus
+    {"battle_started_without", "{0} n'entre pas dans le combat : il commence sans attendre", "{0} is not entering the battle: it starts without them"},
+    {"turn_forced_stuck", "{0} ne répond plus : attaque automatique", "{0} is not responding: automatic attack"},
     {"seconds_suffix", " {0} s", " {0} s"},
     {"names_and", "{0} et {1}", "{0} and {1}"},
     // Joueur en retard (cinématique ou dialogue encore en cours ici)

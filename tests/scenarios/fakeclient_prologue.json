@@ -1,0 +1,11 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "current",
+  "gameplay_mods": [],
+  "narrative": { "on": "battle_start", "after_s": 0, "s": 25, "kind": "dialogue" },
+  "ready_after_narrative": true,
+  "actions": [{ "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "expect": { "own_narratives": "1", "ready_sent": "1", "battle_starts": "1" }
+}

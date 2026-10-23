@@ -69,6 +69,14 @@ constexpr double kBusyMax = 300.0;         // pair seulement « occupé » (char
 constexpr double kHandshakeTimeout = 30.0; // hôte : connexion sans Hello valide
 constexpr double kClientHandshakeTimeout = 90.0;   // client : pas de réponse de l'hôte (il peut être en plein chargement)
 constexpr double kReadyTimeout = 600.0;    // hôte : attente des autres au début d'un combat (cinématique de boss : ~5 min)
+// Hôte, démarrage coordonné : un joueur qui n'entre pas dans le combat alors qu'il ne fait rien d'autre (ni chargement,
+// ni cinématique, ni dialogue, ni menu, ni reconnexion) n'y entrera sans doute jamais (barrière restée tenue chez lui,
+// lancement impossible…) : le combat commence sans lui au bout de ce délai d'inactivité (-e33readyidle=N). Les attentes
+// justifiées (cinématique de boss, chargement) gardent kReadyTimeout.
+constexpr double kReadyIdleTimeout = 60.0;
+// Hôte : tour du héros d'un joueur qui n'a même pas commencé ce tour chez lui (aucun StateHash de ce tour) depuis ce
+// temps de jeu (-e33stuckturn=N) : attaque automatique, comme le minuteur de tour, pour que la partie ne reste pas figée.
+constexpr double kStuckTurnTimeout = 60.0;
 constexpr uint8_t kMaxClients = 2;         // 3 joueurs au plus
 
 struct Peer {
@@ -206,7 +214,13 @@ struct Battle {
     bool hold = false;
     double hold_since = 0;
     double hold_logged_at = 0;                             // hôte : dernier journal « on attend encore » (diagnostic)
+    double hold_idle_s = 0;                                // hôte : temps continu où tous les joueurs attendus sont inactifs
     bool ready_sent = false;                               // client
+    double start_rx_at = -1;                               // client : réception du BattleStart (délai jusqu'au BattleReady)
+    // Hôte : joueurs qui ont commencé chaque tour chez eux (leur StateHash de ce tour), et joueurs qui ne répondent plus
+    // dans ce combat (tour bloqué : leurs défenses et QTE ne sont plus attendus, jusqu'à leur prochain StateHash).
+    std::map<uint32_t, std::set<uint8_t>> acks;
+    std::set<uint8_t> unresponsive;
     // Minuteur de tour (option, 0 = aucun)
     uint16_t turn_timer_s = 0;
     std::set<std::pair<uint32_t, int>> forced;             // actions imposées par l'hôte (minuteur écoulé)
@@ -246,6 +260,9 @@ struct State {
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
     bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
     bool turn_dep = false;                                 // -e33turndep=1 : attente du TurnStart par dépendance de début de tour (essai)
+    double ready_idle_s = kReadyIdleTimeout;               // hôte : -e33readyidle=N
+    double stuck_turn_s = kStuckTurnTimeout;               // hôte : -e33stuckturn=N
+    double barrier_battle_since = -1;                      // diagnostic : barrière tenue pendant un combat engagé (depuis)
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     bool input_enabled = true;
     UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
@@ -640,21 +657,32 @@ void advance_clock(double dt)
     s.tick_now = s.now;
 }
 
-// Pompe le réseau en bloquant le game thread jusqu'à cond() ou expiration (utilisé dans les hooks).
+// Valeur maximale d'un compteur (durées les plus longues : attentes, images).
+void bump_max(const char* name, int v) { int& c = s.counters[name]; c = std::max(c, v); }
+
+// Pompe le réseau en bloquant le game thread jusqu'à cond() ou expiration (utilisé dans les hooks). L'image est figée
+// pendant ce temps : chaque attente est mesurée (wait_max_ms), et journalisée avec son origine au-delà de 250 ms.
 template <class Cond>
-bool wait_for(Cond cond, double timeout_s)
+bool wait_for(const char* site, Cond cond, double timeout_s)
 {
     const ULONGLONG start = GetTickCount64();
     const double base = s.now;
+    bool ok = true;
     while (!cond()) {
         const double elapsed = (GetTickCount64() - start) / 1000.0;
-        if (elapsed > timeout_s || s.ended) return false;
+        if (elapsed > timeout_s || s.ended) { ok = false; break; }
         s.now = base + elapsed;
         hb.last_tick_ms = steady_ms();
         pump_network();
         Sleep(0);   // Sleep(1) dure ~15 ms sous Windows : on cède juste la main
     }
-    return true;
+    const int ms = static_cast<int>(GetTickCount64() - start);
+    bump_max("wait_max_ms", ms);
+    if (ms >= 250) {
+        bump("waits_over_250ms");
+        log().write("coop_wait_long", JsonObj().add("site", site).add("ms", ms).add("ok", ok), s.battle.turn);
+    }
+    return ok;
 }
 
 // Messages de jeu communs (hôte et client) : stockés pour les points de synchro ; l'hôte relaie aux autres.
@@ -740,7 +768,16 @@ bool handle_battle_common(Peer& p, proto::Message& m)
         return true;
     }
     if (auto* sh = std::get_if<proto::StateHash>(&m)) {
-        if (sh->battle_id == b.id) { b.remote_hash[sh->turn] = sh->hash; check_hash(sh->turn); }
+        if (sh->battle_id == b.id) {
+            // Hôte : ce joueur a commencé ce tour chez lui (il répond de nouveau s'il était bloqué).
+            if (s.role == Role::Host) {
+                b.acks[sh->turn].insert(p.player_id);
+                if (sh->turn >= b.turn && b.unresponsive.erase(p.player_id))
+                    log().write("coop_player_responsive", JsonObj().add("player", static_cast<int>(p.player_id)), b.turn);
+            }
+            b.remote_hash[sh->turn] = sh->hash;
+            check_hash(sh->turn);
+        }
         return true;
     }
     if (auto* ping = std::get_if<proto::Ping>(&m)) { send_to(p, proto::Pong{ping->t_us}, false); return true; }
@@ -891,6 +928,7 @@ void handle(Peer& p, proto::Message& m)
         s.last_start = *bs;
         s.battle = Battle{};   // remis à zéro dès maintenant : les messages suivants de l'hôte s'y accumulent
         s.battle.id = bs->battle_id;
+        s.battle.start_rx_at = s.now;
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
         s.battle.rng_seed = bs->rng_seed;
         s.battle.turn_timer_s = bs->turn_timer_s;
@@ -911,6 +949,14 @@ void handle(Peer& p, proto::Message& m)
     } else if (auto* be = std::get_if<proto::BattleEnd>(&m)) {
         if (be->battle_id == s.battle.id) { s.battle.host_end = be->result; s.battle.host_end_at = s.now; }
         log().write("coop_battle_end_received", JsonObj().add("battle", be->battle_id).add("result", static_cast<int>(be->result)));
+        // Combat fini chez l'hôte avant d'avoir pu être lancé ici (monde pas prêt, lancement impossible) : il ne l'est plus,
+        // sinon il partirait plus tard, hors de propos (l'hôte est passé à autre chose).
+        if (s.pending_start && s.pending_start->battle_id == be->battle_id) {
+            s.pending_start.reset();
+            bump("battle_starts_dropped");
+            log().write("coop_battle_start_dropped", JsonObj().add("battle", be->battle_id).add("why", "host battle ended before it started here"));
+            if (!s.battle.active) s.battle.finalized = true;   // jamais commencé ici : rien à clore dans le jeu
+        }
     } else if (auto* rw = std::get_if<proto::BattleRewards>(&m)) {
         if (rw->battle_id == s.battle.id) s.battle.host_rewards = *rw;
     }
@@ -1308,6 +1354,10 @@ void client_turn_start(UObject* actor)
     if (!b.ready_sent) {   // démarrage coordonné : l'hôte attend que chacun ait commencé ce combat
         b.ready_sent = true;
         for (auto& p : s.peers) send_to(p, proto::BattleReady{b.id, s.my_player_id});
+        // Délai depuis le BattleStart de l'hôte (essai à deux PC du 2026-10-22 : jamais envoyé, l'hôte restait figé).
+        const int delay_ms = b.start_rx_at >= 0 ? static_cast<int>((s.now - b.start_rx_at) * 1000.0) : -1;
+        if (delay_ms >= 0) bump_max("battle_ready_delay_ms", delay_ms);
+        log().write("coop_battle_ready_sent", JsonObj().add("battle", b.id).add("delay_ms", delay_ms), b.turn);
     }
     // Combat déjà fini chez l'hôte (BattleEnd reçu) et pourtant un tour recommence ici : la simulation locale a divergé
     // (ennemi encore vivant ici). Aucun état de l'hôte ne viendra pour ce tour : pas d'attente, fin imposée (tick).
@@ -1404,7 +1454,7 @@ void client_turn_finish(UObject* actor)
     const bool deferred = !b.dep_start.units.empty() && b.dep_start.turn == b.turn;
     // L'hôte rythme les tours : attendre son début de tour (TurnStart, StateHash, StateSync, dans cet ordre).
     // Fin de combat de l'hôte arrivée pendant l'attente : aucun état ne viendra pour ce tour.
-    if (!wait_for([&] { return b.host_sync.count(b.turn) > 0 || b.host_end >= 0; }, 15.0)) {
+    if (!wait_for("turn_state", [&] { return b.host_sync.count(b.turn) > 0 || b.host_end >= 0; }, 15.0)) {
         if (s.ended) return;   // l'hôte est parti pendant l'attente : ce n'est pas un tour manqué
         // Jamais une fin de session : le lien est surveillé à part (silence de 15 s, D14). L'hôte reste maître du rythme ;
         // l'écart éventuel est corrigé par son état au tour suivant, ou par la fin imposée si son BattleEnd arrive.
@@ -1581,6 +1631,7 @@ void on_player_left(uint8_t player, const std::string& name, const std::string& 
         bump("heroes_taken_over", taken);
     }
     b.ready.erase(player);
+    b.unresponsive.erase(player);
     send_roster();
     ui::toast(why == "bye" ? "player_left" : "player_lost", {name});
     log().write("session_leave", JsonObj().add("player_id", static_cast<int>(player)).add("name", name).add("why", why).add("heroes_taken", taken)
@@ -1727,18 +1778,39 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
             if (p.accepted && p.player_id == owner) send_to(p, proto::DefenseRequest{b.id, b.turn, static_cast<uint8_t>(spot), hit, static_cast<uint8_t>(jumpable), 3000});
     const TurnSpotSeq key{b.turn, spot, hit};
     const ULONGLONG t0 = GetTickCount64();
-    // Propriétaire parti pendant l'attente (l'hôte reprend le héros) : échec par défaut, sans attendre la fin du délai.
-    const bool got = wait_for([&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner; }, kDefenseTimeout) && b.defenses.count(key) > 0;
+    // Attente bloquante (image figée) du résultat du propriétaire, bornée à kDefenseTimeout. Sortie sans attendre la fin
+    // du délai : propriétaire parti (l'hôte reprend le héros), combat déjà fini chez l'hôte (client : aucun résultat ne
+    // viendra), ou propriétaire qui ne répond plus dans ce combat (hôte : tour bloqué chez lui, attaque imposée).
+    const bool unresponsive = s.role == Role::Host && b.unresponsive.count(owner) > 0;
+    const bool got = !unresponsive &&
+                     wait_for("defense", [&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner || (s.role == Role::Client && b.host_end >= 0); },
+                              kDefenseTimeout) &&
+                     b.defenses.count(key) > 0;
     const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
+    bump_max("defense_wait_max_ms", static_cast<int>(waited_ms));
     proto::Defense res = proto::Defense::Fail;
+    const char* why = "received";
     if (got) res = b.defenses[key];
-    else bump("defense_timeouts");
+    else if (unresponsive) { why = "owner_unresponsive"; bump("defense_waits_skipped"); }
+    else if (owner_of_spot(spot) != owner) { why = "owner_left"; bump("defense_waits_owner_left"); }
+    else if (s.role == Role::Client && b.host_end >= 0) { why = "host_battle_over"; bump("defense_waits_battle_over"); }
+    else {
+        why = "timeout";
+        bump("defense_timeouts");
+        // Hôte : propriétaire qui n'a même pas commencé ce tour chez lui (aucun StateHash) : il est bloqué ou très en
+        // retard. Ses prochains coups ne figeront plus l'image 3 s chacun (échec imposé, l'état de l'hôte fait foi) ; il
+        // redevient attendu dès son prochain StateHash.
+        if (s.role == Role::Host && !(b.acks.count(b.turn) && b.acks[b.turn].count(owner)) && b.unresponsive.insert(owner).second) {
+            bump("players_unresponsive");
+            log().write("coop_player_unresponsive", JsonObj().add("player", static_cast<int>(owner)).add("why", "defense timeout, turn not started there"), b.turn);
+        }
+    }
     impose_defense(hero, res, jumpable);
     b.imposed_check[stats_comp] = static_cast<int>(res);
     b.turn_defenses.push_back({spot, res});
     bump("defenses_imposed");
     log().write("coop_defense_imposed", JsonObj().add("spot", spot).add("hit", static_cast<int>(hit)).add("owner", static_cast<int>(owner)).add("jumpable", jumpable)
-                                         .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms), b.turn);
+                                         .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms).add("why", why), b.turn);
 }
 
 // Parade en duo : pendant le tour qui finit, des héros d'au moins deux joueurs ont été touchés (attaque de groupe ou
@@ -1897,7 +1969,7 @@ void subscribe()
             bump("actor_checks_deferred");   // vérifié au début du tour (OnTurnStart), sans figer le jeu ici
             return;
         }
-        if (!wait_for([&] {
+        if (!wait_for("turn_actor", [&] {
                 if (first) return (s.pending_start || b.active) && b.host_turns.count(1) > 0;
                 return b.host_turns.count(next) > 0 || b.host_end >= 0;
             }, 15.0)) {
@@ -2009,10 +2081,20 @@ void subscribe()
             const TurnSpotSeq key{b.turn, w.spot, w.seq};
             const ULONGLONG t0 = GetTickCount64();
             const uint8_t owner = owner_of_spot(w.spot);
-            const bool got = wait_for([&] { return b.combos.count(key) > 0 || owner_of_spot(w.spot) != owner; }, kComboTimeout) && b.combos.count(key) > 0;
+            // Pas d'attente (image figée) quand aucun résultat ne viendra à temps : action imposée par l'hôte (minuteur ou
+            // tour bloqué : le propriétaire ne l'a pas jouée), propriétaire qui ne répond plus, combat fini chez l'hôte.
+            const bool forced = b.forced.count({b.turn, w.spot}) > 0;
+            const bool skip = forced || (s.role == Role::Host && b.unresponsive.count(owner) > 0);
+            const bool got = b.combos.count(key) > 0 ||
+                             (!skip && wait_for("combo", [&] { return b.combos.count(key) > 0 || owner_of_spot(w.spot) != owner || (s.role == Role::Client && b.host_end >= 0); },
+                                                kComboTimeout) &&
+                              b.combos.count(key) > 0);
             const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
             if (got) w.plan = b.combos[key];
-            else { bump("combo_timeouts"); w.plan = proto::ComboResult{b.id, b.turn, static_cast<uint8_t>(w.spot), w.seq, false, false, proto::kNoPress}; }
+            else {
+                bump(skip ? "combo_waits_skipped" : (s.role == Role::Client && b.host_end >= 0) ? "combo_waits_battle_over" : "combo_timeouts");
+                w.plan = proto::ComboResult{b.id, b.turn, static_cast<uint8_t>(w.spot), w.seq, false, false, proto::kNoPress};
+            }
             if (w.plan.success && w.plan.press <= 1000)
                 b.presses.push_back({ctx.Context, w.start + std::chrono::microseconds(static_cast<int64_t>(w.duration * w.plan.press * 1000.0))});
             log().write("coop_combo_plan", JsonObj().add("spot", w.spot).add("seq", static_cast<int>(w.seq)).add("success", w.plan.success).add("perfect", w.plan.perfect)
@@ -2164,9 +2246,9 @@ void subscribe()
         if (!r.started || r.done || game::spot(caster) != r.key.second) return;
         const uint16_t seq = ++r.raycasts;
         std::optional<proto::FreeAimEvent> shot;   // copie : le vecteur grandit pendant l'attente
-        wait_for([&] {
+        wait_for("free_aim_shot", [&] {
             for (auto& e : s.battle.fa_events[r.key]) if (e.kind == proto::FreeAimKind::Shot && e.seq == seq) { shot = e; return true; }
-            return false;
+            return s.role == Role::Client && s.battle.host_end >= 0;   // combat fini chez l'hôte : plus aucun tir ne viendra
         }, 2.0);
         if (!shot) { bump("free_aim_timeouts"); return; }
         std::array<double, 3> p{shot->x, shot->y, shot->z};
@@ -2393,9 +2475,11 @@ void subscribe()
             broadcast(mine);
         } else {
             auto& b = s.battle;
-            wait_for([&] { return b.host_rewards.has_value(); }, 5.0);
+            const ULONGLONG t0 = GetTickCount64();
+            wait_for("rewards", [&] { return b.host_rewards.has_value(); }, 5.0);
             // Fin de combat de l'hôte arrivée entre-temps : ses récompenses suivent de peu (~2 s, p3_freeaim 2026-10-22).
-            if (!b.host_rewards && b.host_end >= 0) wait_for([&] { return b.host_rewards.has_value(); }, 4.0);
+            if (!b.host_rewards && b.host_end >= 0) wait_for("rewards_after_end", [&] { return b.host_rewards.has_value(); }, 4.0);
+            bump_max("rewards_wait_max_ms", static_cast<int>(GetTickCount64() - t0));
             bump("rewards_checked");
             bool same = b.host_rewards && b.host_rewards->xp == mine.xp && b.host_rewards->gold == mine.gold && b.host_rewards->loot.size() == mine.loot.size();
             for (size_t i = 0; same && i < mine.loot.size(); ++i)
@@ -2861,6 +2945,8 @@ void read_settings()
     s.turn_dep = arg(L"e33turndep") != L"0";   // attente sans figer le jeu, par défaut depuis le 2026-10-22 (-e33turndep=0 : attente bloquante)
     if (const std::wstring t = arg(L"e33turntimer"); !t.empty()) s.turn_timer_s = static_cast<uint16_t>(std::wcstoul(t.c_str(), nullptr, 10));
     s.duo_parry = arg(L"e33duoparry") != L"0";
+    if (const std::wstring v = arg(L"e33readyidle"); !v.empty()) s.ready_idle_s = std::wcstod(v.c_str(), nullptr);
+    if (const std::wstring v = arg(L"e33stuckturn"); !v.empty()) s.stuck_turn_s = std::wcstod(v.c_str(), nullptr);
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
     ui::init();
@@ -3154,25 +3240,48 @@ void run_remote_action()
     if (replay_free_aim(key, cur)) return;   // visée libre du propriétaire d'abord (elle ne termine pas le tour)
     auto it = b.commands.find(key);
     if (it == b.commands.end()) {
+        // Hôte : attaque automatique imposée au héros d'un autre joueur et diffusée (il la jouera en arrivant à ce tour).
+        auto force_attack = [&] {
+            proto::ActionCommand ac;
+            ac.battle_id = b.id;
+            ac.turn = b.turn;
+            ac.actor_spot = static_cast<uint8_t>(spot);
+            ac.action_type = game::ActAttack;
+            ac.targets = {{proto::ActorKind::Enemy, proto::kAutoSpot}};
+            ac.forced = true;
+            b.forced.insert(key);
+            b.commands[key] = ac;
+            b.command_time[key] = s.now - s.replay_lag_s;   // pas de décalage : personne n'attend ce QTE
+            broadcast(ac);
+        };
+        const bool running = !game::pause_menu_visible() && !explore::remote_paused();
         // Minuteur de tour (option, désactivé par défaut) : l'hôte impose une attaque automatique au héros du joueur muet.
-        if (s.role == Role::Host && b.turn_timer_s > 0 && !game::pause_menu_visible() && !explore::remote_paused()) {
+        if (s.role == Role::Host && b.turn_timer_s > 0 && running) {
             const double left = b.turn_timer_s - b.timer_elapsed;
             ui::set_status("turn", "turn_timer", {player_name(owner_of_spot(spot)), std::to_string(static_cast<int>(std::max(0.0, std::ceil(left))))});
             if (left <= 0) {
-                proto::ActionCommand ac;
-                ac.battle_id = b.id;
-                ac.turn = b.turn;
-                ac.actor_spot = static_cast<uint8_t>(spot);
-                ac.action_type = game::ActAttack;
-                ac.targets = {{proto::ActorKind::Enemy, proto::kAutoSpot}};
-                ac.forced = true;
-                b.forced.insert(key);
-                b.commands[key] = ac;
-                b.command_time[key] = s.now - s.replay_lag_s;   // pas de décalage : personne n'attend ce QTE
-                broadcast(ac);
+                force_attack();
                 bump("turn_timer_expired");
                 ui::toast("turn_forced", {player_name(owner_of_spot(spot))});
                 log().write("coop_turn_timer_expired", JsonObj().add("spot", spot).add("timer_s", static_cast<int>(b.turn_timer_s)), b.turn);
+                return;
+            }
+        }
+        // Tour bloqué (sans minuteur) : le propriétaire n'a même pas commencé ce tour chez lui (aucun StateHash de ce tour)
+        // depuis stuck_turn_s de temps de jeu, sans raison visible (chargement, reconnexion : on attend). Il ne jouera pas :
+        // attaque automatique, et ses défenses / QTE ne sont plus attendus (image figée) tant qu'il ne répond pas.
+        if (s.role == Role::Host && running && !controls(spot)) {
+            const uint8_t owner = owner_of_spot(spot);
+            const auto act = presence::activity(owner, s.now);
+            const bool reached = b.acks.count(b.turn) && b.acks[b.turn].count(owner);
+            if (!reached && b.timer_elapsed >= s.stuck_turn_s && act != presence::Activity::Loading && act != presence::Activity::Joining &&
+                act != presence::Activity::Reconnecting) {
+                force_attack();
+                b.unresponsive.insert(owner);
+                bump("turn_stuck_forced");
+                ui::toast("turn_forced_stuck", {player_name(owner)});
+                log().write("coop_turn_stuck", JsonObj().add("spot", spot).add("player", static_cast<int>(owner)).add("waited_s", b.timer_elapsed)
+                                                   .add("activity", presence::activity_name(act)), b.turn);
                 return;
             }
         }
@@ -3460,7 +3569,10 @@ void tick(double dt)
     if (s.role == Role::Solo) { if (s.neutral) neutral_tick(dt); return; }
     s.game_thread = GetCurrentThreadId();
     advance_clock(dt);
-    if (const int64_t st = hb.stall_of.exchange(0); st) log().write("game_thread_resumed", JsonObj().add("stalled_ms", steady_ms() - st));
+    if (const int64_t st = hb.stall_of.exchange(0); st) {
+        log().write("game_thread_resumed", JsonObj().add("stalled_ms", steady_ms() - st).add("battle", s.battle.active));
+        if (s.battle.active) bump("game_thread_stalls_battle");   // gel de plus de 5 s en plein combat (hors chargement)
+    }
     hb.last_tick_ms = steady_ms();
     heartbeat_start();
     if (!s.ended) explore_frames_tick(dt);
@@ -3485,6 +3597,7 @@ void tick(double dt)
         return;
     }
     // À-coups d'image en combat (> 50 ms) : un appui de QTE peut sembler « raté d'emblée » si le jeu saccade.
+    if (s.battle.active) bump_max("battle_frame_max_ms", static_cast<int>(dt * 1000.0));   // image la plus longue en combat
     if (s.battle.active && dt > 0.05) {
         bump("frame_hitches");
         log().write("frame_hitch", JsonObj().add("dt_ms", static_cast<int64_t>(dt * 1000.0)).add("in_combo_window", !s.battle.windows.empty()), s.battle.turn);
@@ -3550,32 +3663,63 @@ void tick(double dt)
     }
     // Démarrage coordonné : jeu en pause au premier tour tant qu'un joueur de la partie n'a pas commencé ce combat.
     if (auto& b = s.battle; b.hold) {
-        bool all = true;
-        for (auto& p : s.peers) if (in_game(p) && !b.ready.count(p.player_id)) all = false;
+        // Qui on attend et pourquoi (chargement, cinématique, menu, reconnexion ; sinon « entre en combat »).
+        std::vector<uint8_t> who;
+        for (auto& p : s.peers) if (in_game(p) && !b.ready.count(p.player_id)) who.push_back(p.player_id);
+        // Inactivité continue de tous les joueurs attendus : rien ne les retient, ils devraient déjà être là.
+        bool idle = !who.empty();
+        for (uint8_t w : who) if (presence::activity(w, s.now) != presence::Activity::Ready) idle = false;
+        b.hold_idle_s = idle ? b.hold_idle_s + dt : 0.0;
         const bool expired = s.now - b.hold_since > kReadyTimeout;
-        if (all || expired) {
+        const bool idle_out = b.hold_idle_s >= s.ready_idle_s;
+        if (who.empty() || expired || idle_out) {
             b.hold = false;
             explore::hold_pause("battle_start", false);
             ui::clear_status("wait");
-            if (expired) bump("battle_ready_timeouts");
+            if (expired || idle_out) {
+                // Jamais figé pour toujours : le combat commence sans eux ; ils suivront en arrivant (BattleStart reçu).
+                bump("battle_ready_timeouts");
+                if (idle_out && !expired) bump("battle_ready_idle_timeouts");
+                std::string names;
+                for (uint8_t w : who) names += (names.empty() ? "" : ", ") + player_name(w);
+                ui::toast("battle_started_without", {names}, 8.0);
+            }
             bump("battle_holds_released");
-            log().write("coop_battle_hold_release", JsonObj().add("waited_s", s.now - b.hold_since).add("timeout", expired), b.turn);
+            bump_max("battle_hold_max_ms", static_cast<int>((s.now - b.hold_since) * 1000.0));
+            log().write("coop_battle_hold_release", JsonObj().add("waited_s", s.now - b.hold_since).add("timeout", expired).add("idle_timeout", idle_out)
+                                                         .add("idle_s", b.hold_idle_s), b.turn);
         } else {
             if (!explore::pause_held("battle_start")) {
                 explore::hold_pause("battle_start", true);
                 bump("battle_holds");
                 log().write("coop_battle_hold", JsonObj(), b.turn);
             }
-            // Qui on attend et pourquoi (chargement, cinématique, menu, reconnexion ; sinon « entre en combat »).
-            std::vector<uint8_t> who;
-            for (auto& p : s.peers) if (in_game(p) && !b.ready.count(p.player_id)) who.push_back(p.player_id);
             if (s.now - std::max(b.hold_since, b.hold_logged_at) >= 15.0) {
                 b.hold_logged_at = s.now;
-                std::string ids;
-                for (uint8_t w : who) { if (!ids.empty()) ids += ","; ids += std::to_string(w); }
-                log().write("coop_battle_hold_waiting", JsonObj().add("waited_s", s.now - b.hold_since).add("players", ids), b.turn);
+                std::string ids, acts;
+                for (uint8_t w : who) {
+                    if (!ids.empty()) { ids += ","; acts += ","; }
+                    ids += std::to_string(w);
+                    acts += presence::activity_name(presence::activity(w, s.now));
+                }
+                log().write("coop_battle_hold_waiting", JsonObj().add("waited_s", s.now - b.hold_since).add("players", ids).add("activities", acts)
+                                                             .add("idle_s", b.hold_idle_s), b.turn);
             }
             ui::set_status_text("wait", "waiting_players", presence::wait_text(who, s.now, player_name, "wait_battle_prep"));
+        }
+    }
+    // Diagnostic (duel du prologue, 2026-10-22) : la barrière narrative ne doit jamais tenir pendant un combat coop engagé.
+    {
+        const bool engaged = s.pending_start.has_value() || (s.battle.active && !s.battle.finalized);
+        if (engaged && explore::pause_held("barrier")) {
+            if (s.barrier_battle_since < 0) s.barrier_battle_since = s.now;
+            else if (s.barrier_battle_since > 0 && s.now - s.barrier_battle_since > 2.0) {
+                s.barrier_battle_since = 0;   // une fois par épisode
+                bump("barrier_holds_in_battle");
+                log().write("coop_barrier_in_battle", JsonObj().add("pending_start", s.pending_start.has_value()).add("active", s.battle.active), s.battle.turn);
+            }
+        } else {
+            s.barrier_battle_since = -1;
         }
     }
     peer_activity_tick();
