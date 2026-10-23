@@ -373,4 +373,46 @@ bool shown() { return g.row != nullptr; }
 bool failed() { return g.failed; }
 bool take_click() { return g_clicked.exchange(false); }
 
+// --- Version du mod au menu principal -----------------------------------------------------------------
+// Posée quand l'écran titre s'active (son BP_GetDesiredFocusTarget : objet vivant à cet instant), en dernier dans
+// ButtonsBox, dans le style du sous-titre « appuyez sur une touche ». On ne déréférence jamais un widget gardé d'un
+// ancien menu : on compare seulement les pointeurs aux enfants vivants de la liste.
+namespace {
+UObject* g_version = nullptr;
+int g_version_errors = 0;
+
+void place_version(UObject* title)
+{
+    if (g_version_errors >= 3) return;
+    UObject* box = ue::get_object(title, STR("ButtonsBox"));
+    UObject* tmpl = ue::get_object(title, STR("PressAnyButtonText"));
+    if (!box || !tmpl) { ++g_version_errors; log().write("ui_version_error", JsonObj().add("what", "widgets")); return; }
+    ue::Call all(box, STR("GetAllChildren"));
+    if (!all || !all.invoke()) return;
+    for (UObject* c : all.out_object_array(STR("ReturnValue")))
+        if (c && c == g_version) { set_text(c, std::string("E33 Coop ") + E33COOP_VERSION); return; }   // déjà là : texte reposé (Construct peut le remettre)
+    UObject* pc = call_obj(tmpl, STR("GetOwningPlayer"));
+    UObject* w = pc ? create(tmpl->GetClassPrivate(), pc) : nullptr;
+    if (!w) { ++g_version_errors; log().write("ui_version_error", JsonObj().add("what", "create")); return; }
+    copy_props(w, tmpl, {STR("TextStyle"), STR("TextMinDesiredWidth"), STR("TextMaxDesiredWidth"), STR("Justification"),
+                         STR("ReduceTextSizeWhenWrapping"), STR("WrappingFontSizePercentage"), STR("MobileFontSizeMultiplier")});
+    if (!add_child(box, w, nullptr)) { ++g_version_errors; log().write("ui_version_error", JsonObj().add("what", "add")); return; }
+    set_text(w, std::string("E33 Coop ") + E33COOP_VERSION);
+    ue::Call op(w, STR("SetRenderOpacity"));
+    if (auto* v = static_cast<float*>(op ? op.param_ptr(STR("InOpacity")) : nullptr)) { *v = 0.45f; op.invoke(); }
+    g_version = w;
+    log().write("ui_version", JsonObj().add("version", E33COOP_VERSION));
+}
+} // namespace
+
+void subscribe_version()
+{
+    static bool done = false;
+    if (done) return;
+    done = true;
+    HookBus::get().post(std::wstring(kTitle) + L"BP_GetDesiredFocusTarget", [](HookCtx& ctx, UFunction*) {
+        if (ctx.Context) place_version(ctx.Context);
+    });
+}
+
 } // namespace e33::ui::joinbutton

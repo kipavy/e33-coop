@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Ajouts
+- Version du mod affichée au menu principal (sous les boutons) et en bas du panneau Coop (F9).
+
+### Suppressions
+- Bannière « L'hôte commence une nouvelle partie : l'intro démarre… » chez le client (inutile).
+
 ## [0.6.4] - 2026-10-23
 
 ### Corrections

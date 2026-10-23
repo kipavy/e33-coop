@@ -14,5 +14,7 @@ void tick(double now, const std::string& friend_name); // nom vide : pas de part
 bool shown();
 bool failed();                                         // insertion impossible : la carte d'invitation prend le relais
 bool take_click();
+// Version du mod (« E33 Coop X.Y.Z ») en bas de la liste du menu principal, toujours affichée ; idempotent.
+void subscribe_version();
 
 } // namespace e33::ui::joinbutton

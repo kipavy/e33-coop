@@ -2968,6 +2968,7 @@ void start_session(Role r, const char* why)
             coopsave::subscribe();
             subscribe_session();
             if (r == Role::Client && s.steam) ui::joinbutton::subscribe();   // bouton « Rejoindre <ami> » du menu principal
+            ui::joinbutton::subscribe_version();   // version du mod au menu principal
         } else {
             HookBus::get().try_register();   // en pleine partie : classes déjà chargées, accrochées tout de suite
         }
@@ -3000,6 +3001,7 @@ void init()
         coopsave::subscribe();
         subscribe_session();
         ui::joinbutton::subscribe();
+        ui::joinbutton::subscribe_version();   // version du mod au menu principal
         log().write("coop_neutral", JsonObj().add("mod_version", kModVersion).add("rejoin", std::to_string(s.rejoin_host)));
         return;
     }
