@@ -1,0 +1,15 @@
+{
+  "name": "p8_cutscene_client",
+  "description": "Cinématique de l'hôte (essai réel à deux PC du 2026-10-22, Lumière) : le faux hôte rejoue la tranche twopc_cutscene (sprint, corde, puis cinématique de l'hôte de 30,8 s à 67,9 s), positions à 20/s, réseau simulé. Le client doit jouer la même scène en même temps (pas après la fin chez l'hôte), sans pause de la barrière avant la scène.",
+  "join": true,
+  "timeout_s": 600,
+  "shots_every_s": 5,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "until": "narratives_finished", "is": ">=1", "timeout": 240 },
+    { "do": "wait", "s": 10 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/twopc_cutscene.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_cutscene_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "600"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "narratives_started": ">=1", "scene_start_lag_ms_max": "<=2000", "barrier_waits_unstarted": "0", "barrier_timeouts": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
+}

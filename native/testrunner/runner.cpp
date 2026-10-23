@@ -943,6 +943,7 @@ void subscribe()
 //   {"do":"wait_world"}                    monde prêt et stable 3 s (après chargement / transition)
 //   {"do":"wait_join","players":1}         hôte : clients entrés dans la partie
 //   {"do":"move","dir":[1,0],"s":3}        pilote : marche dans une direction (AddMovementInput)
+//   {"do":"teleport","pos":[x,y,z],"yaw":0} pilote : pion placé à cette position
 //   {"do":"interact","actor":"<préfixe>"}  interaction avec un PNJ / objet (nom d'acteur commençant par)
 //   {"do":"choose","index":1}              choix de dialogue (attend que la question soit posée)
 //   {"do":"wait_dialogue_end"}
@@ -1034,6 +1035,12 @@ void run_explore_step(float dt)
         if (g.step_t >= st["s"].as_number(2)) { next_step("time"); return; }
         if (UObject* pawn = game::explore_pawn())
             game::move_pawn(pawn, st["dir"][0].as_number(1), st["dir"][1].as_number(0), st["scale"].as_number(1));
+    } else if (what == "teleport") {   // pilote : pion placé à "pos" [x,y,z] (orientation "yaw"), ex. juste avant une zone
+        UObject* pawn = game::explore_pawn();
+        if (!pawn) return;
+        const double pos[3] = {st["pos"][0].as_number(0), st["pos"][1].as_number(0), st["pos"][2].as_number(0)};
+        if (!game::teleport_pawn(pawn, pos, st["yaw"].as_number(0))) { fail("teleport failed"); return; }
+        next_step("done");
     } else if (what == "interact") {
         UObject* o = find_interactable(st["actor"].as_string());
         if (!o) { fail("interact: no actor starting with " + st["actor"].as_string()); return; }

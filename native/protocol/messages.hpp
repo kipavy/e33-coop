@@ -22,7 +22,9 @@ namespace e33::proto {
 //      resynchro (ResyncRequest), minuteur de tour (BattleStart.turn_timer_s, ActionCommand.forced).
 // Ajouts sans changement de version (un pair plus ancien ignore un type inconnu, le flux reste lisible) :
 //      aperçu de l'action en préparation (IntentPreview), caméra de la visée libre du propriétaire (AimView),
-//      état des menus de combat du propriétaire, rejoué dans les menus du jeu chez les autres (MenuState).
+//      état des menus de combat du propriétaire, rejoué dans les menus du jeu chez les autres (MenuState),
+//      scène (cinématique) commencée par le pilote et sa cause, déclenchée aussitôt chez les suiveurs (SceneStart), et passée
+//      ensemble (SceneSkip).
 inline constexpr uint16_t kProtocolVersion = 6;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
@@ -32,7 +34,7 @@ enum class MsgType : uint16_t {
     DefenseRequest = 24, DefenseResult = 25, StateHash = 26, BattleEnd = 27, Draws = 28,
     ComboResult = 29, StateSync = 30, BattleRewards = 32, FreeAimEvent = 33, IntentPreview = 34, AimView = 35, MenuState = 36,
     SaveOffer = 40, SaveChunk = 41, JoinWait = 42, JoinReady = 43, PilotState = 44, PilotRequest = 45, PilotChange = 46,
-    WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52,
+    WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52, SceneStart = 53, SceneSkip = 54,
     Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
     BuildOffer = 65, BuildChunk = 66, EconomyDelta = 67,
 };
@@ -268,6 +270,23 @@ struct MapChange { uint32_t seq = 0; std::string level; std::string spawn_tag; }
 enum class NarrativeKind : uint8_t { Dialogue = 0, Cinematic = 1 };
 struct NarrativeState { uint8_t player = 0; NarrativeKind kind = NarrativeKind::Dialogue; bool active = false; uint32_t seq = 0; };
 struct BarrierRelease { uint32_t seq = 0; };
+// Pilote -> autres : il commence une cinématique (TriggerCinematic). scene = Cinematic_LevelSequence_ID, sequence = asset
+// joué ; cause = ce qui l'a déclenchée chez lui (zone traversée, interaction, game action) et cause_path son chemin
+// complet ; action = game action exécutée (chemin) ; x/y/z = position du pilote à ce moment. Le suiveur déclenche la
+// même scène tout de suite (même zone), au lieu de la jouer après la fin chez le pilote (2026-10-23).
+enum class SceneCause : uint8_t { Unknown = 0, Zone = 1, Interaction = 2, Action = 3 };
+struct SceneStart {
+    uint8_t player = 0;
+    uint32_t seq = 0;
+    std::string scene;
+    std::string sequence;
+    SceneCause cause = SceneCause::Unknown;
+    std::string cause_path;
+    std::string action;
+    double x = 0, y = 0, z = 0;
+};
+// Pilote -> autres : il passe la cinématique en cours (SkipCinematic) ; les autres passent la même (fin ensemble).
+struct SceneSkip { uint8_t player = 0; uint32_t seq = 0; std::string scene; };
 struct PauseState { uint8_t player = 0; bool paused = false; bool in_battle = false; };
 
 // --- Robustesse (v6, phase 5) -----------------------------------------------------------------
@@ -303,7 +322,7 @@ using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStar
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
                              WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
                              Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk, EconomyDelta,
-                             IntentPreview, AimView, MenuState>;
+                             IntentPreview, AimView, MenuState, SceneStart, SceneSkip>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).
