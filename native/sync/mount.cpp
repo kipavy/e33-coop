@@ -1,15 +1,25 @@
 #include "mount.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
 
+#include <Unreal/UObjectGlobals.hpp>
+#include <Unreal/UClass.hpp>
+#include <Unreal/UFunction.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+
 #include "../common/cmdline.hpp"
 #include "../common/jsonlog.hpp"
+#include "../common/minijson.hpp"
 #include "../hooks/game.hpp"
+#include "../hooks/hookbus.hpp"
 #include "../hooks/log.hpp"
+#include "../hooks/reflect.hpp"
 #include "../hooks/ue.hpp"
 
 namespace e33::mount {
@@ -298,6 +308,364 @@ void reset()
     const auto listed = s.listed;
     s = S{};
     s.listed = listed;
+}
+
+// --- Banc d'essai (étapes "mount" des scénarios) ----------------------------------------------------------------
+// Diagnostic sur la carte du monde (classe et fonctions d'Esquie, état de la monture) et actions de monture par le
+// code (jamais de touche simulée). Seul le test runner appelle ces fonctions.
+namespace {
+
+using RC::Unreal::UStruct;
+using RC::Unreal::UFunction;
+using RC::Unreal::FProperty;
+
+struct Bench {
+    std::map<std::string, int> counts;
+    std::set<std::string> members_logged;     // classes dont les membres ont été journalisés
+    std::set<std::wstring> traced;            // fonctions accrochées (trace)
+    std::map<std::string, int> calls;         // appels vus par fonction (trace)
+    double next_watch = 0;
+} b;
+
+std::string lower(std::string v)
+{
+    for (auto& ch : v) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return v;
+}
+
+bool has_any(const std::string& name, const std::vector<std::string>& needles)
+{
+    const std::string l = lower(name);
+    for (const auto& k : needles) if (l.find(k) != std::string::npos) return true;
+    return false;
+}
+
+const std::vector<std::string>& mount_needles()
+{
+    static const std::vector<std::string> n = {"mount", "esquie", "ride", "rider", "fly", "flying", "swim", "dive", "water", "takeoff",
+                                               "land", "glide", "boat", "vehicle", "capabilit", "worldmap", "possess", "underwater"};
+    return n;
+}
+
+bool is_bp_class(UStruct* c) { return c && c->GetClassPrivate() && c->GetClassPrivate()->GetName() == STR("BlueprintGeneratedClass"); }
+
+std::string class_chain(UObject* o)
+{
+    std::string out;
+    if (!o) return out;
+    for (UStruct* c = o->GetClassPrivate(); c; c = c->GetSuperStruct()) { if (!out.empty()) out += ">"; out += ue::to_utf8(c->GetName()); }
+    return out;
+}
+
+UObject* possessed()
+{
+    UObject* ctrl = game::controller();
+    if (!ctrl) return nullptr;
+    ue::Call c(ctrl, STR("K2_GetPawn"));
+    if (!c || !c.invoke()) return nullptr;
+    return c.out_object(STR("ReturnValue"));
+}
+
+UObject* attach_parent(UObject* a)
+{
+    ue::Call c(a, STR("GetAttachParentActor"));
+    return c && c.invoke() ? c.out_object(STR("ReturnValue")) : nullptr;
+}
+
+// Fonctions et propriétés déclarées par chaque classe Blueprint de o (une fois par classe).
+void log_members(const std::string& label, const char* what, UObject* o)
+{
+    if (!o) return;
+    for (UStruct* c = o->GetClassPrivate(); c && is_bp_class(c); c = c->GetSuperStruct()) {
+        const std::string cname = ue::to_utf8(c->GetName());
+        if (!b.members_logged.insert(cname).second) continue;
+        std::vector<std::string> fns, props;
+        for (UFunction* f : RC::Unreal::TFieldRange<UFunction>(c, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+            if (!f) continue;
+            const std::string n = ue::to_utf8(f->GetName());
+            if (n.rfind("ExecuteUbergraph", 0) == 0) continue;
+            fns.push_back(n);
+            if (fns.size() >= 700) break;
+        }
+        for (FProperty* p : RC::Unreal::TFieldRange<FProperty>(c, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+            if (!p) continue;
+            props.push_back(reflect::clean_name(p->GetName()));
+            if (props.size() >= 500) break;
+        }
+        log().write("coop_mount_diag_members", JsonObj().add("label", label).add("what", what).add("class", cname)
+                                                   .add("functions", join(fns)).add("props", join(props)));
+    }
+}
+
+// Valeurs des propriétés dont le nom parle de monture / vol / nage (toute la chaîne de classes).
+std::string state_props(UObject* o)
+{
+    std::string out;
+    if (!o) return out;
+    int n = 0;
+    for (FProperty* p : RC::Unreal::TFieldRange<FProperty>(o->GetClassPrivate(), RC::Unreal::EFieldIterationFlags::IncludeSuper)) {
+        if (!p) continue;
+        const std::string name = reflect::clean_name(p->GetName());
+        if (!has_any(name, mount_needles())) continue;
+        reflect::Leaves l;
+        reflect::flatten(p, p->ContainerPtrToValuePtr<void>(o), name, l, 5);   // profondeur réduite : valeurs simples
+        int k = 0;
+        for (auto& [path, val] : l) {
+            if (++k > 12) break;
+            if (!out.empty()) out += ";";
+            out += path + "=" + val;
+        }
+        if (++n >= 80) break;
+    }
+    return out;
+}
+
+int capabilities_mask(UObject* pawn)
+{
+    int mask = 0;
+    for (int i = 0; i < 11; ++i) {
+        ue::Call c(pawn, STR("IsCapabilityAllowed"));
+        if (!c) return -1;
+        c.set_int(STR("Capability"), i);
+        if (c.invoke() && c.out_bool(STR("isAllowed"))) mask |= 1 << i;
+    }
+    return mask;
+}
+
+std::vector<std::string> bp_classes(const std::vector<std::string>& needles)
+{
+    std::vector<UObject*> all;
+    RC::Unreal::UObjectGlobals::FindAllOf(STR("BlueprintGeneratedClass"), all);
+    std::vector<std::string> out;
+    for (UObject* c : all) {
+        if (!c) continue;
+        const std::string n = ue::to_utf8(c->GetName());
+        if (has_any(n, needles)) out.push_back(n);
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+std::vector<UObject*> instances(const std::string& cls)
+{
+    std::vector<UObject*> all, out;
+    RC::Unreal::UObjectGlobals::FindAllOf(ue::from_utf8(cls).c_str(), all);
+    for (UObject* o : all) {
+        if (!o) continue;
+        const std::string n = ue::to_utf8(o->GetName());
+        if (n.rfind("Default__", 0) == 0) continue;   // objet par défaut de la classe
+        out.push_back(o);
+    }
+    return out;
+}
+
+// Acteur Esquie : instance d'une classe Blueprint « *squie* » qui est un acteur placé (pas une animation, un widget…).
+UObject* find_esquie()
+{
+    UObject* best = nullptr;
+    double best_d = 1e18;
+    double me[3]{};
+    UObject* p = possessed();
+    const bool have_me = p && game::location(p, me);
+    for (const auto& cls : bp_classes({"esquie"})) {
+        if (cls.rfind("WBP_", 0) == 0 || cls.rfind("ABP_", 0) == 0) continue;
+        for (UObject* o : instances(cls)) {
+            if (!ue::is_a(o, STR("Actor"))) continue;
+            double pos[3]{};
+            if (!game::location(o, pos)) continue;
+            const double d = have_me ? std::hypot(pos[0] - me[0], pos[1] - me[1], pos[2] - me[2]) : 0;
+            if (!best || d < best_d) { best = o; best_d = d; }
+        }
+    }
+    return best;
+}
+
+UObject* target_of(const std::string& t)
+{
+    if (t == "pawn") return game::explore_pawn();
+    if (t == "possessed") return possessed();
+    if (t == "controller") return game::controller();
+    if (t == "gi") return game::gi();
+    if (t == "esquie") return find_esquie();
+    return nullptr;
+}
+
+void diag(const std::string& label)
+{
+    UObject* ctrl = game::controller();
+    UObject* pos_pawn = possessed();
+    UObject* pawn = game::explore_pawn();
+    UObject* last = ue::get_object(ctrl, STR("LastControlledCharacterReference"));
+    game::MoveInfo mi;
+    game::move_info(pawn ? pawn : last, mi);
+    double at[3]{};
+    game::location(pos_pawn, at);
+    UObject* parent = attach_parent(pawn ? pawn : last);
+    log().write("coop_mount_diag", JsonObj().add("label", label).add("level", game::current_level())
+                                       .add("possessed", class_chain(pos_pawn)).add("explore_pawn", pawn != nullptr)
+                                       .add("last_controlled", ue::short_name(last)).add("same", last == pos_pawn)
+                                       .add("move", mi.move).add("custom", mi.custom).add("mount", ue::get_bool(game::gi(), STR("IsMountInUse")))
+                                       .add("world_map_pawn", mi.world_map).add("attach_parent", parent ? class_chain(parent) : std::string())
+                                       .add("x", at[0]).add("y", at[1]).add("z", at[2])
+                                       .add("capabilities", capabilities_mask(pawn ? pawn : last)));
+    log().write("coop_mount_diag_state", JsonObj().add("label", label).add("pawn", state_props(pawn ? pawn : last))
+                                             .add("possessed", pos_pawn != (pawn ? pawn : last) ? state_props(pos_pawn) : std::string())
+                                             .add("controller", state_props(ctrl)).add("gi", state_props(game::gi())));
+    const auto classes = bp_classes({"esquie", "mount", "ride", "vehicle", "worldmap"});
+    log().write("coop_mount_diag_classes", JsonObj().add("label", label).add("count", static_cast<int>(classes.size())).add("names", join(classes)));
+    int logged = 0;
+    for (const auto& cls : classes) {
+        if (!has_any(cls, {"esquie", "mount", "ride", "vehicle"}) || cls.rfind("WBP_", 0) == 0) continue;
+        const auto inst = instances(cls);
+        if (inst.empty()) continue;
+        UObject* o = inst.front();
+        double p[3]{};
+        const bool has_pos = game::location(o, p);
+        UObject* par = has_pos ? attach_parent(o) : nullptr;
+        log().write("coop_mount_diag_instance", JsonObj().add("label", label).add("class", cls).add("count", static_cast<int>(inst.size()))
+                                                    .add("name", ue::full_name(o)).add("chain", class_chain(o)).add("has_pos", has_pos)
+                                                    .add("x", p[0]).add("y", p[1]).add("z", p[2]).add("attach_parent", ue::short_name(par))
+                                                    .add("state", state_props(o)));
+        log_members(label, cls.c_str(), o);
+        if (++logged >= 25) break;
+    }
+    log_members(label, "possessed", pos_pawn);
+    log_members(label, "pawn", pawn);
+    log_members(label, "controller", ctrl);
+    ++b.counts["diags"];
+}
+
+// Accroche les fonctions des classes Esquie (toutes) et celles du pion / contrôleur qui parlent de monture : chaque
+// appel est journalisé (5 premiers par fonction), pour voir ce que le jeu appelle quand on monte.
+void trace()
+{
+    auto hook_class = [](UStruct* c, bool all) {
+        for (; c && is_bp_class(c); c = c->GetSuperStruct()) {
+            for (UFunction* f : RC::Unreal::TFieldRange<UFunction>(c, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+                if (!f) continue;
+                const std::string n = ue::to_utf8(f->GetName());
+                if (n.rfind("ExecuteUbergraph", 0) == 0 || n.find("Tick") != std::string::npos || n.find("Update") != std::string::npos) continue;
+                if (!all && !has_any(n, mount_needles())) continue;
+                std::wstring path = f->GetFullName();   // « Function /Game/…:Nom »
+                if (const auto sp = path.find(L' '); sp != std::wstring::npos) path = path.substr(sp + 1);
+                if (!b.traced.insert(path).second) continue;
+                const std::string key = ue::to_utf8(c->GetName()) + ":" + n;
+                HookBus::get().post(path, [key](HookCtx& ctx, UFunction*) {
+                    const int k = ++b.calls[key];
+                    ++b.counts["traced_calls"];
+                    if (k <= 5) log().write("coop_mount_call", JsonObj().add("fn", key).add("n", k).add("self", ue::short_name(ctx.Context))
+                                                                  .add("mount", ue::get_bool(game::gi(), STR("IsMountInUse"))));
+                });
+            }
+            if (b.traced.size() > 600) break;
+        }
+    };
+    for (const auto& cls : bp_classes({"esquie", "mount"})) {
+        if (cls.rfind("WBP_", 0) == 0) continue;
+        const auto inst = instances(cls);
+        if (!inst.empty()) hook_class(inst.front()->GetClassPrivate(), cls.find("squie") != std::string::npos);
+    }
+    if (UObject* p = possessed()) hook_class(p->GetClassPrivate(), false);
+    if (UObject* c = game::controller()) hook_class(c->GetClassPrivate(), false);
+    HookBus::get().try_register();
+    log().write("coop_mount_trace", JsonObj().add("functions", static_cast<int>(b.traced.size())));
+}
+
+// État courant (étape watch), toutes les 0,5 s.
+void watch_line(const std::string& label)
+{
+    UObject* p = possessed();
+    UObject* pawn = game::explore_pawn();
+    UObject* ctrl = game::controller();
+    UObject* last = ue::get_object(ctrl, STR("LastControlledCharacterReference"));
+    game::MoveInfo mi;
+    game::move_info(pawn ? pawn : last, mi);
+    game::PawnState ps;
+    game::pawn_state(p, ps);
+    UObject* parent = attach_parent(pawn ? pawn : last);
+    log().write("coop_mount_watch", JsonObj().add("label", label).add("possessed", ue::short_name(p ? p->GetClassPrivate() : nullptr))
+                                        .add("explore_pawn", pawn != nullptr).add("mount", ue::get_bool(game::gi(), STR("IsMountInUse")))
+                                        .add("move", mi.move).add("custom", mi.custom).add("parent", ue::short_name(parent))
+                                        .add("x", ps.pos[0]).add("y", ps.pos[1]).add("z", ps.pos[2]).add("vz", ps.vel[2])
+                                        .add("speed", std::hypot(ps.vel[0], ps.vel[1])));
+}
+
+bool set_param(ue::Call& c, const std::string& name, const json::Value& v)
+{
+    const std::wstring w = ue::from_utf8(name);
+    if (v.is_string()) {
+        const std::string s = v.as_string();
+        if (UObject* o = target_of(s)) { c.set_object(w.c_str(), o); return true; }
+        c.set_fname(w.c_str(), ue::from_utf8(s).c_str());
+        return true;
+    }
+    if (v.type == json::Value::Type::Bool) { c.set_bool(w.c_str(), v.as_bool()); return true; }
+    if (v.is_number()) {
+        if (c.param_size(w.c_str()) == 8 && v.as_number() != static_cast<double>(v.as_int())) c.set_double(w.c_str(), v.as_number());
+        else c.set_int(w.c_str(), v.as_int());
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+bool test_step(const json::Value& st, double step_t, bool first, std::string& err)
+{
+    const std::string op = st["op"].as_string("diag");
+    const std::string label = st["label"].as_string(op);
+    if (op == "diag") { diag(label); return true; }
+    if (op == "trace") { trace(); return true; }
+    if (op == "interact" || op == "call") {
+        UObject* t = target_of(st["target"].as_string("esquie"));
+        if (!t) { err = "mount " + op + ": no target " + st["target"].as_string("esquie"); return false; }
+        bool ok = false;
+        std::string fn = st["fn"].as_string("OnInteractionRequested");
+        if (op == "interact") {
+            ok = game::interact(t, st["instant"].as_bool(false));
+        } else {
+            ue::Call c(t, ue::from_utf8(fn).c_str());
+            if (c) {
+                for (const auto& [k, v] : st["params"].obj) set_param(c, k, v);
+                ok = c.invoke();
+            }
+        }
+        ++b.counts[ok ? "mount_calls_ok" : "mount_calls_failed"];
+        log().write("coop_mount_bench_call", JsonObj().add("op", op).add("target", ue::full_name(t)).add("fn", fn).add("ok", ok)
+                                                 .add("mount_after", ue::get_bool(game::gi(), STR("IsMountInUse"))));
+        if (!ok && !st["optional"].as_bool(false)) { err = "mount " + op + " " + fn + " failed"; return false; }
+        return true;
+    }
+    if (op == "move") {   // pion possédé (Esquie compris) : AddMovementInput, composante verticale comprise
+        if (step_t >= st["s"].as_number(2)) return true;
+        UObject* p = possessed();
+        ue::Call c(p, STR("AddMovementInput"));
+        if (c) {
+            if (auto* d = static_cast<double*>(c.param_ptr(STR("WorldDirection")))) { d[0] = st["dir"][0].as_number(1); d[1] = st["dir"][1].as_number(0); d[2] = st["dir"][2].as_number(0); }
+            if (auto* sc = static_cast<float*>(c.param_ptr(STR("ScaleValue")))) *sc = static_cast<float>(st["scale"].as_number(1));
+            c.set_bool(STR("bForce"), true);
+            c.invoke();
+        }
+        if (first || step_t >= b.next_watch) { b.next_watch = step_t + 0.5; watch_line(label); }
+        return false;
+    }
+    if (op == "watch") {
+        if (first) b.next_watch = 0;
+        if (step_t >= b.next_watch) { b.next_watch = step_t + 0.5; watch_line(label); }
+        return step_t >= st["s"].as_number(3);
+    }
+    if (op == "wait_mount") {   // attend IsMountInUse == is
+        return ue::get_bool(game::gi(), STR("IsMountInUse")) == st["is"].as_bool(true);
+    }
+    err = "mount: unknown op " + op;
+    return false;
+}
+
+int count(const std::string& name)
+{
+    auto it = b.counts.find(name);
+    return it == b.counts.end() ? 0 : it->second;
 }
 
 } // namespace e33::mount

@@ -1,0 +1,32 @@
+{
+  "name": "p8_esquie_diag_host",
+  "description": "Diagnostic d'Esquie (carte du monde, D19) : vrai jeu hôte face au faux client. Save de fin de partie TEST_LATE (tour de Cléa), passage sur la carte du monde, puis diagnostic : classe et acteur d'Esquie, fonctions et propriétés liées à la monture, trace des appels, essai de montée par interaction (aucune touche simulée).",
+  "save": "e33coop-test/TEST_LATE",
+  "timeout_s": 600,
+  "shots_every_s": 4,
+  "actions": [{ "type": "flee" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 3 },
+    { "do": "mount", "op": "diag", "label": "start" },
+    { "do": "change_map", "level": "Level_WorldMap_Main_V2" },
+    { "do": "wait", "s": 5 },
+    { "do": "wait_world", "s": 5, "timeout": 240 },
+    { "do": "mount", "op": "diag", "label": "worldmap" },
+    { "do": "mount", "op": "trace" },
+    { "do": "mount", "op": "watch", "s": 2, "label": "before" },
+    { "do": "mount", "op": "interact", "target": "esquie", "optional": true },
+    { "do": "mount", "op": "watch", "s": 5, "label": "after_interact" },
+    { "do": "mount", "op": "diag", "label": "after_interact" },
+    { "do": "mount", "op": "move", "dir": [1, 0, 0], "s": 4, "label": "move_x" },
+    { "do": "mount", "op": "move", "dir": [0, 0, 1], "s": 3, "label": "move_up" },
+    { "do": "mount", "op": "watch", "s": 3, "label": "after_move" },
+    { "do": "mount", "op": "call", "target": "controller", "fn": "OnDismountRequested", "optional": true },
+    { "do": "mount", "op": "watch", "s": 4, "label": "after_dismount" },
+    { "do": "mount", "op": "diag", "label": "end" }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33seed=1865"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_follow.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "mount:diags": ">=3" }
+}
