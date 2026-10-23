@@ -103,6 +103,7 @@ struct S {
     double cj_next_diag = 0;                      // client : prochain journal de l'attente du monde
     int join_stuck_test = 0;                      // test : -e33joinstuck=N, monde vu « pas prêt » pendant les N premiers chargements
     int cj_loads_total = 0;                       // client : chargements demandés dans la session (tous instantanés)
+    double next_char_fix = 0;                     // suiveur : prochain essai de copie du personnage affiché
     // Pilote
     uint8_t pilot = 0;
     uint32_t pilot_seq = 0;
@@ -185,6 +186,10 @@ struct S {
     uint64_t copy_ok_hash = 0;                    // client : empreinte vérifiée égale à celle de l'hôte, copie coop à faire
     double copy_ok_at = -1;
 } s;
+
+// Personnage affiché en exploration, par pion (hook de LoadAndActivateCharacter) : gardé hors session (le pion
+// charge son personnage avant l'ouverture de la partie coop).
+std::map<UObject*, std::string> g_char_of;
 
 // Statistiques du suivi, journalisées toutes les 15 s (coop_follow_stats), pas une ligne par image.
 struct FollowStats {
@@ -524,6 +529,7 @@ void pilot_tick()
     m.vx = ps.vel[0]; m.vy = ps.vel[1]; m.vz = ps.vel[2];
     mount::fill_pilot(pawn, m, s.now);   // mode de déplacement, monture (carte du monde)
     m.t_ms = 1 + static_cast<uint32_t>(std::fmod(s.now * 1000.0, 4.0e9));   // horloge du pilote (tampon du suiveur)
+    if (auto it = g_char_of.find(pawn); it != g_char_of.end()) m.chr = it->second;   // personnage affiché
     s.net.publish(m, false);
 }
 
@@ -855,6 +861,19 @@ void follow_tick()
         return;
     }
     s.level_mismatch_since = -1;
+    // Personnage affiché (changement de personnage en exploration, essai à deux PC du 2026-10-24) : le même que le
+    // pilote. Un essai par seconde au plus ; le pion d'un personnage inconnu ici (vide) est laissé tel quel.
+    if (!p.chr.empty() && s.now >= s.next_char_fix) {
+        auto it = g_char_of.find(pawn);
+        if (it == g_char_of.end() || it->second != p.chr) {
+            s.next_char_fix = s.now + 1.0;
+            ue::Call c(pawn, STR("LoadAndActivateCharacter"));
+            const bool ok = c && c.set_fname(STR("CharacterName"), ue::from_utf8(p.chr).c_str()).set_bool(STR("HasSwitchCharacter"), true).invoke();
+            bump(ok ? "follower_character_switches" : "follower_character_switch_errors");
+            log().write("coop_follower_character", JsonObj().add("from", it == g_char_of.end() ? std::string() : it->second).add("to", p.chr).add("ok", ok));
+            if (ok) g_char_of[pawn] = p.chr;   // le hook le note aussi ; sans lui, pas de nouvel essai chaque seconde
+        }
+    }
     // Carte du monde : pilote sur Esquie (vol, nage) non reproductible ici -> pion tenu en fantôme sur le pilote (D19).
     if (mount::follow(pawn, p, s.now - s.last_pilot_at, s.now, s.net.bump)) {
         if (fc.sprint || fc.max_written || s.follow_sprint) sprint_stop(pawn);
@@ -2127,6 +2146,14 @@ void subscribe()
         L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_NPC_Base.BP_jRPG_NPC_Base_C:",
         L"/Game/jRPGTemplate/Blueprints/Other/World/BP_jRPG_InteractionObject_Base.BP_jRPG_InteractionObject_Base_C:",
     };
+    // Personnage affiché en exploration (changement de personnage, chargement du pion) : noté pour le PilotState.
+    bus.pre(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Character_World.BP_jRPG_Character_World_C:LoadAndActivateCharacter",
+            [](HookCtx& ctx, UFunction* f) {
+                const std::string name = ue::read_param_fname(ctx, f, STR("CharacterName"));
+                if (name.empty() || name == "None") return;
+                if (g_char_of.size() > 64) g_char_of.clear();   // pions des niveaux quittés
+                g_char_of[ctx.Context] = name;
+            });
     for (const wchar_t* cls : kInteractables) {
         bus.pre(std::wstring(cls) + L"OnInteractionRequested", [](HookCtx& ctx, UFunction* f) {
             if (s.replaying || !s.active || !sharing()) return;

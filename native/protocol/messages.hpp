@@ -260,6 +260,8 @@ struct PilotState {
     // Champ final facultatif (2026-10-23, suivi fluide) : horloge du pilote à l'envoi (ms, 0 = absent). Le suiveur place
     // chaque position à son instant réel (tampon d'interpolation), sans la gigue de réception.
     uint32_t t_ms = 0;
+    // Champ final facultatif (2026-10-24) : personnage affiché en exploration (FName, ex. « Lune »), vide = inconnu.
+    std::string chr;
 };
 constexpr uint8_t kMoveUnknown = 0xFF;
 constexpr uint8_t kPilotMount = 1;        // GI.IsMountInUse : sur Esquie

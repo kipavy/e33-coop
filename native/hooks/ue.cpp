@@ -399,6 +399,15 @@ std::optional<int64_t> read_param_int(UnrealScriptFunctionCallableContext& ctx, 
     }
 }
 
+std::string read_param_fname(UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name)
+{
+    if (!fn) return {};
+    FProperty* p = fn->FindProperty(FName(name, FNAME_Find));
+    void* locals = ctx.TheStack.Locals();
+    if (!p || !locals || p->GetSize() != sizeof(FName)) return {};
+    return to_utf8(static_cast<FName*>(p->ContainerPtrToValuePtr<void>(locals))->ToString());
+}
+
 UObject* component_owner(UObject* component)
 {
     if (!component) return nullptr;

@@ -109,6 +109,7 @@ void* out_param_address(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UF
 // Lit un paramètre d'entrée (objet) depuis les locales du cadre d'un hook.
 UObject* read_param_object(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);
 std::optional<int64_t> read_param_int(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);
+std::string read_param_fname(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name);   // FName -> UTF-8 ("" si absent)
 // Adresse brute d'un paramètre dans les locales du cadre d'un hook (taille dans *size), nullptr si introuvable.
 void* param_address(RC::Unreal::UnrealScriptFunctionCallableContext& ctx, UFunction* fn, const wchar_t* name, int* size = nullptr);
 
