@@ -297,3 +297,19 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Limites** : une scène enchaînée sur un combat (Renoir) part aussi chez le suiveur par sa propre game action : combat déjà engagé ici, accepté par `BattleStart` (« already_engaged »), non testé en scénario. Cinématiques lancées autrement que par `TriggerCinematic` (vidéo d'intro) non couvertes.
 
 **Remise en cause si** : `coop_scene_sync` en méthode 3 (téléportation) fréquente, ou `scene_syncs_failed` ; ou une zone dont l'action dépend du pion qui la traverse.
+
+---
+
+## D21 — Aucune attente sans fin en combat ; action automatique seulement sur preuve positive (2026-10-23, exigence de Killian)
+
+**Constat** : duel du prologue (2026-10-22) : client tenu par la barrière, hôte figé 10 min au plus en attendant son `BattleReady`. Audit des attentes : seules celles du thread de jeu (`wait_for`) figent l'image ; toutes sont bornées (tour 15 s, défense et QTE 3 s, tir 2 s, récompenses 5 + 4 s) ; les attentes non figées (démarrage coordonné 600 s, barrière 600 s, tour d'un autre joueur sans minuteur : illimitée) pouvaient tenir la partie pour un joueur dont le jeu ne suit plus.
+
+**Décision** :
+1. **Démarrage coordonné** : l'hôte attend toujours un joueur qui charge, regarde une scène, est dans un menu ou se reconnecte (10 min au plus). Un joueur **inactif** (rien de tout ça) qui n'entre pas dans le combat depuis 60 s continues (`-e33readyidle=N`) : le combat commence sans lui (toast), il suivra en arrivant. Un client sain entre en ~6 s sans action du joueur.
+2. **Tour d'un autre joueur** : jamais d'action automatique pour un joueur qui réfléchit, fouille ses menus, est en pause, alt-tab ou lit une description, même longtemps. Attaque automatique (`-e33stuckturn=N`, 60 s de temps de jeu, pauses exclues) seulement si le lien est vivant, qu'il ne charge ni ne se reconnecte, **et** qu'aucun signe de ce tour n'est venu de lui : ni `StateHash` du tour (envoyé par son jeu au début de chaque tour), ni `MenuState`, `IntentPreview`, `AimView`, `FreeAimEvent`, `ActionCommand`, `ComboResult`, `DefenseResult` de ce tour. Le minuteur de tour reste une option de l'hôte, coupée.
+3. **Joueur bloqué** (tour forcé, ou délai de défense dépassé sur un tour qu'il n'a pas commencé) : ses défenses et QTE ne sont plus attendus (échec imposé, l'état de l'hôte fait foi, D11) jusqu'à son prochain signe de tour.
+4. **Client** : les attentes bloquantes s'arrêtent au `BattleEnd` de l'hôte (aucun résultat ne viendra).
+5. **Mesure** : chaque attente bloquante est journalisée au-delà de 250 ms avec son origine (`coop_wait_long`).
+6. Essai `-e33turnalign=1` (désactivé) : tours ennemis retenus chez l'hôte (dépendance de début de tour, jeu animé) jusqu'au `StateHash` des clients qui ont un héros vivant, 4 s au plus : l'hôte n'est plus en avance (~1 s après les tours de ses héros, rejoués avec décalage chez le client), donc ne fige plus son image en attendant leurs parades ; le client attend celles de l'hôte un aller-retour.
+
+**Remise en cause si** : `turn_stuck_forced` ou `battle_ready_idle_timeouts` apparaît dans une partie normale à deux PC (faux positif) ; ou `coop_wait_long` site `defense` fréquent au-delà de 300 ms (activer `-e33turnalign`).
