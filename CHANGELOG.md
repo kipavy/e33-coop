@@ -14,6 +14,8 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.5] - 2026-10-23
+
 ### Ajouts
 - Cinématiques en même temps : quand le meneur déclenche une scène, elle démarre aussitôt chez les autres joueurs (au
   lieu de se jouer l'une après l'autre) ; passer une scène la passe chez tout le monde.
@@ -21,6 +23,17 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
   stick de la manette pour passer d'une ligne à l'autre (Droite depuis le menu pour y entrer), Entrée / A ou
   Gauche / Droite pour changer la répartition d'un personnage ou une option, Échap / B pour revenir au menu.
   F9 / Maj+F9 marchent toujours.
+- Version du mod affichée au menu principal (sous les boutons) et en bas du panneau Coop (F9).
+- Carte du monde : le perso de l'autre joueur monte sur Esquie avec le meneur et le suit en marche, en vol et sur
+  l'eau (au lieu de « nager en l'air »).
+
+### Modifications
+- La bannière « Équipe : … » ne s'affiche plus que quand la répartition des personnages change (plus à chaque
+  arrivée ou rechargement d'un joueur) ; le rappel « F7 pour ouvrir votre partie » une seule fois par lancement du jeu.
+
+### Suppressions
+- Bannières inutiles : « L'hôte commence une nouvelle partie… » (client), « Nouvelle partie : N joueur(s) regardent
+  l'intro avec vous » (hôte), « X a modifié <personnage> » à chaque changement de build de l'autre joueur.
 
 ## [0.6.4] - 2026-10-23
 
@@ -78,7 +91,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.4...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/kipavy/e33-coop/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/kipavy/e33-coop/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/kipavy/e33-coop/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/kipavy/e33-coop/compare/v0.6.1...v0.6.2

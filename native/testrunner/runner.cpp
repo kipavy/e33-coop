@@ -21,6 +21,7 @@
 #include "../sync/coop.hpp"
 #include "../sync/coopsave.hpp"
 #include "../sync/explore.hpp"
+#include "../sync/mount.hpp"
 #include "../ui/options.hpp"
 #include "../ui/owners_ui.hpp"
 #include "../ui/ui.hpp"
@@ -286,6 +287,7 @@ int metric(const std::string& name)
     if (name == "panel:buttons") return owners_ui::panel_buttons();
     if (name == "panel:menu_focus") return owners_ui::menu_has_focus() ? 1 : 0;
     if (name == "panel:menu_visible") return game::pause_menu_visible() ? 1 : 0;
+    if (name.rfind("mount:", 0) == 0) return mount::count(name.substr(6));            // banc d'essai de la monture (Esquie)
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
 }
@@ -965,6 +967,7 @@ void subscribe()
 //   {"do":"panel_focus","row":1} | {"do":"panel_click","row":2} | {"do":"panel_nav","row":2,"dir":"left"} | {"do":"panel_back"}
 //                                         panneau Coop navigable par les fonctions du jeu (row -1 : menu du jeu) ;
 //                                         état lisible par "panel:focused_row", "panel:selected", "panel:menu_focus"…
+//   {"do":"mount","op":"diag|trace|interact|call|move|watch|wait_mount",…}   monture d'Esquie (mount.cpp)
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -1191,6 +1194,9 @@ void run_explore_step(float dt)
         DWORD pid = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &pid);
         if (pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F9) & 0x8000)) next_step("key");
+    } else if (what == "mount") {   // banc d'essai de la monture : diagnostic, appels, déplacement du pion possédé (mount.cpp)
+        if (mount::test_step(st, g.step_t, first, err)) next_step("done");
+        else if (!err.empty()) { fail(err); return; }
     } else if (what == "request_pilot") {
         explore::request_pilot();
         next_step("requested");

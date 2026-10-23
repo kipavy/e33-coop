@@ -259,7 +259,7 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 5. **Installateur en un fichier** (`Installer E33 Coop.exe`, Win32, sans dépendance) : trouve le jeu par Steam (registre, `libraryfolders.vdf`, `appmanifest_1903340.acf`), télécharge le zip de la dernière release (HTTPS, hôtes GitHub seulement, redirections vérifiées), vérifie le SHA-256 contre `SHA256SUMS` de la même release, installe comme `install.ps1` (sauvegarde de l'ancien contenu, remise en place si échec), garde `settings.ini` et `remotetest.txt`. Rien n'est installé sans empreinte correspondante. Zip local + `SHA256SUMS` à côté de l'exe : hors ligne.
 6. **Mises à jour** (`updates = auto | ask | off`, défaut `auto`) : au menu principal, vérification en arrière-plan (une fois par lancement, erreurs réseau ignorées). `auto` : l'installateur du dossier du mod (chemin et arguments fixes : `--stage`) télécharge et vérifie, signale « prêt », puis installe à la fermeture du jeu ; jamais de redémarrage en pleine partie. `ask` : carte « U pour mettre à jour » au menu (`--update` : attend la fermeture, installe, relance par `steam://rungameid/1903340`). Écart de version à la jonction : le côté le plus ancien est prévenu ; client en `auto` avec une release plus récente publiée → mise à jour immédiate, relance et nouvelle jonction de l'ami (SteamID gardé 15 min dans `SaveGames\e33coop\rejoin.txt`) ; pas de mise à jour automatique en boucle si l'autre a une version de développement.
 7. **Options** : `ue4ss/Mods/E33Coop/settings.ini` (`lang`, `updates`, `aim_cam`, `turndep`, `duo_parry`, `turn_timer_s`) ; ordre : scénario de test seul → option de lancement → fichier → défaut. Le test à distance reste dans `remotetest.txt` à part : c'est une autorisation (SteamID de confiance, relance, mise à jour), écrite seulement par l'installation sur demande, qu'un réglage de confort ne doit pas pouvoir activer.
-8. **Panneau Coop au clavier** : **F9** choisit une ligne (personnages de l'équipe pour l'hôte hors combat, puis options), **Maj+F9** la change (personnage → joueur suivant, même chemin que F6 ; option → valeur suivante, enregistrée). Pas de flèches ni d'Entrée : le panneau n'a jamais le focus, le menu pause du jeu garde sa navigation (**remplacé par D21** : panneau navigable, F9 / Maj+F9 restent des raccourcis). Hors du menu pause, une carte montre la ligne choisie. Options d'hôte en lecture seule chez un client.
+8. **Panneau Coop au clavier** : **F9** choisit une ligne (personnages de l'équipe pour l'hôte hors combat, puis options), **Maj+F9** la change (personnage → joueur suivant, même chemin que F6 ; option → valeur suivante, enregistrée). Pas de flèches ni d'Entrée : le panneau n'a jamais le focus, le menu pause du jeu garde sa navigation (**remplacé par D22** : panneau navigable, F9 / Maj+F9 restent des raccourcis). Hors du menu pause, une carte montre la ligne choisie. Options d'hôte en lecture seule chez un client.
 
 **Non vérifié en jeu** : tout le mode neutre (F7 hôte en pleine partie avec hooks accrochés tard, invitation, retour au neutre), la vérification de release et l'installateur lancé depuis le jeu (`CREATE_BREAKAWAY_FROM_JOB`, copie de l'exe dans `%TEMP%`), l'installation à la fermeture du jeu.
 
@@ -298,9 +298,22 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 
 **Remise en cause si** : `coop_scene_sync` en méthode 3 (téléportation) fréquente, ou `scene_syncs_failed` ; ou une zone dont l'action dépend du pion qui la traverse.
 
+## D21 — Carte du monde : le suiveur monte sur Esquie et le conduit comme le pilote (2026-10-23, demande de Killian)
+
+**Données du jeu (en jeu, save `TEST_LATE`)** : pion à pied `BP_jRPG_Character_WorldMap_pawn_C`, Esquie = pion `BP_WorldMapCharacter_C` (sous-classe de `BP_jRPG_Character_World_C`) possédé à la montée. `BP_WorldMapControllerComponent` du contrôleur : `OnInputMountPressed` -> `OnMountRequested` -> `ProcessMountRequest` (montée), `OnDismountRequested` (descente, refusée en vol), `MountIsInUse`, `IsMountPerformingAnAnimation`. Esquie : `CurrentMovementMode` (0 marche, 1 eau, 2 vol), `TryChangeMovementMode(MovementMode, ZoneType)` (décollage / atterrissage, appelé par l'événement de saut), `ChangeMovementMode` (imposé), `IsInTransition`.
+
+**Décision** :
+1. `PilotState` gagne un dernier champ facultatif `wm_mode` (mode d'Esquie, 255 = pas sur Esquie).
+2. Suiveur sur la carte du monde, pilote sur Esquie : montée par `OnInputMountPressed` (repli : événement de la touche de monture), 3 essais toutes les 1,5 s, pion laissé sur place pendant ce temps. Puis même mode (`TryChangeMovementMode`, `ChangeMovementMode` après 2 refus), toutes les 0,5 s au plus.
+3. Conduite : vol et eau (3000-4000 u/s) : Esquie placé à chaque image sur la position prédite du pilote (cible avancée à sa vitesse puis rapprochée de la position reçue en ~0,1 s) ; marche (350 u/s) : `AddMovementInput` comme le suivi à pied, recalé au-delà de 1500 u. Pendant les animations de montée / transitions : rien.
+4. Pilote à pied, suiveur sur Esquie : retour au sol (mode marche) puis `OnDismountRequested`, 8 essais.
+5. Le fantôme de D19 reste en repli (montée impossible, ex. pion à la nage) ; `-e33mountsync=0` coupe montée et descente.
+
+**Remise en cause si** : `coop_follower_mount` échoue souvent (`can_mount` faux), ou `coop_follower_wm_mode` `forced` fréquent (mode refusé par le jeu), ou Esquie placé qui saccade visiblement en vol (passer à une poursuite par entrées).
+
 ---
 
-## D21 — Panneau Coop navigable comme le menu du jeu (2026-10-23, demande de Killian)
+## D22 — Panneau Coop navigable comme le menu du jeu (2026-10-23, demande de Killian)
 
 **Constat** : le panneau « Expédition coop » du menu pause n'avait jamais le focus ; ses lignes se choisissaient avec F9 et se changeaient avec Maj+F9. Killian : « ça serait pas possible par la souris et les flèches du clavier/manette comme le menu natif ? »
 
