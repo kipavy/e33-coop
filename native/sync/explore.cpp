@@ -352,7 +352,7 @@ void follow_new_game()
     start_intro();
     coopsave::mark_coop_game();   // après StartNewGame (qui lève la garde) : partie de l'hôte, rien dans les saves perso
     bump("new_games_followed");
-    ui::set_status("session", "new_game_follow");
+    // Pas de bannière ici (jugée inutile par Killian, 2026-10-23) : l'intro qui démarre suffit.
     log().write("coop_new_game_followed", JsonObj());
 }
 
@@ -1985,7 +1985,6 @@ void subscribe()
             ++n;
         }
         bump("new_games_announced");
-        if (n > 0) ui::toast("new_game_shared", {std::to_string(n)});
         log().write("coop_new_game", JsonObj().add("players_following", n));
     });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:OnInitialCinematicCompleted", [](HookCtx&, UFunction*) {

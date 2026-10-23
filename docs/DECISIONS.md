@@ -297,3 +297,16 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Limites** : une scène enchaînée sur un combat (Renoir) part aussi chez le suiveur par sa propre game action : combat déjà engagé ici, accepté par `BattleStart` (« already_engaged »), non testé en scénario. Cinématiques lancées autrement que par `TriggerCinematic` (vidéo d'intro) non couvertes.
 
 **Remise en cause si** : `coop_scene_sync` en méthode 3 (téléportation) fréquente, ou `scene_syncs_failed` ; ou une zone dont l'action dépend du pion qui la traverse.
+
+## D21 — Carte du monde : le suiveur monte sur Esquie et le conduit comme le pilote (2026-10-23, demande de Killian)
+
+**Données du jeu (en jeu, save `TEST_LATE`)** : pion à pied `BP_jRPG_Character_WorldMap_pawn_C`, Esquie = pion `BP_WorldMapCharacter_C` (sous-classe de `BP_jRPG_Character_World_C`) possédé à la montée. `BP_WorldMapControllerComponent` du contrôleur : `OnInputMountPressed` -> `OnMountRequested` -> `ProcessMountRequest` (montée), `OnDismountRequested` (descente, refusée en vol), `MountIsInUse`, `IsMountPerformingAnAnimation`. Esquie : `CurrentMovementMode` (0 marche, 1 eau, 2 vol), `TryChangeMovementMode(MovementMode, ZoneType)` (décollage / atterrissage, appelé par l'événement de saut), `ChangeMovementMode` (imposé), `IsInTransition`.
+
+**Décision** :
+1. `PilotState` gagne un dernier champ facultatif `wm_mode` (mode d'Esquie, 255 = pas sur Esquie).
+2. Suiveur sur la carte du monde, pilote sur Esquie : montée par `OnInputMountPressed` (repli : événement de la touche de monture), 3 essais toutes les 1,5 s, pion laissé sur place pendant ce temps. Puis même mode (`TryChangeMovementMode`, `ChangeMovementMode` après 2 refus), toutes les 0,5 s au plus.
+3. Conduite : vol et eau (3000-4000 u/s) : Esquie placé à chaque image sur la position prédite du pilote (cible avancée à sa vitesse puis rapprochée de la position reçue en ~0,1 s) ; marche (350 u/s) : `AddMovementInput` comme le suivi à pied, recalé au-delà de 1500 u. Pendant les animations de montée / transitions : rien.
+4. Pilote à pied, suiveur sur Esquie : retour au sol (mode marche) puis `OnDismountRequested`, 8 essais.
+5. Le fantôme de D19 reste en repli (montée impossible, ex. pion à la nage) ; `-e33mountsync=0` coupe montée et descente.
+
+**Remise en cause si** : `coop_follower_mount` échoue souvent (`can_mount` faux), ou `coop_follower_wm_mode` `forced` fréquent (mode refusé par le jeu), ou Esquie placé qui saccade visiblement en vol (passer à une poursuite par entrées).
