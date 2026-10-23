@@ -250,6 +250,8 @@ void follow_stats_rx(const proto::PilotState& p)
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
 void bump_max(const char* name, int& cur, int v);   // compteur « maximum » (plus bas)
 void mt_follow(double err, bool teleported, int started, int stopped);   // mesures d'arrivée (plus bas)
+// Corrections des changements de niveau (2026-10-23) : -e33zonefix=0 les coupe (mesure « avant » des scénarios p9).
+bool zone_fix() { static const bool v = cmdline::arg(L"e33zonefix") != L"0"; return v; }
 
 // Les événements d'exploration ne concernent que les joueurs entrés dans la partie (hôte : au moins un client
 // entré ; client : instantané chargé, ou session sans « rejoindre » des tests de combat).
@@ -775,7 +777,7 @@ void map_tick()
     // MapChange (sinon : passage par une autre sortie que le pilote, ou second déclenchement de la même pendant le
     // chargement). Rendues quand il redevient pilote. Une fois par niveau (FindAllOf parcourt tous les objets).
     {
-        const bool want_off = sharing() && !is_pilot();
+        const bool want_off = zone_fix() && sharing() && !is_pilot();
         if (!in && world_ready()) {
             const std::string lvl = game::current_level();
             // Reprise toutes les 10 s (seule tâche lourde de son image) : parties de niveau chargées ensuite.
@@ -883,7 +885,8 @@ void on_map_change(const proto::MapChange& mc)
     // Dernière position du pilote = ancienne zone : oubliée, sinon le suiveur arrivé avant lui y retournait au bout de 8 s.
     s.last_pilot.reset();
     s.level_mismatch_since = -1;
-    if (loading || game::in_battle() || !sharing() || !world_ready()) {
+    if (!zone_fix() && !sharing()) return;   // ancien comportement (mesure « avant ») : MapChange ignoré pendant la jonction
+    if (zone_fix() && (loading || game::in_battle() || !sharing() || !world_ready())) {
         s.pending_map = mc;
         mt.how = "deferred";
         bump("map_changes_deferred");
@@ -1771,7 +1774,7 @@ bool handle(uint8_t from, const proto::Message& m)
         follow_stats_rx(*p);
         // Position de l'ancien niveau arrivée après le MapChange (non fiable, peut doubler le message fiable) : ignorée
         // jusqu'à la première position du pilote dans le nouveau niveau (30 s au plus).
-        if (!s.expect_level.empty()) {
+        if (zone_fix() && !s.expect_level.empty()) {
             if (p->level == s.expect_level || s.now - s.expect_level_at > 30.0) s.expect_level.clear();
             else { bump("pilot_states_old_level"); return true; }
         }
