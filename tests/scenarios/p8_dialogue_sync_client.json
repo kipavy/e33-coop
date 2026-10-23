@@ -1,6 +1,6 @@
 {
   "name": "p8_dialogue_sync_client",
-  "description": "Dialogue synchronisé (D24) : le faux hôte rejoue p8_dialogue_host (le pilote traverse la zone du dialogue de Maelle avant le duel du prologue, publie SceneStart « dialogue », répond, puis le duel). Le pion du client reste sur place (-e33nofollow=1) : seule la synchro peut lancer le dialogue. Il doit le commencer moins de 1 s après l'hôte par la même zone, sans pause de barrière avant, rejouer le choix de l'hôte et entrer dans le duel avec lui. Connu (2026-10-23) : le duel lancé ici par le dialogue du client donne 1 PA d'écart à Gustave aux tours 1 et 2 (réparé aussitôt par la resynchro) : raw_hash_diffs toléré à 2, suivi côté combat.",
+  "description": "Dialogue synchronisé (D24) : le faux hôte rejoue p8_dialogue_host (le pilote traverse la zone du dialogue de Maelle avant le duel du prologue, publie SceneStart « dialogue », répond, puis le duel). Le pion du client reste sur place (-e33nofollow=1) : seule la synchro peut lancer le dialogue. Il doit le commencer moins de 1 s après l'hôte par la même zone, sans pause de barrière avant, rejouer le choix de l'hôte et entrer dans le duel avec lui.",
   "join": true,
   "timeout_s": 700,
   "shots_every_s": 5,
@@ -15,5 +15,5 @@
   "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p8_dialogue_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_dialogue_sync_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },
   "expect": { "snapshots_received": "1", "joins_completed": "1", "scenes_received": "1", "dialogue_syncs": "1", "scene_syncs_zone": "1", "scene_syncs_ok": "1",
               "scene_syncs_failed": "0", "scene_start_lag_ms_max": "<=1000", "barrier_waits_unstarted": "0", "choices_replayed": ">=1", "choice_errors": "0",
-              "battle_end": "any", "battles_finalized": ">=1", "raw_hash_diffs": "<=2", "barrier_timeouts": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
+              "battle_end": "any", "battles_finalized": ">=1", "raw_hash_diffs": "0", "barrier_timeouts": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
 }

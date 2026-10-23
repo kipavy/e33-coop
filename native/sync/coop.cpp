@@ -253,6 +253,11 @@ struct State {
     std::optional<proto::BattleStart> pending_start;       // client : combat de l'hôte, lancé une fois le monde prêt
     std::optional<proto::BattleStart> last_start;          // client : dernier BattleStart (le StartBattle local peut suivre son lancement)
     std::optional<proto::BattleStart> early_start;         // client : avis précoce de l'hôte (battle_id 0)
+    // Client : photo de l'état au début d'un tour joué ici avant que le mod suive le combat (combat engagé ici avant le
+    // BattleStart : pion suiveur, dialogue). Le rattrapage compare cette photo, prise au même instant que celle de l'hôte.
+    std::optional<proto::StateSync> early_turn;
+    UObject* early_turn_actor = nullptr;
+    double early_turn_at = -1;
     double early_start_at = -1;
     double world_ready_s = 0;
     double next_trigger_try = 0;
@@ -1949,6 +1954,15 @@ void duo_parry_check()
 // Début de tour d'un personnage (OnTurnStart, ou rattrapage quand le combat local a démarré avant le BattleStart).
 void on_turn_start(UObject* actor)
 {
+    // Client, combat pas encore suivi par le mod (engagé ici avant le BattleStart) : photo de l'état à cet instant, celui
+    // de la photo de l'hôte. Le rattrapage peut arriver des secondes plus tard (monde prêt depuis 5 s) : entre-temps le
+    // jeu a déjà appliqué les effets du début de tour (PA du tour : +1 PA à Gustave dans le duel du prologue, 2026-10-23),
+    // et la comparaison d'une photo tardive « corrigeait » ce gain, puis l'écart revenait au tour suivant.
+    if (s.role == Role::Client && !s.battle.active) {
+        s.early_turn = sync::snapshot(0, 1);
+        s.early_turn_actor = actor;
+        s.early_turn_at = s.now;
+    }
     if (s.role != Role::Solo && s.battle.active) duo_parry_check();
     if (s.role == Role::Host) host_turn_start(actor);
     else if (s.role == Role::Client && s.battle.active) client_turn_start(actor);
@@ -3250,7 +3264,16 @@ void start_pending_battle()
     // Sans rattrapage, le BattleReady ne part jamais et l'hôte reste figé en attente (vu le 2026-10-20, 2e combat).
     if (UObject* cur = game::current_character(); already && cur && s.battle.turn == 0 && ue::get_bool(cur, STR("IsTurnActive"))) {
         bump("turn_start_catchups");
-        log().write("coop_turn_start_catchup", JsonObj().add("actor", game::char_class(cur)));
+        // Vérification différée : la photo du vrai début de ce tour, reportée sur l'état de l'hôte (shift_host_state).
+        const bool snap = s.early_turn && s.early_turn_actor == cur && s.now - s.early_turn_at < 60.0;
+        if (snap) {
+            s.battle.dep_start = *s.early_turn;
+            s.battle.dep_start.battle_id = s.battle.id;
+            s.battle.dep_start.turn = 1;
+        }
+        log().write("coop_turn_start_catchup", JsonObj().add("actor", game::char_class(cur)).add("turn_start_snapshot", snap)
+                                                   .add("snapshot_age_s", snap ? s.now - s.early_turn_at : -1.0));
+        s.early_turn.reset();
         on_turn_start(cur);
     }
 }
