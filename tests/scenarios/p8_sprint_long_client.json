@@ -1,0 +1,16 @@
+{
+  "name": "p8_sprint_long_client",
+  "description": "Long sprint réel de Lumière (essai à deux PC du 2026-10-22, enregistrement de l'hôte de t=444,8 à 575,5) : tranche twopc_sprint_long faite par « fakepeer slice --no-resync 1 » (les deux resynchros du client à 540 et 555 sont retirées). Marche, pause du pilote, puis 46 s de sprint et de course en alternance avec virages, arrêts, reprises et une montée de 500 u. Pendant les vrais rechargements l'hôte n'envoyait plus de positions : il reste deux trous de 6,4 s, après lesquels le pilote a « sauté » de ~3800 u (téléportation classée « gap », permise : au plus 2). Mêmes critères de fluidité que p8_sprint_client (D20) en dehors de ces trous.",
+  "join": true,
+  "timeout_s": 700,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "s": 132 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/twopc_sprint_long.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_sprint_a_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "follower_teleports": "<=2", "follower_teleports_nogap": "0", "snapshot_hash_errors": "0", "join_errors": "0",
+              "follow_sprints": ">=1", "follow_gap_max_sprint": "<250", "follow_gap_max_run": "<150", "follow_gap_max_walk": "<120", "follow_gap_rest_max": "<60",
+              "follow_stalls": "0", "follow_frozen_ms_max": "<=150", "follow_dips": "0", "follow_speed_drops": "0", "follow_parasitic_stops": "0",
+              "explore_hitches_mod": "0", "resyncs_while_moving": "0" }
+}

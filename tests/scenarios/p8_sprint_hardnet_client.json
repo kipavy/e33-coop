@@ -1,0 +1,16 @@
+{
+  "name": "p8_sprint_hardnet_client",
+  "description": "Suivi en sprint sur un réseau dur : même tranche réelle que p8_sprint_client (twopc_sprint_a), mais latence 60 ms, gigue moyenne 40 ms, 2 % de pertes, 3 % de pointes de 250 ms (bien pire que l'essai Steam réel : < 2 % d'écarts > 80 ms). Les à-coups du réseau ne doivent pas se voir : mêmes critères de fluidité que p8_sprint_client (D20), écarts un peu plus larges (le suiveur reste derrière la position la plus récente arrivée à l'heure) : < 300 u en sprint, < 180 u en course.",
+  "join": true,
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "s": 100 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/twopc_sprint_a.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_sprint_a_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=60,jitter=40,loss=0.02,spike=0.03:250", "--timeout", "600"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "follower_teleports": "0", "snapshot_hash_errors": "0", "join_errors": "0",
+              "follow_sprints": ">=1", "follow_gap_max_sprint": "<300", "follow_gap_max_run": "<180", "follow_gap_max_walk": "<120", "follow_gap_rest_max": "<60",
+              "follow_stalls": "0", "follow_frozen_ms_max": "<=150", "follow_dips": "0", "follow_speed_drops": "0", "follow_parasitic_stops": "0",
+              "explore_hitches_mod": "0", "resyncs_while_moving": "0" }
+}
