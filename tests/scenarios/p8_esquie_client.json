@@ -12,5 +12,5 @@
   "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/esquie_flight.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_esquie_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "600"] },
   "expect": { "snapshots_received": "1", "joins_completed": "1", "snapshot_hash_errors": "0", "join_errors": "0",
               "follower_mounts": ">=1", "follower_mount_failures": "0", "follower_ghosts": "0", "follower_teleports": "0",
-              "follower_swims_unexpected": "0", "follower_ride_snaps": "0", "follower_wm_changes": ">=3", "mount:ride_err_max": "<=800" }
+              "follower_swims_unexpected": "0", "follower_ride_snaps": "0", "follower_wm_changes": ">=3", "follower_move_changes": "<=6", "mount:ride_err_max": "<=800" }
 }

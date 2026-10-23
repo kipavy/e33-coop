@@ -290,11 +290,25 @@ void ride(UObject* esq, const proto::PilotState& p, double age, const Bump& bump
     const double raw[3] = {p.x + p.vx * a, p.y + p.vy * a, p.z + p.vz * a};
     const double dt = s.last_t < 0 ? 0.0 : std::clamp(s.now - s.last_t, 0.0, 0.25);
     s.last_t = s.now;
+    // Cible : avancée à la vitesse du pilote (pas de retard en vol à ~4000 u/s), puis rapprochée de la position reçue
+    // (~0,1 s) ; un saut net est pris tel quel.
     const double jump = std::hypot(raw[0] - s.tgt[0], raw[1] - s.tgt[1], raw[2] - s.tgt[2]);
     if (!s.have_tgt || jump > 1500) { for (int i = 0; i < 3; ++i) s.tgt[i] = raw[i]; s.have_tgt = true; }
-    else { const double k = 1.0 - std::exp(-dt / 0.1); for (int i = 0; i < 3; ++i) s.tgt[i] += (raw[i] - s.tgt[i]) * k; }
+    else {
+        const double v[3] = {p.vx, p.vy, p.vz};
+        const double k = 1.0 - std::exp(-dt / 0.1);
+        for (int i = 0; i < 3; ++i) { s.tgt[i] += v[i] * dt; s.tgt[i] += (raw[i] - s.tgt[i]) * k; }
+    }
     const double dx = s.tgt[0] - me.pos[0], dy = s.tgt[1] - me.pos[1], dz = s.tgt[2] - me.pos[2];
-    const double d2 = std::hypot(dx, dy), err = std::hypot(d2, dz);
+    const double d2 = std::hypot(dx, dy), d = std::hypot(d2, dz);
+    const int mine = wm_mode(esq);
+    // Décollage pas encore fait ici : on attend le mode vol (placé en l'air en mode marche, Esquie retomberait).
+    if (p.wm_mode == kWmFly && mine != kWmFly) return;
+    // Vol et nage d'Esquie (~3000-4000 u/s) : placé sur la cible ; marche (350 u/s) : conduit par les entrées.
+    const bool flying = mine != kWmWalk && mine != kWmNone;
+    // Écart à la position (prédite) du pilote : en vol, Esquie est placé sur la cible ; au sol, il est où il est.
+    const double* at = flying ? s.tgt : me.pos;
+    const double err = std::hypot(raw[0] - at[0], raw[1] - at[1], raw[2] - at[2]);
     // Statistiques (journal toutes les 15 s)
     ++s.ride_ticks;
     s.ride_err_sum += err;
@@ -303,18 +317,14 @@ void ride(UObject* esq, const proto::PilotState& p, double age, const Bump& bump
     if (s.now - s.ride_stats_at >= 15.0) {
         log().write("coop_follower_ride_stats", JsonObj().add("ticks", s.ride_ticks).add("err_avg", s.ride_ticks ? s.ride_err_sum / s.ride_ticks : 0.0)
                                                     .add("err_max", s.ride_err_max).add("snaps", s.ride_snaps).add("wm_changes", s.wm_changes)
-                                                    .add("wm", wm_mode(esq)).add("pilot_wm", static_cast<int>(p.wm_mode)));
+                                                    .add("wm", mine).add("pilot_wm", static_cast<int>(p.wm_mode)));
         s.ride_stats_at = s.now; s.ride_ticks = 0; s.ride_err_sum = 0; s.ride_err_max = 0;
     }
-    const int mine = wm_mode(esq);
-    // Décollage pas encore fait ici : on attend le mode vol (placé en l'air en mode marche, Esquie retomberait).
-    if (p.wm_mode == kWmFly && mine != kWmFly) return;
-    const bool flying = mine == kWmFly;
-    if (flying || err > 1500) {
+    if (flying || d > 1500) {
         if (!flying) {   // au sol mais décroché : recalé (rare)
             ++s.ride_snaps;
             if (bump) bump("follower_ride_snaps", 1);
-            log().write("coop_follower_ride_snap", JsonObj().add("err", err).add("wm", wm_mode(esq)).add("pilot_move", static_cast<int>(p.move)));
+            log().write("coop_follower_ride_snap", JsonObj().add("dist", d).add("wm", mine).add("pilot_move", static_cast<int>(p.move)));
         }
         game::teleport_pawn(esq, s.tgt, p.yaw);
         return;
