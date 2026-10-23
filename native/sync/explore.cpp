@@ -865,6 +865,17 @@ void follow_tick()
         }
     }
     follow_metrics(R, rv, own_speed, gap_now, rest_gap, pilot_now_speed);
+    // Trace détaillée (-e33followtrace=1, réglage du suivi) : une ligne toutes les 0,1 s.
+    static const bool trace = !cmdline::arg(L"e33followtrace").empty();
+    static double next_trace = 0;
+    if (trace && s.now >= next_trace) {
+        next_trace = s.now + 0.1;
+        const float* m = game::pawn_max_walk_speed(pawn);
+        log().write("coop_follow_trace", JsonObj().add("err", std::round(err)).add("gap", std::round(gap_now)).add("rv", std::round(rv))
+                                            .add("own", std::round(own_speed)).add("vc", std::round(vc)).add("mv", fc.moving).add("sp", fc.sprint)
+                                            .add("mws", m ? std::round(static_cast<double>(*m)) : -1.0).add("gait", game::pawn_gait(pawn))
+                                            .add("st", R.starved).add("buf", static_cast<int64_t>(fc.buf.size())).add("dz", std::round(dz)));
+    }
     // Pion bloqué (obstacle) : vitesse voulue nette mais immobile 2 s -> téléportation.
     if (fc.moving && vc > 200 && own_speed < 40 && err > 150) {
         if (fc.stuck_since < 0) fc.stuck_since = s.now;

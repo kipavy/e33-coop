@@ -281,3 +281,19 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Limite** : pendant le vol, l'ami ne voit pas l'hôte (pas d'avatar distant) ; sa caméra suit le pion caché. Reproduire la monture (Esquie chez le suiveur aussi) demande le nom de la fonction de montée, à lire dans `coop_mount_functions`.
 
 **Remise en cause si** : le pion de la carte du monde à pied utilise un mode custom (fantôme permanent : `coop_follower_ghost` raison `pilot_move` avec `pilot_mount` faux) ; ou si `IsMountInUse` n'est pas mis à jour à la monture (raison `pawn_class` à la place, à vérifier dans `coop_pilot_move`).
+
+---
+
+## D20 — Suivi du pilote : tampon d'interpolation, commande en vitesse, critères de fluidité (2026-10-23, demande de Killian)
+
+**Constat** (essai à deux PC du 2026-10-22, journaux du client en 0.6.1) : quand l'hôte courait, l'ami voyait des « freeze ». Causes trouvées côté mod : téléportations toutes les ~2,2 s (sprint non suivi, seuil fixe de 800 u) et **deux rechargements d'instantané de 5-6 s en plein sprint** (resynchro d'inventaire demandée sans regarder le mouvement) ; en 0.6.4 encore (`p8_sprint_client`) : sprint du suiveur obtenu seulement par le repli `SetDesiredGait` après 0,6 s, retard moyen de 200 u jamais rattrapé (le suiveur ne peut pas aller plus vite que le pilote), départs/arrêts répétés en marche, et une resynchro envoyée en plein sprint.
+
+**Décision** :
+1. `PilotState` gagne un champ final facultatif `t_ms` (horloge du pilote à l'envoi). Ancien message : décodé avec `t_ms` = 0 (instants de réception utilisés).
+2. Le suiveur garde les positions du pilote dans un tampon trié par `t_ms` et vise la trajectoire du pilote 100 ms après le transit minimal (120 ms sans horloge) : interpolation d'Hermite (positions + vitesses), prolongée au plus 0,35 s si une position tarde, puis pilote tenu arrêté. Un trou > 1 s ou un saut > 400 u n'est pas interpolé (téléportation « gap » permise).
+3. Commande en vitesse : vitesse voulue = vitesse du pilote rendu + 2 x écart (1/s), plafonnée à 1,2 x sprint. En course : échelle d'entrée = vitesse voulue / `MaxWalkSpeed`. Au-delà de 1,08 x course : allure voulue Sprint par `SetDesiredGait` (plus de `SprintAction`), entrée pleine (l'ALS n'accorde le sprint qu'au-delà de 0,9) et `MaxWalkSpeed` = vitesse voulue (rendue à la vitesse de course de l'ALS en sortie). Sortie du sprint sous 0,92 x course pendant 0,3 s.
+4. Téléportation : trou de données (« gap »), écart > 800 u qui ne baisse pas de 50 u en 1 s ou > 1600 u, pion bloqué 2 s, écart vertical > 400 u pendant 0,5 s.
+5. Client : une resynchro (rechargement) n'est jamais demandée pendant un mouvement (pilote ou pion local > 50 u/s dans les 1,5 s) : attendue jusqu'à l'arrêt, au plus 120 s.
+6. **Critères de fluidité** mesurés par le mod chez le suiveur (compteurs, vérifiés par les scénarios `p8_sprint_*`) : 0 téléportation hors trou de données ; écart au pilote < 250 u en sprint, < 150 u en course, < 120 u en marche, < 60 u à l'arrêt ; 0 « stall » (pion < 30 % de la vitesse du pilote pendant 150 ms, pilote en mouvement), immobilité du pion pilote en mouvement <= 150 ms ; 0 creux (< 60 %, 150 ms) et 0 chute brusque (> 250 u/s en 0,1 s) pendant une course continue ; 0 arrêt du pion pilote en mouvement ; 0 image > 50 ms due au mod pendant le mouvement ; 0 resynchro envoyée pendant le mouvement. Pourquoi ces seuils : à 720 u/s, 0,2-0,3 s de retard (transit + tampon + réaction de l'ALS) font 150-220 u ; 150 ms d'immobilité est le seuil où un arrêt se voit ; à l'arrêt, 60 u = un pas.
+
+**Remise en cause si** : le jeu réécrit `MaxWalkSpeed` à chaque image (rattrapage sans effet : `own_speed_max` jamais au-dessus du sprint) ; ou si l'écart en sprint reste > 250 u à deux PC (tampon trop long pour le réseau réel : réduire `kRenderDelay`).
