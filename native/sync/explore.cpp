@@ -97,6 +97,11 @@ struct S {
     double cj_since = 0;
     double world_stable = 0;
     uint32_t joined_xfer = 0;
+    double cj_calm_since = -1;                    // client : début du calme (ni dialogue ni cinématique) avant de charger
+    int cj_load_tries = 0;                        // client : chargements demandés pour cet instantané
+    double cj_next_diag = 0;                      // client : prochain journal de l'attente du monde
+    int join_stuck_test = 0;                      // test : -e33joinstuck=N, monde vu « pas prêt » pendant les N premiers chargements
+    int cj_loads_total = 0;                       // client : chargements demandés dans la session (tous instantanés)
     // Pilote
     uint8_t pilot = 0;
     uint32_t pilot_seq = 0;
@@ -363,8 +368,16 @@ void client_join_tick()
     }
     if (s.cj == S::ClientJoin::Loading) {
         // Charger depuis le menu principal ou depuis une partie en cours (même chemin que les saves de test).
-        if (!game::gi() || game::map_change_in_progress()) return;
+        const bool retry = s.cj_load_tries > 0;
+        // Un nouvel essai passe outre un « chargement en cours » resté levé (c'est peut-être lui qui bloque).
+        if (!game::gi() || (!retry && game::map_change_in_progress())) return;
         if (!game::main_menu() && !game::controller()) return;
+        // Pas de chargement pendant un dialogue / une cinématique ni juste après : le 2026-10-23 (essai à deux PC),
+        // un chargement demandé dans la même seconde que la fin d'un dialogue est resté sur l'écran noir.
+        // Calme de 2 s exigé, 20 s d'attente au plus après l'instantané.
+        if (!game::main_menu() && (game::in_dialogue() || game::playing_cinematic())) s.cj_calm_since = -1;
+        else if (s.cj_calm_since < 0) s.cj_calm_since = s.now;
+        if (s.now - s.cj_since < 20.0 && (s.cj_calm_since < 0 || s.now - s.cj_calm_since < 2.0)) return;
         std::string err;
         if (!game::load_save_slot(kCoopSlot, err)) {
             bump("join_errors");
@@ -372,15 +385,46 @@ void client_join_tick()
             s.cj = S::ClientJoin::None;
             return;
         }
+        ++s.cj_load_tries;
+        ++s.cj_loads_total;
+        if (retry) bump("join_load_retries");
         s.cj = S::ClientJoin::WaitWorld;
         s.cj_since = s.now;
+        s.cj_next_diag = s.now + 10.0;
         s.world_stable = 0;
-        log().write("coop_join_loading", JsonObj().add("slot", ue::to_utf8(kCoopSlot)));
+        log().write("coop_join_loading", JsonObj().add("slot", ue::to_utf8(kCoopSlot)).add("try", s.cj_load_tries));
         return;
     }
     if (s.cj == S::ClientJoin::WaitWorld) {
         if (s.now - s.cj_since < 5) return;   // le chargement ne commence pas tout de suite
-        s.world_stable = world_ready() ? s.world_stable + kPollPeriod : 0;
+        const bool ready = world_ready() && s.cj_loads_total > s.join_stuck_test;
+        s.world_stable = ready ? s.world_stable + kPollPeriod : 0;
+        if (!ready && s.now >= s.cj_next_diag) {
+            // Ce qui manque (journal toutes les 10 s) : aucune attente muette.
+            s.cj_next_diag = s.now + 10.0;
+            log().write("coop_join_wait_world", JsonObj().add("s", s.now - s.cj_since).add("try", s.cj_load_tries)
+                                                    .add("controller", game::controller() != nullptr).add("loading", game::map_change_in_progress())
+                                                    .add("pawn", game::explore_pawn() != nullptr).add("battle", game::in_battle())
+                                                    .add("dialogue", game::in_dialogue()).add("cinematic", game::playing_cinematic())
+                                                    .add("main_menu", game::main_menu()));
+        }
+        if (!ready && s.now - s.cj_since > 45.0) {
+            if (s.cj_load_tries < 2) {
+                // Monde jamais prêt 45 s après le chargement : on recharge l'instantané (déjà sur le disque).
+                log().write("coop_join_load_stuck", JsonObj().add("try", s.cj_load_tries).add("action", "reload"));
+                s.cj = S::ClientJoin::Loading;
+                s.cj_since = s.now;
+                s.cj_calm_since = -1;
+                return;
+            }
+            // Toujours bloqué : on redemande un instantané à l'hôte (nouvel envoi, nouveaux essais).
+            bump("join_load_stuck");
+            log().write("coop_join_load_stuck", JsonObj().add("try", s.cj_load_tries).add("action", "resync"));
+            s.cj = S::ClientJoin::None;
+            s.last_chunk_at = s.now;
+            s.net.publish(proto::ResyncRequest{"join load stuck"}, true);
+            return;
+        }
         if (s.world_stable < 3.0) return;
         s.cj = S::ClientJoin::Joined;
         s.cj_joined_at = s.now;
@@ -430,6 +474,8 @@ void on_chunk(const proto::SaveChunk& c)
     s.joined_xfer = in->xfer;
     s.cj = S::ClientJoin::Loading;
     s.cj_since = s.now;
+    s.cj_calm_since = -1;
+    s.cj_load_tries = 0;
     in.reset();
 }
 
@@ -1774,6 +1820,7 @@ void init(bool host, bool want_join, const Net& net)
 {
     {
         if (const std::wstring v = cmdline::arg(L"e33perturbworld"); !v.empty()) s.perturb_gold = _wtoi(v.c_str());
+        if (const std::wstring v = cmdline::arg(L"e33joinstuck"); !v.empty()) s.join_stuck_test = _wtoi(v.c_str());
     }
     s.host = host;
     s.active = true;
@@ -1787,7 +1834,8 @@ void init(bool host, bool want_join, const Net& net)
                           "barrier_timeouts", "barrier_releases", "snapshot_errors", "snapshot_hash_errors", "snapshot_chunk_errors", "join_errors",
                           "interaction_errors", "choice_errors", "choice_timeouts", "map_change_errors", "local_actions_on_follower",
                           "follower_teleports_nogap", "follow_stalls", "follow_dips", "follow_speed_drops", "follow_parasitic_stops",
-                          "resyncs_while_moving", "resyncs_deferred_moving", "explore_hitches_moving", "explore_hitches_mod"})
+                          "resyncs_while_moving", "resyncs_deferred_moving", "explore_hitches_moving", "explore_hitches_mod",
+                          "join_load_retries", "join_load_stuck", "snapshot_timeouts"})
         bump(c, 0);
 }
 
