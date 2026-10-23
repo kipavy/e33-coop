@@ -2,16 +2,19 @@
   "name": "p9_join_stuck_client",
   "description": "Chargement de l'instantané bloqué (essai à deux PC du 2026-10-23 : écran noir « Chargement de la partie de l'hôte » sans fin). -e33joinstuck=2 : le monde est vu « pas prêt » après les 2 premiers chargements. Attendu : rechargement au bout de 45 s, puis nouvelle demande d'instantané à l'hôte, puis entrée dans la partie au 3e chargement. Avant la correction : attente sans fin (aucune limite).",
   "join": true,
-  "timeout_s": 600,
+  "timeout_s": 1000,
   "max_turns": 10,
   "shots_every_s": 15,
   "actions": [{ "type": "flee" }],
   "defense": ["fail"],
   "explore": [
     { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 400 },
-    { "do": "wait", "s": 5 }
+    { "do": "wait", "until": "interactions_replayed", "is": ">=1", "timeout": 600 },
+    { "do": "wait", "until": "choices_replayed", "is": ">=1", "timeout": 300 },
+    { "do": "wait_dialogue_end", "timeout": 120 },
+    { "do": "wait", "s": 3 }
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33joinstuck=2"],
-  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p4_session_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p4_session_snapshot.sav", "--paced", "1", "--resync-snapshot", "1", "--timeout", "600"] },
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p4_session_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p4_session_snapshot.sav", "--paced", "1", "--resync-snapshot", "1", "--timeout", "1000"] },
   "expect": { "snapshots_received": "2", "joins_completed": "1", "join_load_retries": "1", "join_load_stuck": "1", "snapshot_hash_errors": "0", "join_errors": "0" }
 }
