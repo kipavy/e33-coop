@@ -499,6 +499,8 @@ struct FollowCtl {
     bool moving = false;
     bool sprint = false;
     double sprint_low_since = -1;
+    double sprint_set = 0;                  // vitesse de sprint écrite (lissée)
+    double ctl_last = -1;
     double next_gait_assert = 0;
     float base_max = 0;                     // MaxWalkSpeed avant la première écriture du mod
     bool max_written = false;
@@ -731,14 +733,14 @@ void follow_metrics(const Rendered& R, double rv, double own, double gap_now, do
         if (fc.dip_since < 0) { fc.dip_since = s.now; fc.dip_counted = false; }
         if (s.now - fc.dip_since >= 0.15 && !fc.dip_counted) { fc.dip_counted = true; bump("follow_dips"); follow_event("dip", own / std::max(1.0, rv) * 100.0, rv, own, gap_now); }
     } else fc.dip_since = -1;
-    // Chute brusque de la vitesse du pion (à-coup) : > 250 u/s en ~0,1 s, jusqu'à bien moins que le pilote, qui n'est
-    // pas descendu aussi bas pendant les 0,3 dernières s (sinon le pion ne fait que le suivre).
-    double rv_min = rv;
-    for (const auto& h : fc.hist) rv_min = std::min(rv_min, h[2]);
+    // Chute brusque de la vitesse du pion (à-coup) : > 250 u/s en ~0,1 s, sous 85 % de la vitesse du pilote, qui n'a
+    // pas ralenti de plus de 10 % sur les 0,3 dernières s (sinon le pion ne fait que le suivre).
+    double rv_max = rv;
+    for (const auto& h : fc.hist) rv_max = std::max(rv_max, h[2]);
     for (const auto& h : fc.hist) {
         if (s.now - h[0] > 0.13) continue;
         if (s.now - h[0] < 0.09) break;
-        if (rv > 150 && h[1] - own > 250 && rv_min > own + 100 && s.now - fc.last_drop_at > 0.3) {
+        if (rv > 150 && h[1] - own > 250 && rv >= 0.9 * rv_max && own < 0.85 * rv && s.now - fc.last_drop_at > 0.3) {
             fc.last_drop_at = s.now;
             bump("follow_speed_drops");
             follow_event("speed_drop", h[1] - own, rv, own, gap_now);
@@ -801,6 +803,8 @@ void follow_tick()
     s.local_speed = own_speed;
     s.local_speed_at = s.now;
     if (fc.follow_since < 0) fc.follow_since = s.now;
+    const double ctl_dt = std::clamp(s.now - fc.ctl_last, 0.0, 0.1);
+    fc.ctl_last = s.now;
     // Vitesses ALS du pion (relues toutes les 2 s)
     if (s.now - fc.speeds_at > 2.0 && !fc.max_written) {   // pas pendant que le mod a relevé le sprint
         fc.speeds_at = s.now;
@@ -879,7 +883,10 @@ void follow_tick()
         log().write("coop_follow_trace", JsonObj().add("err", std::round(err)).add("gap", std::round(gap_now)).add("rv", std::round(rv))
                                             .add("own", std::round(own_speed)).add("vc", std::round(vc)).add("mv", fc.moving).add("sp", fc.sprint)
                                             .add("mws", m ? std::round(static_cast<double>(*m)) : -1.0).add("gait", game::pawn_gait(pawn))
-                                            .add("st", R.starved).add("buf", static_cast<int64_t>(fc.buf.size())).add("dz", std::round(dz)));
+                                            .add("st", R.starved).add("buf", static_cast<int64_t>(fc.buf.size())).add("dz", std::round(dz))
+                                            .add("ss", std::round(fc.sprint_set))
+                                            .add("ang", own_speed > 50 && vc > 1 ? std::round(std::acos(std::clamp((me.vel[0] * vx + me.vel[1] * vy) / (own_speed * vc), -1.0, 1.0)) * 57.2958) : 0.0)
+                                            .add("x", std::round(me.pos[0])).add("y", std::round(me.pos[1])));
     }
     // Pion bloqué (obstacle) : vitesse voulue nette mais immobile 2 s -> téléportation.
     if (fc.moving && vc > 200 && own_speed < 40 && err > 150) {
@@ -890,8 +897,10 @@ void follow_tick()
     // dès qu'il repasse sous la course et que le retard est faible. Sans délai : le pion ralentit avec le pilote (avant :
     // sprint gardé 0,3 s, le pion dépassait le pilote puis freinait d'un coup).
     const bool want_sprint = fc.moving && (rv > run_speed * 1.1 || (err > 120 && vc > run_speed * 1.08));
-    const bool keep_sprint = fc.moving && (rv > run_speed * 1.03 || vc > run_speed * 1.03);
-    if (want_sprint && !fc.sprint) { fc.sprint = true; sprint_start(pawn); }
+    // Sortie du sprint seulement une fois la vitesse de sprint redescendue près de la course (rampe ci-dessous) : sinon
+    // l'ALS freine d'un coup jusque sous la course (mesuré : 737 -> 206 u/s en 0,1 s).
+    const bool keep_sprint = fc.moving && (rv > run_speed * 1.03 || vc > run_speed * 1.03 || fc.sprint_set > run_speed + 30);
+    if (want_sprint && !fc.sprint) { fc.sprint = true; fc.sprint_set = std::max(own_speed, run_speed + 15); sprint_start(pawn); }
     else if (fc.sprint && !keep_sprint) sprint_stop(pawn);
     if (fc.sprint) {
         f.sprint_s += fdt;
@@ -912,10 +921,16 @@ void follow_tick()
         // Entrée pleine (l'ALS n'accorde le sprint qu'au-delà de 0,9). La vitesse suit la vitesse voulue par la vitesse de
         // sprint des réglages ALS (de la course + 15 à 1,2 x le sprint, rendue ensuite) : le pion ralentit avec le pilote
         // au lieu de rester à 720 puis de freiner d'un coup au passage en course (mesuré : 662 -> 185 u/s en 0,1 s).
+        // Vitesse lissée : montée en ~0,1 s, descente limitée à 1500 u/s² (le pilote passe de 720 à 350 en ~0,25 s), pas de
+        // va-et-vient d'une image à l'autre (une vitesse max qui passe sous la vitesse du pion le fait freiner).
         scale = 1.0;
+        const double target = std::clamp(vc, run_speed + 15.0, vmax);
+        const double cdt = ctl_dt;
+        if (target > fc.sprint_set) fc.sprint_set += (target - fc.sprint_set) * std::min(1.0, cdt / 0.1);
+        else fc.sprint_set = std::max(target, fc.sprint_set - 1500.0 * cdt);
         if (fc.speeds_ok) {
             fc.max_written = true;
-            game::set_pawn_sprint_speed(pawn, static_cast<float>(std::clamp(vc, run_speed + 15.0, vmax)));
+            game::set_pawn_sprint_speed(pawn, static_cast<float>(fc.sprint_set));
         }
     } else {
         const double cap = mws && *mws > 10.0f ? static_cast<double>(*mws) : run_speed;
