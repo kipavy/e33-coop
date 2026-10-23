@@ -1,6 +1,6 @@
 {
   "name": "p9_zones_client_nofix",
-  "description": "Mesure « avant » (corrections coupées par -e33zonefix=0), pas dans la batterie. Changements de zone (2026-10-23) : le faux hôte rejoue la tranche zones_tour (p9_zones_host : 7 transitions, drapeau -> carte du monde, entrée de la carte du monde, sorties de zone, camp, retour sur la carte du monde), positions à 20/s, réseau simulé. Le client doit suivre chaque transition par un seul chargement, sans resynchro de niveau ni d'instantané, reprendre le suivi tout de suite à l'arrivée (pas de téléportation, pas de pause), et ne jamais ralentir le jeu.",
+  "description": "Mesure « avant » (corrections coupées par -e33zonefix=0), pas dans la batterie. Changements de zone (2026-10-23) : le faux hôte rejoue la tranche zones_tour (p9_zones_host : 7 transitions, drapeau -> carte du monde, entrée de la carte du monde, sorties de zone, camp, retour sur la carte du monde), positions à 20/s, réseau simulé (empreintes d exploration retirées de la tranche : écart de casse de noms sans lien avec les transitions, voir PROGRESS). Le client doit suivre chaque transition par un seul chargement, sans resynchro de niveau ni d'instantané, reprendre le suivi tout de suite à l'arrivée (pas de téléportation, pas de pause), et ne jamais ralentir le jeu.",
   "join": true,
   "timeout_s": 900,
   "shots_every_s": 5,

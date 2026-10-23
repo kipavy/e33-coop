@@ -1042,11 +1042,13 @@ struct MapTrans {
     double follow_at = -1, err0 = -1, caught_at = -1;   // premier suivi après l'arrivée, son écart, écart < 250 u
     int teleports = 0, starts = 0, stops = 0, mod_slow = 0, slow = 0;
     double paused_s = 0, mod_max_ms = 0;
+    double ticked_s = 0;             // temps de jeu réel après l'arrivée (images < 0,5 s : sans les gels de chargement)
 };
 MapTrans mt;
 // Horloge murale (s) : un chargement bloque le thread de jeu, les mesures de transition se font en temps réel.
 double wnow() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 bool load_in = false;                 // chargement de niveau en cours ici (IsMapChangeInProgress)
+double load_fall_at = -1;              // fin du dernier chargement (IsMapChangeInProgress retombé)
 double load_rise_at = -1;
 std::string load_dest;
 double prev_now = -1;
@@ -1073,7 +1075,7 @@ void mt_close(const char* why)
         .add("pilot_ready_ms", ms(mt.pilot_at, mt.rx_at)).add("after_pilot_ms", late)
         .add("err0", static_cast<int64_t>(mt.err0)).add("catchup_ms", catchup).add("teleports", mt.teleports)
         .add("starts", mt.starts).add("stops", mt.stops).add("paused_ms", static_cast<int64_t>(mt.paused_s * 1000.0))
-        .add("mod_slow", mt.mod_slow).add("mod_max_ms", std::round(mt.mod_max_ms * 100.0) / 100.0).add("slow_frames", mt.slow));
+        .add("ticked_ms", static_cast<int64_t>(mt.ticked_s * 1000.0)).add("mod_slow", mt.mod_slow).add("mod_max_ms", std::round(mt.mod_max_ms * 100.0) / 100.0).add("slow_frames", mt.slow));
     bump("map_transitions");
     if (!done) bump("map_transitions_unfinished");
     if (mt.loads > mt.expect_loads) bump("map_loads_extra", mt.loads - mt.expect_loads);
@@ -1088,7 +1090,37 @@ void mt_close(const char* why)
     if (mt.teleports) bump("map_arrival_teleports", mt.teleports);
     if (mt.stops) bump("map_arrival_stops", mt.stops);
     if (mt.mod_slow) bump("map_arrival_mod_slow", mt.mod_slow);
-    if (done && mt.follow_at < 0) bump("map_arrival_no_follow");
+    // Suivi jamais repris alors que le pilote était là et que le jeu a tourné 3 s (un gel du jeu ne compte pas).
+    if (done && mt.follow_at < 0 && mt.pilot_at >= 0 && mt.ticked_s >= 3.0) bump("map_arrival_no_follow");
+}
+
+// Chargements d'ici : fronts de IsMapChangeInProgress. Un chargement peut finir et le suivant commencer dans la même
+// image (MapChange appliqué dès la fin du précédent, avant map_tick) : le mod compte donc aussi ses propres ChangeMap.
+void load_begin(const std::string& dest, const std::string& tag)
+{
+    load_in = true;
+    load_rise_at = wnow();
+    load_dest = dest;
+    bump("map_loads_local");
+    log().write("coop_map_load_start", JsonObj().add("level", load_dest).add("spawn", tag).add("pilot", is_pilot()).add("from", game::current_level()));
+    if (mt.open) { ++mt.loads; if (mt.load_at < 0) mt.load_at = wnow(); }   // après l'arrivée : chargement de trop
+}
+
+void load_end()
+{
+    load_in = false;
+    load_fall_at = wnow();
+    log().write("coop_map_load_end", JsonObj().add("level", load_dest).add("load_s", wnow() - load_rise_at).add("pilot", is_pilot()));
+}
+
+void load_edge_tick()
+{
+    const bool in = game::map_change_in_progress();
+    if (in && !load_in) {
+        std::string dest, tag;
+        if (!game::map_destination(dest, tag)) dest.clear();
+        load_begin(dest, tag);
+    } else if (!in && load_in) load_end();
 }
 
 // Chaque image (pilote et suiveur) : début et fin des chargements d'ici ; suiveur : arrivée et fenêtre d'observation.
@@ -1096,19 +1128,8 @@ void map_tick()
 {
     const double dt = prev_now < 0 ? 0.0 : s.now - prev_now;
     prev_now = s.now;
-    const bool in = game::map_change_in_progress();
-    if (in && !load_in) {
-        load_in = true;
-        load_rise_at = wnow();
-        std::string tag;
-        if (!game::map_destination(load_dest, tag)) load_dest.clear();
-        bump("map_loads_local");
-        log().write("coop_map_load_start", JsonObj().add("level", load_dest).add("spawn", tag).add("pilot", is_pilot()).add("from", game::current_level()));
-        if (mt.open) { ++mt.loads; if (mt.load_at < 0) mt.load_at = wnow(); }   // après l'arrivée : chargement de trop
-    } else if (!in && load_in) {
-        load_in = false;
-        log().write("coop_map_load_end", JsonObj().add("level", load_dest).add("load_s", wnow() - load_rise_at).add("pilot", is_pilot()));
-    }
+    load_edge_tick();
+    const bool in = load_in;
     // Suiveur : boîtes de passage du niveau coupées. Son pion, conduit derrière le pilote, ne change de niveau que sur
     // MapChange (sinon : passage par une autre sortie que le pilote, ou second déclenchement de la même pendant le
     // chargement). Rendues quand il redevient pilote. Une fois par niveau (FindAllOf parcourt tous les objets).
@@ -1143,7 +1164,8 @@ void map_tick()
     mt.mod_max_ms = std::max(mt.mod_max_ms, mod_ms);
     if (mod_ms > 20.0) ++mt.mod_slow;
     if (dt > 0.08 && dt < 3.0 && !in) ++mt.slow;
-    if (mt.pilot_at >= 0 && wnow() - mt_window_start() > kMapWindow) mt_close("done");
+    if (dt < 0.5) mt.ticked_s += dt;
+    if (mt.pilot_at >= 0 && wnow() - mt_window_start() > kMapWindow && mt.ticked_s >= 3.0) mt_close("done");
     else if (wnow() - mt.arrived_at > 60.0) mt_close("pilot_absent");
 }
 
@@ -1183,16 +1205,17 @@ void apply_map_change(const proto::MapChange& mc)
     s.replaying = true;
     const bool ok = game::change_map(ue::from_utf8(mc.level), ue::from_utf8(mc.spawn_tag));
     s.replaying = false;
+    if (ok) { if (load_in) load_end(); load_begin(mc.level, mc.spawn_tag); }   // compté ici (voir load_begin)
     bump(ok ? "map_changes_followed" : "map_change_errors");
     log().write("coop_map_change_followed", JsonObj().add("level", mc.level).add("spawn", mc.spawn_tag).add("ok", ok).add("how", mt.how)
                                                 .add("after_rx_s", wnow() - mt.rx_at));
 }
 
 // Dernier chargement d'ici pas encore arrivé : le jeu ne dit plus « chargement en cours » mais le pion de l'ancien
-// niveau est encore là (vu le 2026-10-23 avec des chargements lents, 20 s) ; un ChangeMap à ce moment est perdu.
+// niveau est encore là quelques images (vu le 2026-10-23, chargements lents) ; un ChangeMap à ce moment est perdu.
 bool load_unfinished()
 {
-    return !load_dest.empty() && game::current_level() != load_dest && wnow() - load_rise_at < 60.0;
+    return !load_in && !load_dest.empty() && load_fall_at >= 0 && wnow() - load_fall_at < 3.0 && game::current_level() != load_dest;
 }
 
 // Suiveur : MapChange appliqué tout de suite si possible ; sinon gardé (le dernier seulement) et appliqué dès que le
@@ -1202,6 +1225,7 @@ bool load_unfinished()
 void on_map_change(const proto::MapChange& mc)
 {
     touch();
+    load_edge_tick();   // état du chargement à jour (le message est lu avant map_tick)
     if (is_menu_level(mc.level)) {
         log().write("coop_map_change_ignored", JsonObj().add("level", mc.level).add("why", "menu"));
         return;
