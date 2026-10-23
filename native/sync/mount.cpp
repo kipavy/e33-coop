@@ -12,6 +12,8 @@
 #include <Unreal/UClass.hpp>
 #include <Unreal/UFunction.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/Property/FMapProperty.hpp>
+#include <Unreal/Property/FSetProperty.hpp>
 
 #include "../common/cmdline.hpp"
 #include "../common/jsonlog.hpp"
@@ -335,7 +337,8 @@ std::string lower(std::string v)
 
 bool has_any(const std::string& name, const std::vector<std::string>& needles)
 {
-    const std::string l = lower(name);
+    std::string l = lower(name);
+    for (size_t at; (at = l.find("amount")) != std::string::npos;) l.erase(at, 6);   // « Amount » n'est pas une monture
     for (const auto& k : needles) if (l.find(k) != std::string::npos) return true;
     return false;
 }
@@ -407,6 +410,12 @@ std::string state_props(UObject* o, bool all = false)
         if (!p) continue;
         const std::string name = reflect::clean_name(p->GetName());
         if (!all && !has_any(name, mount_needles())) continue;
+        // Pointeurs souples / faibles : pas un UObject* brut (lus comme tels, ils ont fait planter le jeu le 2026-10-23).
+        if (RC::Unreal::CastField<RC::Unreal::FObjectPropertyBase>(p) && !RC::Unreal::CastField<RC::Unreal::FObjectProperty>(p)) continue;
+        // Tout lire : valeurs simples seulement (pas de structs ni de conteneurs d'objets inconnus).
+        if (all && (RC::Unreal::CastField<RC::Unreal::FStructProperty>(p) || RC::Unreal::CastField<RC::Unreal::FArrayProperty>(p) ||
+                    RC::Unreal::CastField<RC::Unreal::FMapProperty>(p) || RC::Unreal::CastField<RC::Unreal::FSetProperty>(p)))
+            continue;
         reflect::Leaves l;
         reflect::flatten(p, p->ContainerPtrToValuePtr<void>(o), name, l, 5);   // profondeur réduite : valeurs simples
         int k = 0;
@@ -541,7 +550,7 @@ void diag(const std::string& label)
     for (UObject* owner : {ctrl, pos_pawn, game::gi()}) {
         if (!owner) continue;
         for (FProperty* p : RC::Unreal::TFieldRange<FProperty>(owner->GetClassPrivate(), RC::Unreal::EFieldIterationFlags::IncludeSuper)) {
-            if (!p || !RC::Unreal::CastField<RC::Unreal::FObjectPropertyBase>(p)) continue;
+            if (!p || !RC::Unreal::CastField<RC::Unreal::FObjectProperty>(p)) continue;
             const std::string name = ue::to_utf8(p->GetName());
             if (!has_any(name, {"worldmap", "mount", "esquie", "spawner", "vehicle", "ride"})) continue;
             UObject* o = *static_cast<UObject**>(p->ContainerPtrToValuePtr<void>(owner));
@@ -594,7 +603,7 @@ void trace()
         hook_class(ctrl->GetClassPrivate(), true, 1);
         // Composants de la carte du monde (contrôleur de carte, apparition…) : toutes leurs fonctions.
         for (FProperty* p : RC::Unreal::TFieldRange<FProperty>(ctrl->GetClassPrivate(), RC::Unreal::EFieldIterationFlags::IncludeSuper)) {
-            if (!p || !RC::Unreal::CastField<RC::Unreal::FObjectPropertyBase>(p)) continue;
+            if (!p || !RC::Unreal::CastField<RC::Unreal::FObjectProperty>(p)) continue;
             if (!has_any(ue::to_utf8(p->GetName()), {"worldmap", "mount", "esquie", "spawner"})) continue;
             if (UObject* o = *static_cast<UObject**>(p->ContainerPtrToValuePtr<void>(ctrl))) hook_class(o->GetClassPrivate(), true, 2);
         }
