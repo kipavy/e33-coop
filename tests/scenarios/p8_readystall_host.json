@@ -1,0 +1,18 @@
+{
+  "name": "p8_readystall_host",
+  "description": "Hôte jamais figé par un client qui ne suit plus : le faux client (Maelle) n'envoie jamais BattleReady (comme le client tenu par la barrière au duel du prologue, 2026-10-22) alors qu'il ne fait rien d'autre : le combat commence sans lui après 15 s d'inactivité (-e33readyidle=15 ; 60 s par défaut) au lieu de 10 min. À partir du tour 4 il ne répond plus du tout (ni tour, ni hash, ni défense) : l'hôte joue une attaque automatique pour Maelle après 10 s de jeu (-e33stuckturn=10 ; 60 s par défaut) et n'attend plus ses défenses (une seule attente de 3 s au plus).",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 900,
+  "wait_players": 1,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [{ "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=8", "-e33readyidle=15", "-e33stuckturn=10"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_readystall.json", "--timeout", "900"] },
+  "expect": { "battle_end": "any", "battle_holds": "1", "battle_ready_timeouts": "1", "battle_ready_idle_timeouts": "1", "battle_hold_max_ms": "<30000",
+              "ui:battle_started_without": "1", "turn_stuck_forced": ">=1", "ui:turn_forced_stuck": ">=1", "defense_timeouts": "<=1",
+              "battle_frame_max_ms": "<3500", "game_thread_stalls_battle": "0" }
+}

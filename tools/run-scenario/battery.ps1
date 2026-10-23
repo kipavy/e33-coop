@@ -25,7 +25,8 @@ $all = @(
     "p6_newgame_host", "p6_newgame_client", "p6_duoparry_host", "p6_ownersui_host", "p7_intent_host", "p7_intent_client", "p7_menumirror_host", "p7_menumirror_off_host",
     "p6_coopsave_client", "p6_coopsave_host", "p6_panel_host",
     "p8_cutscene_host", "p8_cutscene_sync_client", "p8_cutscene_client",
-    "p8_esquie_host", "p8_esquie_client"
+    "p8_esquie_host", "p8_esquie_client",
+    "p8_prologue_client", "p8_prologue_host", "p8_readystall_host", "p8_thinking_host", "p8_defwait_host", "p8_turnalign_host"
 )
 $list = if ($Only) { $Only -split "," } else { $all }
 $results = @()

@@ -1,0 +1,20 @@
+{
+  "name": "p8_prologue_dlg_client",
+  "description": "Duel du prologue contre Maelle, variante où le client déclenche lui aussi le dialogue de Maelle (son pion suit le pilote jusqu'à la zone, 0,2 s après l'hôte) : chacun reste « en dialogue » pendant tout le duel, la barrière ne s'applique pas. Le faux hôte rejoue la tranche réelle twopc_prologue (instantané n° 5), positions à 20/s, réseau simulé. Attendu : le client entre dans le combat en quelques secondes, envoie BattleReady, rejoue le tour de l'hôte et finit le combat (défaite imposée, résultat de l'hôte). La défense sans réponse est normale : l'hôte enregistré était figé (aucun DefenseResult avant sa fin de combat) ; l'attente s'arrête au BattleEnd de l'hôte.",
+  "join": true,
+  "timeout_s": 700,
+  "shots_every_s": 5,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "battle", "timeout": 150 },
+    { "do": "wait", "s": 20 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/twopc_prologue.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_prologue_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "snapshot_hash_errors": "0", "join_errors": "0",
+              "battle_end": "any", "remote_actions": ">=1", "barrier_holds_in_battle": "0",
+              "battle_ready_delay_ms": "<15000", "defense_timeouts": "<=1", "battle_frame_max_ms": "<3500", "wait_max_ms": "<3500",
+              "game_thread_stalls_battle": "0", "battles_finalized": ">=1" }
+}

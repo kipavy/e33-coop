@@ -1,0 +1,11 @@
+{
+  "player_name": "Muet",
+  "game_build": 23765773,
+  "mod_version": "current",
+  "gameplay_mods": [],
+  "no_ready": true,
+  "stuck_at_turn": 4,
+  "actions": [{ "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "expect": { "ready_withheld": "1", "ready_sent": "0", "stuck": "1" }
+}
