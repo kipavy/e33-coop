@@ -243,6 +243,8 @@ void follow_stats_rx(const proto::PilotState& p)
 }
 
 void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
+void bump_max(const char* name, int& cur, int v);   // compteur « maximum » (plus bas)
+void mt_follow(double err, bool teleported, int started, int stopped);   // mesures d'arrivée (plus bas)
 
 // Les événements d'exploration ne concernent que les joueurs entrés dans la partie (hôte : au moins un client
 // entré ; client : instantané chargé, ou session sans « rejoindre » des tests de combat).
@@ -555,7 +557,9 @@ void follow_tick()
     f.pilot_speed_max = std::max(f.pilot_speed_max, sp);
     if (s.follow_moving) { f.own_speed_sum += own_speed; ++f.own_speed_n; }
     f.own_speed_max = std::max(f.own_speed_max, own_speed);
+    const bool fresh = real_age < 1.0;   // mesures d'arrivée (changement de niveau) : position récente du pilote seulement
     if (d > kTeleportDistance || std::fabs(dz) > 400) {
+        if (fresh) mt_follow(s.follow_error, true, 0, 0);
         const double pos[3] = {tx, ty, tz};
         game::teleport_pawn(pawn, pos, p.yaw);
         bump("follower_teleports");
@@ -566,8 +570,10 @@ void follow_tick()
     }
     // Arrêt seulement quand le pilote s'arrête vraiment et qu'on est arrivé ; reprise dès qu'il bouge ou s'éloigne
     // (avant : un seul seuil à 60 u, donc arrêt-redémarrage plusieurs fois par seconde quand il court).
-    if (!s.follow_moving && (d > 120 || sp > 80)) { s.follow_moving = true; bump("follow_starts"); ++f.starts; }
-    else if (s.follow_moving && d < 40 && sp < 30) { s.follow_moving = false; ++f.stops; }
+    int started = 0, stopped = 0;
+    if (!s.follow_moving && (d > 120 || sp > 80)) { s.follow_moving = true; bump("follow_starts"); ++f.starts; started = 1; }
+    else if (s.follow_moving && d < 40 && sp < 30) { s.follow_moving = false; ++f.stops; stopped = 1; }
+    if (fresh) mt_follow(s.follow_error, false, started, stopped);
     // Allure : sprint quand le pilote sprinte (course ~350 u/s, sprint ~720 u/s mesurés le 2026-10-22) ou pour
     // rattraper un retard pendant qu'il court ; rendu quand il ralentit et qu'on l'a rattrapé.
     const bool want_sprint = s.follow_moving && (sp > 450 || (sp > 200 && d > 300));
@@ -674,18 +680,143 @@ void replay_tick()
     }
 }
 
+// --- Changements de niveau : mesures (2026-10-23) -------------------------------------------------
+// Chez le suiveur, pour chaque MapChange du pilote : délai avant le début du chargement d'ici, nombre de chargements,
+// durée du chargement d'ici, arrivée par rapport au pilote (sa première position dans le nouveau niveau), écart au pilote
+// à la reprise du suivi et temps pour le rattraper, téléportations, arrêts, pause et images lentes du mod juste après
+// l'arrivée. Une ligne coop_map_transition par transition, et des compteurs pour les scénarios (« max » en ms).
+struct MapTrans {
+    bool open = false;
+    std::string level, spawn, how;   // how : followed, already (chargement déjà en route), same_level, deferred
+    int expect_loads = 1;
+    double rx_at = -1;               // MapChange reçu
+    double load_at = -1;             // premier chargement d'ici (avant rx_at : pion passé par le même déclencheur)
+    int loads = 0;                   // chargements commencés ici pendant la transition
+    double arrived_at = -1;          // monde prêt ici, dans le niveau visé
+    double pilot_at = -1;            // première position du pilote reçue dans le niveau visé
+    double follow_at = -1, err0 = -1, caught_at = -1;   // premier suivi après l'arrivée, son écart, écart < 250 u
+    int teleports = 0, starts = 0, stops = 0, mod_slow = 0, slow = 0;
+    double paused_s = 0, mod_max_ms = 0;
+};
+MapTrans mt;
+bool load_in = false;                 // chargement de niveau en cours ici (IsMapChangeInProgress)
+double load_rise_at = -1;
+std::string load_dest;
+double prev_now = -1;
+struct MapMax { int delay = 0, late = 0, load = 0, err = 0, catchup = 0, paused = 0, mod = 0; } mmax;
+constexpr double kMapWindow = 12.0;   // fenêtre d'observation après l'arrivée (et celle du pilote)
+
+double mt_window_start() { return std::max(mt.arrived_at, mt.pilot_at); }
+bool mt_in_window() { return mt.open && mt.arrived_at >= 0 && s.now - mt.arrived_at < 30.0; }
+
+void mt_close(const char* why)
+{
+    if (!mt.open) return;
+    mt.open = false;
+    const bool done = mt.arrived_at >= 0;
+    auto ms = [](double a, double b) { return a >= 0 && b >= 0 ? static_cast<int64_t>((a - b) * 1000.0) : -1; };
+    const int64_t delay = ms(mt.load_at, mt.rx_at), load = ms(mt.arrived_at, mt.load_at), late = ms(mt.arrived_at, mt.pilot_at);
+    const int64_t catchup = mt.caught_at >= 0 ? ms(mt.caught_at, mt.follow_at) : (mt.follow_at >= 0 ? ms(s.now, mt.follow_at) : -1);
+    log().write("coop_map_transition", JsonObj().add("level", mt.level).add("spawn", mt.spawn).add("how", mt.how).add("why", why).add("arrived", done)
+        .add("loads", mt.loads).add("expect_loads", mt.expect_loads).add("delay_ms", delay).add("load_ms", load)
+        .add("pilot_ready_ms", ms(mt.pilot_at, mt.rx_at)).add("after_pilot_ms", late)
+        .add("err0", static_cast<int64_t>(mt.err0)).add("catchup_ms", catchup).add("teleports", mt.teleports)
+        .add("starts", mt.starts).add("stops", mt.stops).add("paused_ms", static_cast<int64_t>(mt.paused_s * 1000.0))
+        .add("mod_slow", mt.mod_slow).add("mod_max_ms", std::round(mt.mod_max_ms * 100.0) / 100.0).add("slow_frames", mt.slow));
+    bump("map_transitions");
+    if (!done) bump("map_transitions_unfinished");
+    if (mt.loads > mt.expect_loads) bump("map_loads_extra", mt.loads - mt.expect_loads);
+    if (mt.loads < mt.expect_loads) bump("map_loads_missing", mt.expect_loads - mt.loads);
+    bump_max("map_follow_delay_ms_max", mmax.delay, static_cast<int>(std::max<int64_t>(0, delay)));
+    bump_max("map_follower_load_ms_max", mmax.load, static_cast<int>(std::max<int64_t>(0, load)));
+    bump_max("map_after_pilot_ms_max", mmax.late, static_cast<int>(std::max<int64_t>(0, late)));
+    bump_max("map_arrival_err_max", mmax.err, static_cast<int>(std::max(0.0, mt.err0)));
+    bump_max("map_catchup_ms_max", mmax.catchup, static_cast<int>(std::max<int64_t>(0, catchup)));
+    bump_max("map_arrival_paused_ms_max", mmax.paused, static_cast<int>(mt.paused_s * 1000.0));
+    bump_max("map_arrival_mod_ms_max", mmax.mod, static_cast<int>(mt.mod_max_ms));
+    if (mt.teleports) bump("map_arrival_teleports", mt.teleports);
+    if (mt.stops) bump("map_arrival_stops", mt.stops);
+    if (mt.mod_slow) bump("map_arrival_mod_slow", mt.mod_slow);
+    if (done && mt.follow_at < 0) bump("map_arrival_no_follow");
+}
+
+// Chaque image (pilote et suiveur) : début et fin des chargements d'ici ; suiveur : arrivée et fenêtre d'observation.
+void map_tick()
+{
+    const double dt = prev_now < 0 ? 0.0 : s.now - prev_now;
+    prev_now = s.now;
+    const bool in = game::map_change_in_progress();
+    if (in && !load_in) {
+        load_in = true;
+        load_rise_at = s.now;
+        std::string tag;
+        if (!game::map_destination(load_dest, tag)) load_dest.clear();
+        bump("map_loads_local");
+        log().write("coop_map_load_start", JsonObj().add("level", load_dest).add("spawn", tag).add("pilot", is_pilot()).add("from", game::current_level()));
+        if (mt.open) { ++mt.loads; if (mt.load_at < 0) mt.load_at = s.now; }   // après l'arrivée : chargement de trop
+    } else if (!in && load_in) {
+        load_in = false;
+        log().write("coop_map_load_end", JsonObj().add("level", load_dest).add("load_s", s.now - load_rise_at).add("pilot", is_pilot()));
+    }
+    if (!mt.open) return;
+    if (mt.arrived_at < 0) {
+        if (!in && (mt.loads > 0 || mt.expect_loads == 0) && world_ready() && game::current_level() == mt.level) {
+            mt.arrived_at = s.now;
+            log().write("coop_map_arrived", JsonObj().add("level", mt.level).add("after_rx_s", s.now - mt.rx_at)
+                                                .add("pilot_here", mt.pilot_at >= 0).add("loads", mt.loads));
+        } else if (s.now - mt.rx_at > 180.0) mt_close("never_arrived");
+        return;
+    }
+    // Fenêtre d'observation : pause, images lentes (mod > 20 ms, image > 80 ms hors chargement).
+    if (!s.pause_reasons.empty() || s.pause_applied) mt.paused_s += dt;
+    const double mod_ms = prof::last().total_ms;
+    mt.mod_max_ms = std::max(mt.mod_max_ms, mod_ms);
+    if (mod_ms > 20.0) ++mt.mod_slow;
+    if (dt > 0.08 && dt < 3.0 && !in) ++mt.slow;
+    if (mt.pilot_at >= 0 && s.now - mt_window_start() > kMapWindow) mt_close("done");
+    else if (s.now - mt.arrived_at > 60.0) mt_close("pilot_absent");
+}
+
+// Suiveur : chaque image de suivi après l'arrivée (écart au pilote, téléportation, arrêt / reprise).
+void mt_follow(double err, bool teleported, int started, int stopped)
+{
+    if (!mt_in_window() || mt.pilot_at < 0) return;
+    if (mt.follow_at < 0) {
+        mt.follow_at = s.now;
+        mt.err0 = err;
+        log().write("coop_map_follow_resumed", JsonObj().add("level", mt.level).add("err", static_cast<int64_t>(err))
+                                                   .add("after_arrival_s", s.now - mt.arrived_at).add("after_pilot_s", s.now - mt.pilot_at));
+    }
+    if (mt.caught_at < 0 && err < 250) mt.caught_at = s.now;
+    mt.teleports += teleported ? 1 : 0;
+    mt.starts += started;
+    mt.stops += stopped;
+}
+
 void on_map_change(const proto::MapChange& mc)
 {
     touch();
+    mt_close("next");
+    mt = MapTrans{};
+    mt.open = true;
+    mt.level = mc.level;
+    mt.spawn = mc.spawn_tag;
+    mt.rx_at = s.now;
     std::string dest, tag;
     if (game::map_change_in_progress() && game::map_destination(dest, tag) && dest == mc.level) {
+        mt.how = "already";
+        mt.loads = 1;
+        mt.load_at = load_rise_at;
         log().write("coop_map_change_already", JsonObj().add("level", mc.level));
         return;
     }
     if (!game::map_change_in_progress() && game::current_level() == mc.level) {
+        mt.how = "same_level";
+        mt.expect_loads = 0;
         log().write("coop_map_change_same_level", JsonObj().add("level", mc.level));
         return;
     }
+    mt.how = "followed";
     // Dernière position du pilote = ancienne zone : oubliée, sinon le suiveur arrivé avant lui y retournait au bout de 8 s.
     s.last_pilot.reset();
     s.level_mismatch_since = -1;
@@ -1426,6 +1557,10 @@ void reset()
     s = std::move(fresh);
     fstats = FollowStats{};
     sc = SceneSync{};
+    mt = MapTrans{};
+    mmax = MapMax{};
+    load_in = false;
+    prev_now = -1;
 }
 
 void set_player_id(uint8_t id) { s.me = id; }
@@ -1554,6 +1689,7 @@ bool handle(uint8_t from, const proto::Message& m)
         if (p->pilot == s.me) return true;
         follow_stats_rx(*p);
         if (!s.last_pilot || p->seq > s.last_pilot->seq || p->pilot != s.last_pilot->pilot) { s.last_pilot = *p; s.last_pilot_at = s.now; }
+        if (mt.open && mt.pilot_at < 0 && p->level == mt.level && p->pilot == s.pilot) mt.pilot_at = s.now;   // pilote arrivé
         return true;
     }
     if (auto* pr = std::get_if<proto::PilotRequest>(&m)) {
@@ -1627,6 +1763,7 @@ void tick(double now)
     if (!s.active) return;
     if (s.ended) return;
     s.now = now;
+    { prof::Scope p("map"); map_tick(); }
     if (s.host) host_join_tick();
     else client_join_tick();
     key_tick();

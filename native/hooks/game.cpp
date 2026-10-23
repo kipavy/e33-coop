@@ -845,6 +845,60 @@ bool change_map(const std::wstring& level, const std::wstring& spawn_tag)
     return c.invoke();
 }
 
+std::vector<UObject*> actor_instances(const std::wstring& cls)
+{
+    std::vector<UObject*> all, out;
+    UObjectGlobals::FindAllOf(cls.c_str(), all);
+    for (UObject* o : all)
+        if (o && ue::to_utf8(o->GetName()).rfind("Default__", 0) != 0) out.push_back(o);   // objet par défaut de la classe
+    return out;
+}
+
+std::vector<TeleportPoint> teleport_points()
+{
+    std::vector<TeleportPoint> out;
+    for (UObject* o : actor_instances(STR("BP_jRPG_MapTeleportPoint_C"))) {
+        TeleportPoint t;
+        t.actor = o;
+        t.name = ue::short_name(o);
+        // LevelDestination : FDataTableRowHandle { DataTable, RowName }
+        if (auto* sp = CastField<FStructProperty>(ue::prop(o, STR("LevelDestination")))) {
+            void* base = sp->ContainerPtrToValuePtr<void>(o);
+            if (FProperty* rn = ue::struct_member(sp->GetStruct(), L"RowName"))
+                t.row = ue::to_utf8(static_cast<FName*>(rn->ContainerPtrToValuePtr<void>(base))->ToString());
+        }
+        if (auto* tag = ue::value_ptr<FName>(o, STR("DestinationSpawnPointTag"))) t.spawn = ue::to_utf8(tag->ToString());
+        t.world_map = ue::get_bool(o, STR("IsInWorldMapLevel"));
+        location(o, t.pos);
+        for (int i = 0; i < 3; ++i) t.box[i] = t.pos[i];
+        if (UObject* box = ue::get_object(o, STR("TeleportBox"))) {
+            ue::Call c(box, STR("K2_GetComponentLocation"));
+            if (c && c.invoke())
+                if (const auto* v = static_cast<const double*>(c.param_ptr(STR("ReturnValue")))) { t.box[0] = v[0]; t.box[1] = v[1]; t.box[2] = v[2]; }
+        }
+        out.push_back(std::move(t));
+    }
+    return out;
+}
+
+std::vector<std::string> loaded_bp_classes(const std::vector<std::string>& needles)
+{
+    // FindAllOf("BlueprintGeneratedClass") ne rend rien : parcours de tous les objets (lent, diagnostic seulement).
+    auto lower = [](std::string s) { for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); return s; };
+    std::vector<std::string> out;
+    UObjectGlobals::ForEachUObject([&](UObject* c, int32, int32) {
+        if (c && c->GetClassPrivate() && c->GetClassPrivate()->GetName() == STR("BlueprintGeneratedClass")) {
+            const std::string n = ue::to_utf8(c->GetName());
+            const std::string l = lower(n);
+            for (const auto& k : needles) if (l.find(k) != std::string::npos) { out.push_back(n); break; }
+        }
+        return LoopAction::Continue;
+    });
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 bool interact(UObject* target, bool instant)
 {
     UObject* pawn = explore_pawn();
