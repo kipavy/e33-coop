@@ -14,6 +14,14 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.9] - 2026-10-24
+
+### Corrections
+- Combat : parade et esquive de l'autre joueur à nouveau prises en compte quand le combat est lancé chez lui par le mod
+  (ses appuis n'arrivaient pas au jeu).
+- Exploration : plus de rechargement de la partie toutes les 10 à 20 s quand le meneur passe dans des zones du décor
+  (l'autre joueur ne restait plus exclu d'un combat lancé pendant ce rechargement).
+
 ## [0.6.8] - 2026-10-24
 
 ### Corrections

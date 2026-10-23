@@ -2,6 +2,13 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24 nuit — v0.6.9 : défense du client, resynchros de zones (essai à deux PC, branche `fix/defense-input`)
+
+- **Parade du client** (manette, TOTOFFF ; en solo elle marche) : diagnostic 0.6.8 sur le combat de 01:40 : aucun `TryStart*` chez le client (parade ni esquive), alors que ceux de l'hôte arrivent. Combat lancé chez le client par le mod (`TriggerBattle`, `already_engaged` faux) : `BP_jRPG_Controller_World_C.IsDefenseInputBound` jamais mis (piste). Corrigé : à chaque début de tour en coop, `TryBindDefendInput()` si besoin (`coop_defense_input_bind`). À confirmer en vrai ; tir en visée libre du client non essayé (aucune donnée).
+- **Resynchros toutes les 10-20 s** (01:38-01:39, 3 instantanés en 2 min, client exclu d'un combat lancé pendant le 3e) : l'hôte marque en passant des `BP_GameActionTriggerZone` et `ObjectID_LevelSequence_*` dans `InteractedObjects`, pas le suiveur. Part `interacted2` sans ces entrées ni le compte.
+- **Ouvert** : animation d'escalade de rebord absente chez le client (suiveur déplacé sans l'animation) ; test à distance sans réponse à 01:47-01:51 (jeu du client fermé ?).
+- **Tests** (build 40041337243) : `p4_session_client`, `p6_world_client` verts ; dans `p4_session_client` (combat lancé par le mod chez le client), `IsDefenseInputBound` était faux et `TryBindDefendInput` l'a mis (`coop_defense_input_bind` bound vrai) : piste confirmée hors manette.
+
 ## 2026-10-24 nuit — v0.6.8 : pause, escalade, personnage affiché (essai à deux PC, branche `fix/pause-load`)
 
 - **Pause** (vu à 00:12) : resynchro demandée et instantané envoyé pendant la pause du client -> chargement bloqué menu ouvert ; la sécurité de 0.6.7 l'a rattrapé (nouvelle demande à 00:14:05, entré à 00:14:32). Corrigé : hôte sans envoi pendant la pause du client (`remote_pause`), client sans resynchro ni chargement pendant sa pause.
