@@ -357,6 +357,9 @@ restait dans la mauvaise zone (`p9_zones_rapid_client` avant : 2 chargements man
 **Décision** :
 1. Le suiveur applique un MapChange tout de suite si son monde est prêt ; sinon (chargement d'un autre niveau, combat pas
    fini, jonction en cours) il garde le dernier et l'applique dès que le monde est prêt (`coop_map_change_deferred`).
+   Entre deux phases d'un chargement (`IsMapChangeInProgress` retombe un instant), un ChangeMap remplace le chargement
+   en cours : il est appliqué aussitôt (transition « remplacée », `map_transitions_superseded`). Le mod compte ses propres
+   ChangeMap comme début de chargement (une fin et un début peuvent tomber dans la même image).
 2. Il ne change de niveau que sur MapChange : les boîtes de passage (`BP_jRPG_MapTeleportPoint*`, sorties de zone et
    entrées de la carte du monde) sont coupées chez lui (`SetGenerateOverlapEvents(false)`, reprises toutes les 10 s pour
    les parties chargées ensuite), rendues quand il redevient pilote ou à la fin de session.
