@@ -88,6 +88,7 @@ struct Args {
     int stop_after_turn = 0;   // hôte : arrête le rejeu avant le tour suivant (départ de l'hôte en plein combat)
     bool resync_snapshot = false;   // hôte : renvoie l'instantané (--snapshot) à chaque ResyncRequest du client
     double pilot_rate = 0;     // hôte : positions du pilote rejouées à ce rythme (interpolées entre les lignes)
+    double pilot_gap_from = 1e18, pilot_gap_to = 1e18;   // hôte : --pilot-gap a:b, positions retenues entre a et b
     std::string net;           // réseau simulé (voir NetSim)
     std::string in, out;       // slice : enregistrement source, tranche écrite
     int xfer = 0;              // slice : n° de l'instantané de départ
@@ -833,7 +834,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
     std::optional<proto::PilotState> up_a, up_b;
     double up_a_t = 0, up_b_t = 0, up_next = 0;
     uint32_t up_last_seq = 0;
-    int interpolated = 0;
+    int interpolated = 0, pilot_gapped = 0;
     // Fin de l'enregistrement : "linger" reste en ligne jusqu'au départ du client (Bye de fin de test), "bye" / "vanish"
     // simulent le départ de l'hôte (message de fin, ou silence complet) end_after secondes plus tard (phase 5).
     auto running = [&] {
@@ -911,6 +912,9 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     if (a.paced && now_s() - pace_now < l.t - pace_rec) break;
                     if (auto* sh = std::get_if<proto::StateHash>(&l.msg)) host_hash[key(sh->battle_id, sh->turn)] = sh->hash;
                     if (auto* ps = std::get_if<proto::PilotState>(&l.msg)) {
+                        // --pilot-gap a:b : positions retenues entre a et b (temps de l'enregistrement) : le suiveur reste en
+                        // arrière, comme chez le vrai client qui n'a pas déclenché le dialogue de l'hôte (duel du prologue).
+                        if (l.t >= a.pilot_gap_from && l.t < a.pilot_gap_to) { up_a.reset(); up_b.reset(); ++pilot_gapped; ++cursor; continue; }
                         // Comme le vrai mod : positions non fiables (une perte n'est pas renvoyée).
                         link->send(l.msg, false);
                         up_a.reset();
@@ -1039,7 +1043,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
         for (int i = 0; i < 40 && link; ++i) { link->update(now_s() + i); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     const bool ok = finished_at >= 0 && invalid == 0 && desyncs == 0 && mismatches == 0;
     log_netsim(log, sim);
-    log.write("pilot_interpolated", JsonObj().add("count", interpolated));
+    log.write("pilot_interpolated", JsonObj().add("count", interpolated).add("gapped", pilot_gapped));
     log.write("done", JsonObj().add("ok", ok).add("replayed", static_cast<int64_t>(cursor)).add("of", static_cast<int64_t>(lines.size())).add("hashes", hashes)
                           .add("desyncs", desyncs).add("c2h_mismatches", mismatches).add("invalid", invalid));
     return ok ? 0 : 1;
@@ -1135,6 +1139,7 @@ int main(int argc, char** argv)
         else if (k == "--resync-snapshot") a.resync_snapshot = v == "1";
         else if (k == "--pilot-rate") a.pilot_rate = std::atof(v.c_str());
         else if (k == "--net") a.net = v;
+        else if (k == "--pilot-gap") { const auto c = v.find(':'); a.pilot_gap_from = std::atof(v.c_str()); a.pilot_gap_to = c == std::string::npos ? 1e18 : std::atof(v.c_str() + c + 1); }
         else if (k == "--in") a.in = v;
         else if (k == "--out") a.out = v;
         else if (k == "--xfer") a.xfer = std::atoi(v.c_str());

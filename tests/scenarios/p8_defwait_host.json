@@ -8,7 +8,7 @@
   "wait_players": 1,
   "max_turns": 60,
   "shots_every_s": 6,
-  "actions": [{ "type": "attack" }],
+  "actions": [{ "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "attack" }],
   "defense": ["parry", "fail"],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1,Lune:1", "-e33seed=8"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_defwait.json", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },

@@ -8,7 +8,7 @@
   "wait_players": 1,
   "max_turns": 60,
   "shots_every_s": 6,
-  "actions": [{ "type": "attack" }],
+  "actions": [{ "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "attack" }],
   "defense": ["parry", "fail"],
   "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=8", "-e33readyidle=15", "-e33stuckturn=10"],
   "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_readystall.json", "--timeout", "900"] },

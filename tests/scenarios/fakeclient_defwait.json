@@ -3,7 +3,7 @@
   "game_build": 23765773,
   "mod_version": "current",
   "gameplay_mods": [],
-  "actions": [{ "type": "attack" }],
+  "actions": [{ "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "attack" }],
   "defense": ["parry", "fail"],
   "defense_delay_ms": 4000,
   "defense_delay_every": 4,
