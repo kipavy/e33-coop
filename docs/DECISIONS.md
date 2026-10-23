@@ -342,3 +342,16 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 6. **Critères de fluidité** mesurés par le mod chez le suiveur (compteurs, vérifiés par les scénarios `p8_sprint_*`) : 0 téléportation hors trou de données ; écart au pilote < 250 u en sprint, < 150 u en course, < 120 u en marche, < 60 u à l'arrêt ; 0 « stall » (pion < 30 % de la vitesse du pilote pendant 150 ms, pilote en mouvement), immobilité du pion pilote en mouvement <= 150 ms ; 0 creux (< 60 %, 150 ms) et 0 chute brusque (> 250 u/s en 0,1 s) pendant une course continue ; 0 arrêt du pion pilote en mouvement ; 0 image > 50 ms due au mod pendant le mouvement ; 0 resynchro envoyée pendant le mouvement. Pourquoi ces seuils : à 720 u/s, 0,2-0,3 s de retard (transit + tampon + réaction de l'ALS) font 150-220 u ; 150 ms d'immobilité est le seuil où un arrêt se voit ; à l'arrêt, 60 u = un pas.
 
 **Remise en cause si** : le jeu impose sa vitesse de sprint autrement (rattrapage sans effet : `own_speed_max` jamais au-dessus de 720 dans `coop_follow_stats`) ; ou si l'écart en sprint reste > 250 u à deux PC (tampon trop long pour le réseau réel : réduire `kRenderDelay`).
+
+---
+
+## D24 — Dialogues : même synchro que les cinématiques (2026-10-23, demande de Killian, étend D20)
+
+**Constat** : D20 ne couvrait que `TriggerCinematic`. Un dialogue lancé par une zone ou une game action (Maelle avant le duel du prologue) n'avait lieu que chez le pilote ; le suiveur attendait sous la barrière.
+
+**Décision** :
+1. Le pilote publie aussi le début d'un dialogue : pré-hook de `BP_DialogueSystemComponent_C:ActivateDialogue(Dialogue)`, `SceneStart` avec le champ final facultatif `kind` = dialogue (absent = cinématique) et `sequence` = chemin de l'acteur `BP_Dialogue_C`. Même cause (zone, interaction, game action) ; jamais en combat ; même dialogue réactivé dans les 5 s ignoré.
+2. Le suiveur suit D20 (zone -> `TryExecuteGameActionOnOverlap`, repli action, puis téléportation), sauf : dialogue d'interaction -> rien (déjà rejoué par `WorldInteract`) ; zone déjà exécutée ici dans les 120 s -> rien (pas de double lecture, ex. dialogue qui suit une cinématique de la même zone, pour les cinématiques aussi).
+3. Les réponses restent rejouées par `DialogueChoice` (attente de la question `StartChoice`), vérifié sur ce dialogue.
+
+**Limite** : un dialogue qui lance un combat (duel) le lance aussi chez le suiveur ; le combat est accepté comme déjà engagé, avec 1 PA d'écart aux premiers tours (réparé par la resynchro).
