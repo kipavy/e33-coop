@@ -119,6 +119,7 @@ void encode_payload(const Message& m, wire::Writer& w)
         } else if constexpr (std::is_same_v<T, PilotState>) {
             w.u8(x.pilot); w.u32(x.seq); w.str(x.level); w.f64(x.x); w.f64(x.y); w.f64(x.z); w.f64(x.yaw); w.f64(x.vx); w.f64(x.vy); w.f64(x.vz);
             w.u8(x.move); w.u8(x.custom); w.u8(x.flags); w.str(x.pawn);   // champs finaux facultatifs
+            w.u8(x.wm_mode);
         } else if constexpr (std::is_same_v<T, PilotRequest>) {
             w.u8(x.player);
         } else if constexpr (std::is_same_v<T, PilotChange>) {
@@ -131,6 +132,11 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u32(x.seq); w.str(x.level); w.str(x.spawn_tag);
         } else if constexpr (std::is_same_v<T, NarrativeState>) {
             w.u8(x.player); w.u8(static_cast<uint8_t>(x.kind)); w.boolean(x.active); w.u32(x.seq);
+        } else if constexpr (std::is_same_v<T, SceneStart>) {
+            w.u8(x.player); w.u32(x.seq); w.str(x.scene); w.str(x.sequence); w.u8(static_cast<uint8_t>(x.cause)); w.str(x.cause_path);
+            w.str(x.action); w.f64(x.x); w.f64(x.y); w.f64(x.z);
+        } else if constexpr (std::is_same_v<T, SceneSkip>) {
+            w.u8(x.player); w.u32(x.seq); w.str(x.scene);
         } else if constexpr (std::is_same_v<T, BarrierRelease>) {
             w.u32(x.seq);
         } else if constexpr (std::is_same_v<T, PauseState>) {
@@ -300,6 +306,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         PilotState x; x.pilot = r.u8(); x.seq = r.u32(); x.level = r.str(256);
         x.x = r.f64(); x.y = r.f64(); x.z = r.f64(); x.yaw = r.f64(); x.vx = r.f64(); x.vy = r.f64(); x.vz = r.f64();
         if (r.ok() && !r.at_end()) { x.move = r.u8(); x.custom = r.u8(); x.flags = r.u8(); x.pawn = r.str(128); }   // facultatifs (carte du monde)
+        if (r.ok() && !r.at_end()) x.wm_mode = r.u8();                                                                // facultatif (mode d'Esquie)
         for (double v : {x.x, x.y, x.z, x.yaw, x.vx, x.vy, x.vz}) if (!std::isfinite(v)) r.fail();
         if (x.pilot > 3) r.fail();
         return finish(x);
@@ -315,6 +322,19 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         x.kind = static_cast<NarrativeKind>(k); return finish(x);
     }
     case MsgType::BarrierRelease: { BarrierRelease x; x.seq = r.u32(); return finish(x); }
+    case MsgType::SceneStart: {
+        SceneStart x; x.player = r.u8(); x.seq = r.u32(); x.scene = r.str(256); x.sequence = r.str(kMaxStr);
+        const uint8_t c = r.u8(); x.cause_path = r.str(kMaxStr); x.action = r.str(kMaxStr);
+        x.x = r.f64(); x.y = r.f64(); x.z = r.f64();
+        for (double v : {x.x, x.y, x.z}) if (!std::isfinite(v)) r.fail();
+        if (c > static_cast<uint8_t>(SceneCause::Action) || x.player > 3) r.fail();
+        x.cause = static_cast<SceneCause>(c); return finish(x);
+    }
+    case MsgType::SceneSkip: {
+        SceneSkip x; x.player = r.u8(); x.seq = r.u32(); x.scene = r.str(kMaxStr);
+        if (x.player > 3) r.fail();
+        return finish(x);
+    }
     case MsgType::PauseState: { PauseState x; x.player = r.u8(); x.paused = r.boolean(); x.in_battle = r.boolean(); if (x.player > 3) r.fail(); return finish(x); }
     case MsgType::Owners: {
         Owners x; x.battle_id = r.u32();
@@ -426,6 +446,8 @@ const char* type_name(MsgType t)
     case MsgType::MapChange: return "MapChange";
     case MsgType::NarrativeState: return "NarrativeState";
     case MsgType::BarrierRelease: return "BarrierRelease";
+    case MsgType::SceneStart: return "SceneStart";
+    case MsgType::SceneSkip: return "SceneSkip";
     case MsgType::PauseState: return "PauseState";
     case MsgType::Owners: return "Owners";
     case MsgType::BattleReady: return "BattleReady";
@@ -453,7 +475,7 @@ MsgType type_of(const Message& m)
                                         MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState,
                                         MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
                                         MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta,
-                                        MsgType::IntentPreview, MsgType::AimView, MsgType::MenuState};
+                                        MsgType::IntentPreview, MsgType::AimView, MsgType::MenuState, MsgType::SceneStart, MsgType::SceneSkip};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -557,7 +579,8 @@ std::string to_json(const Message& m)
         else if constexpr (std::is_same_v<T, PilotState>) {
             o.add("pilot", static_cast<int>(x.pilot)).add("seq", x.seq).add("level", x.level).add("x", x.x).add("y", x.y).add("z", x.z).add("yaw", x.yaw)
                 .add("vx", x.vx).add("vy", x.vy).add("vz", x.vz)
-                .add("move", static_cast<int>(x.move)).add("custom", static_cast<int>(x.custom)).add("flags", static_cast<int>(x.flags)).add("pawn", x.pawn);
+                .add("move", static_cast<int>(x.move)).add("custom", static_cast<int>(x.custom)).add("flags", static_cast<int>(x.flags)).add("pawn", x.pawn)
+                .add("wm_mode", static_cast<int>(x.wm_mode));
         } else if constexpr (std::is_same_v<T, PilotRequest>) { o.add("player", static_cast<int>(x.player)); }
         else if constexpr (std::is_same_v<T, PilotChange>) { o.add("pilot", static_cast<int>(x.pilot)); }
         else if constexpr (std::is_same_v<T, WorldInteract>) { o.add("seq", x.seq).add("actor", x.actor).add("instant", x.instant); }
@@ -566,6 +589,12 @@ std::string to_json(const Message& m)
         else if constexpr (std::is_same_v<T, NarrativeState>) {
             o.add("player", static_cast<int>(x.player)).add("kind", static_cast<int>(x.kind)).add("active", x.active).add("seq", x.seq);
         } else if constexpr (std::is_same_v<T, BarrierRelease>) { o.add("seq", x.seq); }
+        else if constexpr (std::is_same_v<T, SceneStart>) {
+            o.add("player", static_cast<int>(x.player)).add("seq", x.seq).add("scene", x.scene).add("sequence", x.sequence)
+                .add("cause", static_cast<int>(x.cause)).add("cause_path", x.cause_path).add("action", x.action).add("x", x.x).add("y", x.y).add("z", x.z);
+        } else if constexpr (std::is_same_v<T, SceneSkip>) {
+            o.add("player", static_cast<int>(x.player)).add("seq", x.seq).add("scene", x.scene);
+        }
         else if constexpr (std::is_same_v<T, PauseState>) { o.add("player", static_cast<int>(x.player)).add("paused", x.paused).add("in_battle", x.in_battle); }
         else if constexpr (std::is_same_v<T, Owners>) {
             std::string ow = "[";

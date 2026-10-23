@@ -44,7 +44,7 @@ static std::vector<proto::Message> samples()
             proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}},
             wb, proto::SaveOffer{3, 438435, 0x1122334455667788ull, "Level_SpringMeadows_Main_V2"}, ch, proto::JoinWait{"battle"},
             proto::JoinReady{3, "Level_SpringMeadows_Main_V2"}, proto::PilotState{0, 12, "Level_Camp_Main", -2191.5, -1232, 192, 120, 300, -10, 0},
-            proto::PilotState{0, 13, "Level_WorldMap", 1.5, 2, 3000, 90, 600, 0, 50, 5, 0, proto::kPilotMount | proto::kPilotWorldMap, "BP_Esquie_C"},
+            proto::PilotState{0, 13, "Level_WorldMap", 1.5, 2, 3000, 90, 600, 0, 50, 5, 0, proto::kPilotMount | proto::kPilotWorldMap, "BP_WorldMapCharacter_C", 2},
             proto::PilotRequest{1}, proto::PilotChange{1}, proto::WorldInteract{4, "/Game/Levels/X.X:PersistentLevel.NPC_1", false},
             proto::DialogueChoice{5, 1}, proto::MapChange{6, "Level_Camp_Main", "Level.SpawnPoint.Generic.Dynamic"},
             proto::NarrativeState{1, proto::NarrativeKind::Cinematic, true, 7}, proto::BarrierRelease{7}, proto::PauseState{2, true, false},
@@ -56,7 +56,10 @@ static std::vector<proto::Message> samples()
             proto::IntentPreview{7, 3, 1, 5, 0, true, "", {}},
             proto::AimView{7, 3, 2, 1250, -32163.5, 16193.25, 1188.0, -12.5, 87.25, 70.0},
             proto::MenuState{7, 3, 2, 6, proto::MenuPage::Skills, 1, 2, 5, "Combo1", true, 1, {{proto::ActorKind::Enemy, 1}}},
-            proto::MenuState{7, 3, 2, 7, proto::MenuPage::Actions, 0, -1, 0, "", false, 0, {}}};
+            proto::MenuState{7, 3, 2, 7, proto::MenuPage::Actions, 0, -1, 0, "", false, 0, {}},
+            proto::SceneStart{0, 3, "SQT_Lumiere_Sophie", "/Game/Cinematics/X.X", proto::SceneCause::Zone,
+                              "/Game/Levels/X.X:PersistentLevel.BP_GameActionTriggerZone_C_UAID_1", "/Game/GA/DA_GA_X.DA_GA_X", 13511.25, -44700.5, 6952.0},
+            proto::SceneStart{1, 4, "", "", proto::SceneCause::Unknown, "", "", 0, 0, 0}, proto::SceneSkip{0, 5, "SQT_Lumiere_Sophie"}};
 }
 
 static void test_roundtrip()

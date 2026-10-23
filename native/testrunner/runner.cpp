@@ -21,6 +21,7 @@
 #include "../sync/coop.hpp"
 #include "../sync/coopsave.hpp"
 #include "../sync/explore.hpp"
+#include "../sync/mount.hpp"
 #include "../ui/options.hpp"
 #include "../ui/owners_ui.hpp"
 #include "../ui/ui.hpp"
@@ -280,6 +281,7 @@ int metric(const std::string& name)
     if (name.rfind("ui:", 0) == 0) return ui::count(name.substr(3));   // textes affichés (phase 5)
     if (name.rfind("owners_ui:", 0) == 0) return owners_ui::count(name.substr(10));   // losanges, panneau Coop
     if (name.rfind("options:", 0) == 0) return options::count(name.substr(8));       // panneau Coop au clavier, options
+    if (name.rfind("mount:", 0) == 0) return mount::count(name.substr(6));            // banc d'essai de la monture (Esquie)
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
 }
@@ -943,6 +945,7 @@ void subscribe()
 //   {"do":"wait_world"}                    monde prêt et stable 3 s (après chargement / transition)
 //   {"do":"wait_join","players":1}         hôte : clients entrés dans la partie
 //   {"do":"move","dir":[1,0],"s":3}        pilote : marche dans une direction (AddMovementInput)
+//   {"do":"teleport","pos":[x,y,z],"yaw":0} pilote : pion placé à cette position
 //   {"do":"interact","actor":"<préfixe>"}  interaction avec un PNJ / objet (nom d'acteur commençant par)
 //   {"do":"choose","index":1}              choix de dialogue (attend que la question soit posée)
 //   {"do":"wait_dialogue_end"}
@@ -955,6 +958,7 @@ void subscribe()
 //   {"do":"wait_key"}                     validation en jeu : attend la touche F9
 //   {"do":"trigger","players":1}          combat du scénario (encounter, party) dès que "players" clients sont connectés
 //   {"do":"build","character":"Verso","op":"reset_attributes"}   modifie un build (comme un menu)
+//   {"do":"mount","op":"diag|trace|interact|call|move|watch|wait_mount",…}   monture d'Esquie (mount.cpp)
 //   {"do":"request_pilot"} | {"do":"end"}
 // "check" (facultatif, sur toute étape) : {"<compteur>":"<attente>"} vérifié à la fin de l'étape.
 UObject* find_interactable(const std::string& prefix)
@@ -1034,6 +1038,12 @@ void run_explore_step(float dt)
         if (g.step_t >= st["s"].as_number(2)) { next_step("time"); return; }
         if (UObject* pawn = game::explore_pawn())
             game::move_pawn(pawn, st["dir"][0].as_number(1), st["dir"][1].as_number(0), st["scale"].as_number(1));
+    } else if (what == "teleport") {   // pilote : pion placé à "pos" [x,y,z] (orientation "yaw"), ex. juste avant une zone
+        UObject* pawn = game::explore_pawn();
+        if (!pawn) return;
+        const double pos[3] = {st["pos"][0].as_number(0), st["pos"][1].as_number(0), st["pos"][2].as_number(0)};
+        if (!game::teleport_pawn(pawn, pos, st["yaw"].as_number(0))) { fail("teleport failed"); return; }
+        next_step("done");
     } else if (what == "interact") {
         UObject* o = find_interactable(st["actor"].as_string());
         if (!o) { fail("interact: no actor starting with " + st["actor"].as_string()); return; }
@@ -1125,14 +1135,20 @@ void run_explore_step(float dt)
             next_step("skipped");
         } else if (g.seq_since >= 0 && g.step_t - g.seq_since >= st["after_s"].as_number(0) && g.step_t >= g.next_skip) {
             g.next_skip = g.step_t + 2.0;
+            UObject* cs = ue::get_object(game::controller(), STR("BP_CinematicSystem"));
             if (!game::skip_cinematic()) { fail("skip_cinematic failed"); return; }
             ++g.metrics["skip_attempts"];
-            log().write("tr_skip_cinematic", JsonObj().add("t", g.step_t));
+            log().write("tr_skip_cinematic", JsonObj().add("t", g.step_t)
+                                                 .add("paused", ue::get_bool(cs, STR("CinematicPaused"))).add("skipping", ue::get_bool(cs, STR("IsSkippingCinematic")))
+                                                 .add("transition", ue::get_bool(cs, STR("IsInTransition"))).add("started", ue::get_bool(cs, STR("SequenceStarted"))));
         }
     } else if (what == "wait_key") {   // validation en jeu : le joueur termine le test (F9, fenêtre du jeu au premier plan)
         DWORD pid = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &pid);
         if (pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F9) & 0x8000)) next_step("key");
+    } else if (what == "mount") {   // banc d'essai de la monture : diagnostic, appels, déplacement du pion possédé (mount.cpp)
+        if (mount::test_step(st, g.step_t, first, err)) next_step("done");
+        else if (!err.empty()) { fail(err); return; }
     } else if (what == "request_pilot") {
         explore::request_pilot();
         next_step("requested");

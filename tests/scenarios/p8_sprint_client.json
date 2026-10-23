@@ -1,0 +1,13 @@
+{
+  "name": "p8_sprint_client",
+  "description": "Suivi en sprint (essai réel à deux PC du 2026-10-22, Lumière) : le faux hôte rejoue la tranche réelle twopc_sprint_a (instantané n° 3 puis 95 s : marche, pause du pilote, sprint ~720 u/s de 16 s), positions à 20/s, réseau simulé (latence, gigue, pertes, pointes). Le pion du client doit suivre sans téléportation.",
+  "join": true,
+  "timeout_s": 600,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "s": 100 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/twopc_sprint_a.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_sprint_a_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "600"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "follower_teleports": "0", "snapshot_hash_errors": "0", "join_errors": "0" }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "p8_esquie_client",
+  "description": "Esquie (carte du monde, D20) : le faux hôte rejoue l'enregistrement de p8_esquie_host (tranche esquie_flight, instantané p8_esquie_snapshot : tour de Cléa puis carte du monde ; marche, montée sur Esquie, marche d'Esquie, décollage, vol à ~4000 u/s, amerrissage et nage à ~3000 u/s, nouveau décollage), positions à 20/s, réseau simulé. Le pion du client doit monter sur Esquie et le conduire comme le pilote : aucune alternance nage / air / chute parasite, aucun fantôme, aucune téléportation, écart borné.",
+  "join": true,
+  "timeout_s": 600,
+  "shots_every_s": 5,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "s": 92 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/esquie_flight.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_esquie_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "600"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "snapshot_hash_errors": "0", "join_errors": "0",
+              "follower_mounts": ">=1", "follower_mount_failures": "0", "follower_ghosts": "0", "follower_teleports": "0",
+              "follower_swims_unexpected": "0", "follower_ride_snaps": "0", "follower_wm_changes": ">=3", "follower_move_changes": "<=6", "mount:ride_err_max": "<=800" }
+}

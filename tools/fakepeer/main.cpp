@@ -7,6 +7,14 @@
 //   fakepeer host --port 7777 --replay r.jsonl [--log f.jsonl] [--timeout 900]
 //     Faux hôte face au vrai jeu client : rejoue les messages hôte->client d'un enregistrement, en attendant
 //     les messages du client aux mêmes endroits ; compare les hash d'état du client à ceux de l'hôte enregistré.
+//     --pilot-rate 20 : positions du pilote rejouées à 20/s (l'enregistrement n'en garde que 5/s), interpolées.
+//
+//   Options communes : --net "lag=60,jitter=25,loss=0.01,spike=0.02:200,reorder=0" : réseau simulé sur les
+//     datagrammes envoyés (latence, gigue, pertes, pointes de latence), comme une liaison Steam réelle.
+//
+//   fakepeer slice --in rec.jsonl --out tranche.jsonl --xfer N [--to T] [--snapshot snapshot-N.sav]
+//     Tranche d'un enregistrement réel : session ouverte (Hello, Welcome, Roster), instantané n° N (SaveOffer) et
+//     tout ce qui suit jusqu'au temps T (temps de l'enregistrement). Noms des joueurs anonymisés ("Host", "Client").
 //
 // Code de sortie : 0 = scénario déroulé sans erreur ni désync ; 1 = échec ; 2 = usage.
 
@@ -17,7 +25,10 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <cmath>
+#include <deque>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -76,12 +87,110 @@ struct Args {
     int version_reply = 0;     // hôte : répond à tout avec des paquets d'une autre version de protocole
     int stop_after_turn = 0;   // hôte : arrête le rejeu avant le tour suivant (départ de l'hôte en plein combat)
     bool resync_snapshot = false;   // hôte : renvoie l'instantané (--snapshot) à chaque ResyncRequest du client
+    double pilot_rate = 0;     // hôte : positions du pilote rejouées à ce rythme (interpolées entre les lignes)
+    std::string net;           // réseau simulé (voir NetSim)
+    std::string in, out;       // slice : enregistrement source, tranche écrite
+    int xfer = 0;              // slice : n° de l'instantané de départ
+    double to = 1e18;          // slice : fin de la tranche (temps de l'enregistrement)
     int port = 7777;
     double timeout = 900;
 };
 
 using net::Recorder;
 using net::from_hex;
+using net::to_hex;
+
+// --- Réseau simulé ---------------------------------------------------------------------------
+// Chaque datagramme envoyé part après lag + gigue (loi exponentielle de moyenne "jitter", bornée à 4 fois), parfois
+// avec une pointe en plus ("spike=p:ms"), ou se perd ("loss"). Sans "reorder=1", l'ordre d'envoi est conservé (une
+// pointe retarde aussi les suivants, comme un relais Steam qui hoquette).
+struct NetSim {
+    double lag_ms = 0, jitter_ms = 0, loss = 0, spike_p = 0, spike_ms = 0;
+    bool reorder = false;
+    bool active() const { return lag_ms > 0 || jitter_ms > 0 || loss > 0 || spike_p > 0; }
+};
+
+bool parse_netsim(const std::string& s, NetSim& n, std::string& err)
+{
+    std::stringstream ss(s);
+    std::string kv;
+    while (std::getline(ss, kv, ',')) {
+        const auto eq = kv.find('=');
+        if (eq == std::string::npos) { err = "net: " + kv; return false; }
+        const std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
+        if (k == "lag") n.lag_ms = std::atof(v.c_str());
+        else if (k == "jitter") n.jitter_ms = std::atof(v.c_str());
+        else if (k == "loss") n.loss = std::atof(v.c_str());
+        else if (k == "reorder") n.reorder = v == "1";
+        else if (k == "spike") {
+            const auto c = v.find(':');
+            n.spike_p = std::atof(v.substr(0, c).c_str());
+            n.spike_ms = c == std::string::npos ? 200 : std::atof(v.substr(c + 1).c_str());
+        } else { err = "net: unknown key " + k; return false; }
+    }
+    return true;
+}
+
+double now_s();
+
+class SimTransport : public net::Transport {
+public:
+    SimTransport(std::unique_ptr<net::Transport> inner, NetSim n) : inner_(std::move(inner)), n_(n), rng_(0xE33C0) {}
+    bool send(const std::string& peer, const uint8_t* data, size_t len) override
+    {
+        flush();
+        ++sent;
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        if (u(rng_) < n_.loss) { ++dropped; return true; }
+        double delay = n_.lag_ms;
+        if (n_.jitter_ms > 0) delay += std::min(4.0 * n_.jitter_ms, std::exponential_distribution<double>(1.0 / n_.jitter_ms)(rng_));
+        if (n_.spike_p > 0 && u(rng_) < n_.spike_p) { delay += n_.spike_ms; ++spikes; }
+        double at = now_s() + delay / 1000.0;
+        if (!n_.reorder) at = std::max(at, last_at_);
+        last_at_ = at;
+        Pending p{at, peer, std::vector<uint8_t>(data, data + len)};
+        auto it = std::upper_bound(q_.begin(), q_.end(), at, [](double t, const Pending& x) { return t < x.at; });
+        q_.insert(it, std::move(p));
+        flush();
+        return true;
+    }
+    bool poll(net::Datagram& out) override { flush(); return inner_->poll(out); }
+    std::string local_address() const override { return inner_->local_address(); }
+    int sent = 0, dropped = 0, spikes = 0;
+
+private:
+    void flush()
+    {
+        const double t = now_s();
+        while (!q_.empty() && q_.front().at <= t) { inner_->send(q_.front().peer, q_.front().data.data(), q_.front().data.size()); q_.pop_front(); }
+    }
+    struct Pending { double at; std::string peer; std::vector<uint8_t> data; };
+    std::unique_ptr<net::Transport> inner_;
+    NetSim n_;
+    std::mt19937_64 rng_;
+    std::deque<Pending> q_;
+    double last_at_ = 0;
+};
+
+// Transport UDP, avec le réseau simulé de --net s'il y en a un.
+std::unique_ptr<net::Transport> make_transport(const Args& a, uint16_t port, JsonLog& log, SimTransport*& sim, std::string& err)
+{
+    sim = nullptr;
+    auto t = net::make_udp(port, err);
+    if (!t || a.net.empty()) return t;
+    NetSim n;
+    if (!parse_netsim(a.net, n, err)) return nullptr;
+    log.write("netsim", JsonObj().add("lag_ms", n.lag_ms).add("jitter_ms", n.jitter_ms).add("loss", n.loss).add("spike_p", n.spike_p)
+                            .add("spike_ms", n.spike_ms).add("reorder", n.reorder));
+    auto s = std::make_unique<SimTransport>(std::move(t), n);
+    sim = s.get();
+    return s;
+}
+
+void log_netsim(JsonLog& log, const SimTransport* sim)
+{
+    if (sim) log.write("netsim_stats", JsonObj().add("sent", sim->sent).add("dropped", sim->dropped).add("spikes", sim->spikes));
+}
 
 json::Value load_json(const std::string& path, std::string& err)
 {
@@ -113,7 +222,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     std::string err;
     json::Value script;
     if (!a.script.empty()) { script = load_json(a.script, err); if (!err.empty()) { log.write("error", JsonObj().add("what", err)); return 1; } }
-    auto t = net::make_udp(0, err);
+    SimTransport* sim = nullptr;
+    auto t = make_transport(a, 0, log, sim, err);
     if (!t) { log.write("error", JsonObj().add("what", err)); return 1; }
     int invalid = 0;
     std::map<std::string, int> counts;
@@ -616,6 +726,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     // Messages invalides attendus en test de version (l'hôte répond dans sa version).
     if (fake_proto) invalid = 0;
     const bool ok = ended && !rejected && invalid == 0 && !session_errors && expect_ok;
+    log_netsim(log, sim);
     log.write("done", JsonObj().add("ok", ok).raw("counts", counts_json).add("turns_played", turns_played).add("defenses", defense_index).add("invalid", invalid).add("rejected", rejected));
     return ok ? 0 : 1;
 }
@@ -655,7 +766,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
             lines.push_back({v["dir"].as_string(), std::move(*m), v["t"].as_number(0)});
         }
     }
-    auto t = net::make_udp(static_cast<uint16_t>(a.port), err);
+    SimTransport* sim = nullptr;
+    auto t = make_transport(a, static_cast<uint16_t>(a.port), log, sim, err);
     if (!t) { log.write("error", JsonObj().add("what", err)); return 1; }
     log.write("listening", JsonObj().add("port", a.port).add("lines", static_cast<int64_t>(lines.size())));
 
@@ -672,6 +784,11 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
 
     bool client_left = false;
     int resyncs = 0;
+    // --pilot-rate : interpolation entre la position enregistrée envoyée (a) et la suivante (b).
+    std::optional<proto::PilotState> up_a, up_b;
+    double up_a_t = 0, up_b_t = 0, up_next = 0;
+    uint32_t up_last_seq = 0;
+    int interpolated = 0;
     // Fin de l'enregistrement : "linger" reste en ligne jusqu'au départ du client (Bye de fin de test), "bye" / "vanish"
     // simulent le départ de l'hôte (message de fin, ou silence complet) end_after secondes plus tard (phase 5).
     auto running = [&] {
@@ -748,6 +865,25 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     // Rythme enregistré (exploration) : chaque message part au même délai après le dernier point de synchro.
                     if (a.paced && now_s() - pace_now < l.t - pace_rec) break;
                     if (auto* sh = std::get_if<proto::StateHash>(&l.msg)) host_hash[key(sh->battle_id, sh->turn)] = sh->hash;
+                    if (auto* ps = std::get_if<proto::PilotState>(&l.msg)) {
+                        // Comme le vrai mod : positions non fiables (une perte n'est pas renvoyée).
+                        link->send(l.msg, false);
+                        up_a.reset();
+                        up_b.reset();
+                        if (a.pilot_rate > 0 && a.paced) {
+                            // Position enregistrée suivante (même pilote, même niveau, < 0,6 s) : on interpolera jusqu'à elle.
+                            for (size_t j = cursor + 1; j < lines.size() && j < cursor + 60; ++j) {
+                                auto* nb = std::get_if<proto::PilotState>(&lines[j].msg);
+                                if (!nb || lines[j].dir != "h2c") continue;
+                                if (nb->pilot == ps->pilot && nb->level == ps->level && nb->seq > ps->seq + 1 && lines[j].t - l.t < 0.6) {
+                                    up_a = *ps; up_a_t = l.t; up_b = *nb; up_b_t = lines[j].t; up_last_seq = ps->seq; up_next = l.t;
+                                }
+                                break;
+                            }
+                        }
+                        ++cursor;
+                        continue;
+                    }
                     link->send(l.msg);
                     // Instantané : les octets ne sont pas dans l'enregistrement, ils viennent du fichier local (même hash) :
                     // --snapshot, ou <nom>_<xfer>.sav quand la session en contient plusieurs (resynchro).
@@ -795,7 +931,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                            std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg) ||
                            std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg) ||
                            std::holds_alternative<proto::IntentPreview>(l.msg) || std::holds_alternative<proto::AimView>(l.msg) ||
-                           std::holds_alternative<proto::MenuState>(l.msg)) {
+                           std::holds_alternative<proto::MenuState>(l.msg) || std::holds_alternative<proto::SceneStart>(l.msg) ||
+                           std::holds_alternative<proto::SceneSkip>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;
@@ -814,6 +951,35 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                     ++cursor;
                 }
             }
+            // Positions intermédiaires (--pilot-rate) : courbe d'Hermite entre deux positions enregistrées (vitesses aux
+            // extrémités), au rythme du vrai pilote ; n° de séquence strictement croissants, sous celui de la suivante.
+            if (up_a && up_b) {
+                const double rec_now = pace_rec + (now_s() - pace_now);
+                const double step = 1.0 / a.pilot_rate;
+                if (rec_now >= up_b_t) { up_a.reset(); up_b.reset(); }
+                else if (rec_now >= up_next + step) {
+                    up_next = rec_now;
+                    const double h = up_b_t - up_a_t, f = std::clamp((rec_now - up_a_t) / h, 0.0, 1.0);
+                    const double h00 = 2 * f * f * f - 3 * f * f + 1, h10 = f * f * f - 2 * f * f + f, h01 = -2 * f * f * f + 3 * f * f, h11 = f * f * f - f * f;
+                    proto::PilotState st = *up_a;
+                    auto herm = [&](double pa, double va, double pb, double vb) { return h00 * pa + h10 * h * va + h01 * pb + h11 * h * vb; };
+                    st.x = herm(up_a->x, up_a->vx, up_b->x, up_b->vx);
+                    st.y = herm(up_a->y, up_a->vy, up_b->y, up_b->vy);
+                    st.z = herm(up_a->z, up_a->vz, up_b->z, up_b->vz);
+                    st.vx = up_a->vx + (up_b->vx - up_a->vx) * f;
+                    st.vy = up_a->vy + (up_b->vy - up_a->vy) * f;
+                    st.vz = up_a->vz + (up_b->vz - up_a->vz) * f;
+                    double dyaw = std::fmod(up_b->yaw - up_a->yaw + 540.0, 360.0) - 180.0;
+                    st.yaw = up_a->yaw + dyaw * f;
+                    const uint32_t seq = up_a->seq + 1 + static_cast<uint32_t>(f * (up_b->seq - up_a->seq - 1));
+                    if (seq > up_last_seq && seq < up_b->seq) {
+                        st.seq = seq;
+                        up_last_seq = seq;
+                        link->send(st, false);
+                        ++interpolated;
+                    }
+                }
+            }
             if (cursor >= lines.size() && finished_at < 0) finished_at = now_s();
             link->update(now_s());
             // Le client ne répond pas pendant un chargement de niveau (thread de jeu bloqué) : marge large.
@@ -828,9 +994,73 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
     if (a.end_mode != "vanish")
         for (int i = 0; i < 40 && link; ++i) { link->update(now_s() + i); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
     const bool ok = finished_at >= 0 && invalid == 0 && desyncs == 0 && mismatches == 0;
+    log_netsim(log, sim);
+    log.write("pilot_interpolated", JsonObj().add("count", interpolated));
     log.write("done", JsonObj().add("ok", ok).add("replayed", static_cast<int64_t>(cursor)).add("of", static_cast<int64_t>(lines.size())).add("hashes", hashes)
                           .add("desyncs", desyncs).add("c2h_mismatches", mismatches).add("invalid", invalid));
     return ok ? 0 : 1;
+}
+
+// --- Tranche d'un enregistrement réel (slice) -------------------------------------------------
+
+int run_slice(const Args& a)
+{
+    std::ifstream f(a.in, std::ios::binary);
+    if (!f) { std::fprintf(stderr, "cannot open %s\n", a.in.c_str()); return 1; }
+    std::string line, err;
+    std::vector<RecLine> lines;
+    while (std::getline(f, line)) {
+        json::Value v;
+        if (line.empty() || !json::parse(line, v, err)) continue;
+        auto bytes = from_hex(v["hex"].as_string());
+        wire::Reader r(bytes.data(), bytes.size());
+        auto m = proto::decode(r, err);
+        if (!m) { std::fprintf(stderr, "bad line: %s\n", err.c_str()); return 1; }
+        lines.push_back({v["dir"].as_string(), std::move(*m), v["t"].as_number(0)});
+    }
+    // Instantané de départ : SaveOffer n° xfer.
+    size_t start = lines.size();
+    for (size_t i = 0; i < lines.size(); ++i)
+        if (auto* so = std::get_if<proto::SaveOffer>(&lines[i].msg); so && lines[i].dir == "h2c" && so->xfer == static_cast<uint32_t>(a.xfer)) { start = i; break; }
+    if (start == lines.size()) { std::fprintf(stderr, "SaveOffer xfer %d not found\n", a.xfer); return 1; }
+    const auto& offer = std::get<proto::SaveOffer>(lines[start].msg);
+    if (!a.snapshot.empty()) {
+        std::ifstream sf(a.snapshot, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>());
+        const bool ok = bytes.size() == offer.size && fnv64(bytes) == offer.hash;
+        std::printf("snapshot %s : %s (size %zu, want %u)\n", a.snapshot.c_str(), ok ? "matches" : "DOES NOT MATCH", bytes.size(), offer.size);
+        if (!ok) return 1;
+    }
+    // Ouverture de session (le client se présente, l'hôte l'accueille), sans les noms des joueurs.
+    std::vector<RecLine> out;
+    auto anon = [](proto::Message m) {
+        if (auto* h = std::get_if<proto::Hello>(&m)) h->player_name = "Client";
+        if (auto* r = std::get_if<proto::Roster>(&m)) for (auto& e : r->players) e.name = e.player == 0 ? "Host" : "Client" + std::to_string(e.player);
+        return m;
+    };
+    const double t0 = lines[start].t - 1.0;
+    bool hello = false, welcome = false, roster = false;
+    for (size_t i = 0; i < start; ++i) {
+        const auto& l = lines[i];
+        if (!hello && l.dir == "c2h" && std::holds_alternative<proto::Hello>(l.msg)) { out.push_back({l.dir, anon(l.msg), 0.0}); hello = true; }
+        else if (hello && !welcome && std::holds_alternative<proto::Welcome>(l.msg)) { out.push_back({l.dir, l.msg, 0.0}); welcome = true; }
+        else if (welcome && !roster && std::holds_alternative<proto::Roster>(l.msg)) { out.push_back({l.dir, anon(l.msg), 0.0}); roster = true; }
+    }
+    std::map<std::string, int> counts;
+    for (size_t i = start; i < lines.size() && lines[i].t <= a.to; ++i) {
+        out.push_back({lines[i].dir, anon(lines[i].msg), lines[i].t - t0});
+        ++counts[std::string(lines[i].dir) + " " + proto::type_name(proto::type_of(lines[i].msg))];
+    }
+    std::ofstream o(a.out, std::ios::binary);
+    for (const auto& l : out) {
+        wire::Writer w;
+        proto::encode(l.msg, w);
+        o << JsonObj().add("t", l.t).add("dir", l.dir).add("type", proto::type_name(proto::type_of(l.msg))).add("hex", to_hex(w.data())).raw("msg", proto::to_json(l.msg)).str() << "\n";
+    }
+    std::printf("slice: %zu lines, xfer %d at t=%.1f, until t=%.1f (%.1f s)\n", out.size(), a.xfer, lines[start].t, std::min(a.to, lines.back().t),
+                std::min(a.to, lines.back().t) - lines[start].t);
+    for (auto& [k, n] : counts) std::printf("  %-28s %d\n", k.c_str(), n);
+    return 0;
 }
 
 } // namespace
@@ -859,8 +1089,15 @@ int main(int argc, char** argv)
         else if (k == "--version-reply") a.version_reply = std::atoi(v.c_str());
         else if (k == "--stop-after-turn") a.stop_after_turn = std::atoi(v.c_str());
         else if (k == "--resync-snapshot") a.resync_snapshot = v == "1";
+        else if (k == "--pilot-rate") a.pilot_rate = std::atof(v.c_str());
+        else if (k == "--net") a.net = v;
+        else if (k == "--in") a.in = v;
+        else if (k == "--out") a.out = v;
+        else if (k == "--xfer") a.xfer = std::atoi(v.c_str());
+        else if (k == "--to") a.to = std::atof(v.c_str());
         else { std::fprintf(stderr, "unknown option %s\n", k.c_str()); return 2; }
     }
+    if (a.mode == "slice") return a.in.empty() || a.out.empty() || !a.xfer ? 2 : run_slice(a);
     JsonLog log;
     log.open(a.log.empty() ? std::string("fakepeer.jsonl") : a.log, "fakepeer", a.mode);
     Recorder rec;

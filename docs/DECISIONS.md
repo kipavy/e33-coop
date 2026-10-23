@@ -170,7 +170,7 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 2. **Pilote** : un seul pilote (l'hôte au départ). Il diffuse `PilotState` (niveau, position, rotation, vitesse) ~20 fois par seconde, sans fiabilité. Chez les autres, les entrées de déplacement locales sont coupées et le pion est conduit par `AddMovementInput` vers la position prédite, avec une téléportation au-delà d'un écart. `PilotRequest` / `PilotChange` : n'importe qui peut prendre la main, l'hôte arbitre.
 3. **Interactions et dialogues** : les objets du monde sont identifiés par leur chemin complet (stable). Le pilote publie chaque `OnInteractionRequested` et chaque `OnChoiceMade` ; les autres instances font le même appel sur leur copie. Comme en combat (D11), chaque instance rejoue les décisions et calcule elle-même les effets (butin, drapeaux, dialogues, cinématiques déclenchées).
 4. **Transitions** : le pilote publie `MapChange` (niveau + point d'apparition, lus sur le GI au `ChangeMap`) ; les autres appellent `ChangeMapByAssetName`, sauf s'ils sont déjà en route vers ce niveau (le pion suiveur a pu traverser le même déclencheur).
-5. **Cinématiques et dialogues** : joués localement. Chaque instance annonce leur début et leur fin (`NarrativeState`). Celle qui termine avant les autres reste en pause de jeu jusqu'à ce que tout le monde ait fini (`BarrierRelease` de l'hôte, ou délai maximal en cas de pair muet). Précisé le 2026-10-22 (essai à deux PC) : une instance qui n'a pas commencé la scène des autres n'est mise en pause qu'après 6 s de grâce (le suiveur doit pouvoir la déclencher) ; jamais de barrière pendant un combat coop engagé (le démarrage coordonné attend les joueurs).
+5. **Cinématiques et dialogues** : joués localement. Chaque instance annonce leur début et leur fin (`NarrativeState`). Celle qui termine avant les autres reste en pause de jeu jusqu'à ce que tout le monde ait fini (`BarrierRelease` de l'hôte, ou délai maximal en cas de pair muet). Précisé le 2026-10-22 (essai à deux PC) : une instance qui n'a pas commencé la scène des autres n'est mise en pause qu'après 6 s de grâce (le suiveur doit pouvoir la déclencher) ; jamais de barrière pendant un combat coop engagé (le démarrage coordonné attend les joueurs). Depuis D20 (2026-10-23), le suiveur déclenche aussitôt la scène du pilote (`SceneStart`).
 6. **Combat d'exploration** : l'hôte lit les paramètres au `StartBattleNEW` et les ajoute à `BattleStart` (ennemi du monde, `EnemyGlobalID`, engagement). Le client lance le même ennemi (même rencontre imposée dans `SelectedEncounter`, puis `StartBattle`) ; à défaut, il passe par la recette du test runner avec le même `EnemyGlobalID`. Si son pion a déjà engagé le même combat, il ne le relance pas.
 7. **Pause** : en combat, la pause d'un joueur met tout le monde en pause (`PauseState`, qui a mis en pause). En exploration, seule la pause du pilote arrête les autres (leur pion suit, donc il s'arrête de lui-même).
 8. **Tests** : l'enregistrement d'une session ne contient pas les octets de la save (repo public, données de Killian) : le faux hôte lit l'instantané depuis `.tools/testsaves/` et le reprend du hash noté dans `SaveOffer`.
@@ -281,3 +281,32 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Limite** : pendant le vol, l'ami ne voit pas l'hôte (pas d'avatar distant) ; sa caméra suit le pion caché. Reproduire la monture (Esquie chez le suiveur aussi) demande le nom de la fonction de montée, à lire dans `coop_mount_functions`.
 
 **Remise en cause si** : le pion de la carte du monde à pied utilise un mode custom (fantôme permanent : `coop_follower_ghost` raison `pilot_move` avec `pilot_mount` faux) ; ou si `IsMountInUse` n'est pas mis à jour à la monture (raison `pawn_class` à la place, à vérifier dans `coop_pilot_move`).
+
+---
+
+## D20 — Cinématiques : le suiveur déclenche la scène du pilote aussitôt (2026-10-23, demande de Killian)
+
+**Constat** (essai à deux PC du 2026-10-22) : scène de Sophie jouée en série (hôte 798→835 s, client 835→874 s). La scène part d'une zone `BP_GameActionTriggerZone_C` au bas de la corde ; le pion suiveur, quelques mètres derrière, était figé par la barrière avant d'y arriver.
+
+**Décision** :
+1. Le pilote publie `SceneStart` (nouveau type 53 ; un pair ancien l'ignore) au pré-hook de `BP_CinematicSystem_C:TriggerCinematic` : identifiant (`Cinematic_LevelSequence_ID`, souvent `None`), asset de séquence, cause (zone « au passage » vue par `ExecuteGameActionWrapperFromTriggerZone` pendant `TryExecuteGameActionOnOverlap`, sinon interaction publiée, sinon game action ; fenêtre de 60 s), game action et position du pilote.
+2. Le suiveur, s'il n'est pas déjà dans une narration ni dans la même scène (clé = identifiant ou séquence, 120 s) : zone -> `TryExecuteGameActionOnOverlap()` sur sa copie de la zone (le jeu tient l'état de la zone : pas de double lecture quand le pion y passe ensuite) ; zone qui refuse -> son action par `ExecuteGameAction` ; sinon (cause inconnue, pas de zone) téléportation du pion sur la position du pilote au déclenchement. Interaction : rejouée par `WorldInteract`, repli après 3 s. Résultat vérifié 3 s après (`scene_syncs_ok` / `_failed`).
+3. `SceneSkip` (type 54) : publié quand le pilote a vraiment passé la scène (`OnSequenceFinished` ≤ 5 s après `SkipCinematic`) ; le suiveur passe la sienne (pause de la cinématique puis passage, réessayé pendant 10 s tant que la séquence joue).
+4. La barrière ne sert plus qu'à attendre la fin ; le délai de grâce de 6 s reste le filet (pair ancien, scène non retrouvée).
+
+**Limites** : une scène enchaînée sur un combat (Renoir) part aussi chez le suiveur par sa propre game action : combat déjà engagé ici, accepté par `BattleStart` (« already_engaged »), non testé en scénario. Cinématiques lancées autrement que par `TriggerCinematic` (vidéo d'intro) non couvertes.
+
+**Remise en cause si** : `coop_scene_sync` en méthode 3 (téléportation) fréquente, ou `scene_syncs_failed` ; ou une zone dont l'action dépend du pion qui la traverse.
+
+## D21 — Carte du monde : le suiveur monte sur Esquie et le conduit comme le pilote (2026-10-23, demande de Killian)
+
+**Données du jeu (en jeu, save `TEST_LATE`)** : pion à pied `BP_jRPG_Character_WorldMap_pawn_C`, Esquie = pion `BP_WorldMapCharacter_C` (sous-classe de `BP_jRPG_Character_World_C`) possédé à la montée. `BP_WorldMapControllerComponent` du contrôleur : `OnInputMountPressed` -> `OnMountRequested` -> `ProcessMountRequest` (montée), `OnDismountRequested` (descente, refusée en vol), `MountIsInUse`, `IsMountPerformingAnAnimation`. Esquie : `CurrentMovementMode` (0 marche, 1 eau, 2 vol), `TryChangeMovementMode(MovementMode, ZoneType)` (décollage / atterrissage, appelé par l'événement de saut), `ChangeMovementMode` (imposé), `IsInTransition`.
+
+**Décision** :
+1. `PilotState` gagne un dernier champ facultatif `wm_mode` (mode d'Esquie, 255 = pas sur Esquie).
+2. Suiveur sur la carte du monde, pilote sur Esquie : montée par `OnInputMountPressed` (repli : événement de la touche de monture), 3 essais toutes les 1,5 s, pion laissé sur place pendant ce temps. Puis même mode (`TryChangeMovementMode`, `ChangeMovementMode` après 2 refus), toutes les 0,5 s au plus.
+3. Conduite : vol et eau (3000-4000 u/s) : Esquie placé à chaque image sur la position prédite du pilote (cible avancée à sa vitesse puis rapprochée de la position reçue en ~0,1 s) ; marche (350 u/s) : `AddMovementInput` comme le suivi à pied, recalé au-delà de 1500 u. Pendant les animations de montée / transitions : rien.
+4. Pilote à pied, suiveur sur Esquie : retour au sol (mode marche) puis `OnDismountRequested`, 8 essais.
+5. Le fantôme de D19 reste en repli (montée impossible, ex. pion à la nage) ; `-e33mountsync=0` coupe montée et descente.
+
+**Remise en cause si** : `coop_follower_mount` échoue souvent (`can_mount` faux), ou `coop_follower_wm_mode` `forced` fréquent (mode refusé par le jeu), ou Esquie placé qui saccade visiblement en vol (passer à une poursuite par entrées).
