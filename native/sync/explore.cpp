@@ -864,7 +864,7 @@ void follow_tick()
     else if (fc.moving && rv < 10 && err < 25) {
         fc.moving = false;
         ++f.stops;
-        if (s.now - fc.last_arrival < 0.3 && pilot_now_speed > 40 && s.now - fc.follow_since >= 2.0) {
+        if (s.now - fc.last_arrival < 0.3 && pilot_now_speed > 100 && s.now - fc.follow_since >= 2.0) {
             bump("follow_parasitic_stops");
             follow_event("parasitic_stop", pilot_now_speed, rv, own_speed, gap_now);
         }
@@ -890,7 +890,7 @@ void follow_tick()
     // dès qu'il repasse sous la course et que le retard est faible. Sans délai : le pion ralentit avec le pilote (avant :
     // sprint gardé 0,3 s, le pion dépassait le pilote puis freinait d'un coup).
     const bool want_sprint = fc.moving && (rv > run_speed * 1.1 || (err > 120 && vc > run_speed * 1.08));
-    const bool keep_sprint = fc.moving && (rv > run_speed * 1.02 || err > 60);
+    const bool keep_sprint = fc.moving && (rv > run_speed * 1.03 || vc > run_speed * 1.03);
     if (want_sprint && !fc.sprint) { fc.sprint = true; sprint_start(pawn); }
     else if (fc.sprint && !keep_sprint) sprint_stop(pawn);
     if (fc.sprint) {
@@ -909,12 +909,13 @@ void follow_tick()
     if (!fc.moving || vc < 1) return;
     double scale;
     if (fc.sprint) {
-        // Entrée >= 0,92 (l'ALS n'accorde le sprint qu'au-delà de 0,9) : un peu plus lent si le pion est en avance.
-        // Rattrapage au-delà du sprint : vitesse de sprint des réglages ALS relevée (jusqu'à 1,2 x), rendue ensuite.
-        scale = std::clamp(vc / sprint_speed, 0.92, 1.0);
-        if (fc.speeds_ok && (vc > sprint_speed + 5 || fc.max_written)) {
+        // Entrée pleine (l'ALS n'accorde le sprint qu'au-delà de 0,9). La vitesse suit la vitesse voulue par la vitesse de
+        // sprint des réglages ALS (de la course + 15 à 1,2 x le sprint, rendue ensuite) : le pion ralentit avec le pilote
+        // au lieu de rester à 720 puis de freiner d'un coup au passage en course (mesuré : 662 -> 185 u/s en 0,1 s).
+        scale = 1.0;
+        if (fc.speeds_ok) {
             fc.max_written = true;
-            game::set_pawn_sprint_speed(pawn, static_cast<float>(std::clamp(vc, sprint_speed, vmax)));
+            game::set_pawn_sprint_speed(pawn, static_cast<float>(std::clamp(vc, run_speed + 15.0, vmax)));
         }
     } else {
         const double cap = mws && *mws > 10.0f ? static_cast<double>(*mws) : run_speed;
