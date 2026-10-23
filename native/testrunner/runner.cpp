@@ -160,6 +160,7 @@ struct State {
         int up_kind = 0;                  // relâchement à envoyer : 1 touche, 2 clic gauche, 3 clic droit
         unsigned up_vk = 0;
         double up_fx = 0, up_fy = 0;
+        double up_at = 0;                 // hors combat : instant du relâchement (appui tenu ~0,1 s, comme un vrai doigt)
         double ap0 = -1;
         int fa0 = -1;                     // compteurs de visée libre rejouée (dernière valeur vue)
         double fa_t = -10;                // instant de leur dernier changement
@@ -1132,14 +1133,27 @@ void run_explore_step(float dt)
         if (GetForegroundWindow() != w) { fail("input: game window not in foreground, nothing sent"); return; }
         static const std::map<std::string, unsigned> keys = {{"left", VK_LEFT}, {"right", VK_RIGHT}, {"up", VK_UP}, {"down", VK_DOWN},
                                                              {"enter", VK_RETURN}, {"escape", VK_ESCAPE}, {"f9", VK_F9}};
+        // Appui précédent encore tenu : relâché d'abord.
+        if (g.spam.up_kind) {
+            if (g.spam.up_kind == 1) send_key(w, g.spam.up_vk, true);
+            else send_click(w, g.spam.up_fx, g.spam.up_fy, false, true);
+            g.spam.up_kind = 0;
+        }
+        // Appui maintenant, relâchement ~0,1 s plus tard (dans tick) : appuyer et relâcher dans la même image passe
+        // inaperçu du jeu (Échap n'ouvrait pas le menu, 2026-10-23).
         if (st["key"].is_string()) {
             auto k = keys.find(st["key"].as_string(""));
             if (k == keys.end()) { fail("input: unknown key " + st["key"].as_string("")); return; }
             send_key(w, k->second, false);
-            send_key(w, k->second, true);
+            g.spam.up_kind = 1;
+            g.spam.up_vk = k->second;
+            g.spam.up_at = g.t + 0.1;
         } else if (st["click"].is_array()) {
-            send_click(w, st["click"][0].as_number(0.5), st["click"][1].as_number(0.5), false, false);
-            send_click(w, st["click"][0].as_number(0.5), st["click"][1].as_number(0.5), false, true);
+            g.spam.up_fx = st["click"][0].as_number(0.5);
+            g.spam.up_fy = st["click"][1].as_number(0.5);
+            send_click(w, g.spam.up_fx, g.spam.up_fy, false, false);
+            g.spam.up_kind = 2;
+            g.spam.up_at = g.t + 0.1;
         } else if (st["move"].is_array()) {
             RECT rc{};
             GetClientRect(w, &rc);
@@ -1247,7 +1261,7 @@ void tick(float dt)
         return;
     }
     // Entrée injectée encore enfoncée hors combat : relâchée.
-    if (g.spam.up_kind && g.phase != Phase::Battle) {
+    if (g.spam.up_kind && g.phase != Phase::Battle && g.t >= g.spam.up_at) {
         if (HWND w = game_window()) { if (g.spam.up_kind == 1) send_key(w, g.spam.up_vk, true); else send_click(w, g.spam.up_fx, g.spam.up_fy, g.spam.up_kind == 3, true); }
         g.spam.up_kind = 0;
     }
