@@ -10,7 +10,7 @@
     { "do": "wait", "s": 5 }
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
-  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/zones_rapid.jsonl", "--snapshot", "{repo}/.tools/testsaves/p9_zones_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "900"] },
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/zones_rapid.jsonl", "--snapshot", "{repo}/.tools/testsaves/p9_zones_v2_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "900"] },
   "expect": { "snapshots_received": "1", "joins_completed": "1", "snapshot_hash_errors": "0", "join_errors": "0", "world_resyncs": "0", "level_resyncs": "0",
               "map_transitions": ">=7", "map_transitions_unfinished": "<=1", "map_loads_extra": "0", "map_loads_missing": "0", "map_change_errors": "0",
               "map_follow_delay_ms_max": "<=8000", "map_after_pilot_ms_max": "<=4000", "map_arrival_err_max": "<=300", "map_catchup_ms_max": "<=2000",

@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Corrections
+- Changements de zone : quand le meneur change à nouveau de zone pendant que l'autre joueur charge encore la
+  précédente, celui-ci le rejoint dès son chargement fini (avant : il restait dans la mauvaise zone).
+- Changements de zone : le perso de l'autre joueur ne prend plus de lui-même une sortie de zone en suivant le meneur ;
+  il change de zone uniquement avec lui.
+
 ## [0.6.6] - 2026-10-23
 
 ### Corrections
