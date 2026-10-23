@@ -2,6 +2,14 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-23 — suivi fluide quand l'hôte court / sprinte (branche `fix/follow-smooth`, D22)
+
+- **Causes des « freeze » (journaux réels du client, 0.6.1)** : téléportations toutes les ~2,2 s pendant le sprint de l'hôte, et **deux rechargements d'instantané (5-6 s chacun) en plein sprint** (resynchro d'inventaire). En 0.6.4 (`p8_sprint_client`) : sprint du suiveur seulement par le repli après 0,6 s, retard ~200 u jamais rattrapé, et une resynchro encore envoyée en plein sprint.
+- **Corrigé** (D22) : `PilotState.t_ms` (horloge du pilote, champ final facultatif après `wm_mode`) ; tampon d'interpolation (100 ms après le transit minimal) ; commande en vitesse (vitesse du pilote + 2 x écart) ; sprint par `SetDesiredGait` selon la vitesse du pilote, vitesse réglée par `CurrentMovementSettings.SprintSpeed` (rattrapage jusqu'à 1,2 x, ralentissement en rampe avant de repasser en course ; écrire `MaxWalkSpeed` est sans effet, mesuré) ; téléportation seulement sur trou de données, retard qui ne se résorbe pas, pion bloqué ; **resynchro jamais pendant un mouvement** (attendue jusqu'à 1,5 s d'arrêt, 120 s au plus).
+- **Critères chiffrés** (compteurs du suiveur vérifiés par `expect`) : `follower_teleports_nogap` 0, `follow_gap_max_{sprint,run,walk}` < 250/150/120 u, `follow_gap_rest_max` < 60, `follow_stalls` 0, `follow_frozen_ms_max` <= 150, `follow_dips` 0, `follow_speed_drops` 0, `follow_parasitic_stops` 0, `explore_hitches_mod` 0, `resyncs_while_moving` 0. Trace par 0,1 s : `-e33followtrace=1`.
+- **Scénarios** : `p8_sprint_client` (critères ajoutés), `p8_sprint_sm_client` (Vallons fleuris, captures), `p8_sprint_long_client` (tranche `twopc_sprint_long` de Lumière par `fakepeer slice --no-resync 1` : 46 s de sprint/course, deux trous de 6,4 s laissés par les vrais rechargements), `p8_sprint_hardnet_client` (latence 60, gigue 40, 2 % de pertes, 3 % de pointes de 250 ms). Ajoutés à la batterie.
+- **Mesures** (avant -> après) : écart max en sprint 266 u -> 126-187 u (écart stable ~75 u : le tampon) ; téléportations 0 (hors trous) ; aucun stall, image > 50 ms due au mod, ni resynchro en mouvement.
+
 ## 2026-10-23 — Esquie : le suiveur monte et vole comme le pilote (branche `fix/esquie-mount`, D21)
 
 - **Save** : `TEST_LATE` (copie d'une save de fin de partie de Killian, tour de Cléa, `.tools/testsaves`), puis `change_map` vers `Level_WorldMap_Main_V2` (apparition à `LastWorldMapTransform`). Esquie vole déjà.
