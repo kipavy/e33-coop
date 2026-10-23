@@ -14,6 +14,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Ajouts
+- Cinématiques en même temps : quand le meneur déclenche une scène, elle démarre aussitôt chez les autres joueurs (au
+  lieu de se jouer l'une après l'autre) ; passer une scène la passe chez tout le monde.
+
 ## [0.6.4] - 2026-10-23
 
 ### Corrections
