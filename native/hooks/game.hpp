@@ -150,6 +150,7 @@ bool set_pawn_desired_gait(UObject* pawn, int gait);
 struct GaitSpeeds { float walk = 0, run = 0, sprint = 0; };
 bool pawn_gait_speeds(UObject* pawn, GaitSpeeds& out);
 float* pawn_max_walk_speed(UObject* pawn);
+bool set_pawn_sprint_speed(UObject* pawn, float speed);   // CurrentMovementSettings.SprintSpeed (rattrapage du suiveur)
 // Mode de déplacement d'un pion (carte du monde : Esquie, vol, nage ; 2026-10-22). move = EMovementMode de
 // CharacterMovement (-1 si illisible), mount = GI.IsMountInUse, world_map = bIsWorldMapPawn, attached = attaché à un acteur.
 struct MoveInfo { int move = -1; int custom = 0; bool mount = false; bool world_map = false; bool attached = false; std::string cls; };

@@ -1,6 +1,6 @@
 {
   "name": "p8_sprint_sm_client",
-  "description": "Suivi en course et sprint (essai réel à deux PC du 2026-10-22, Vallons fleuris) : le faux hôte rejoue la tranche réelle twopc_sprint_sm (41 s : départs et arrêts courts du pilote, course, sprint ~720 u/s de 8 s dont une descente de 600 u, arrêt avant un combat), positions à 20/s horodatées, réseau simulé. Mêmes critères de fluidité que p8_sprint_client (D20) ; captures toutes les secondes pour vérifier l'animation (le pion court/sprinte, ne glisse pas).",
+  "description": "Suivi en course et sprint (essai réel à deux PC du 2026-10-22, Vallons fleuris) : le faux hôte rejoue la tranche réelle twopc_sprint_sm (41 s : départs et arrêts courts du pilote, course, sprint ~720 u/s de 8 s dont une descente de 600 u, arrêt avant un combat), positions à 20/s horodatées, réseau simulé. À l'entrée, le pilote est déjà à ~900 u du point de l'instantané : une téléportation à la jonction (classée « gap ») est permise. Mêmes critères de fluidité que p8_sprint_client (D20) ; captures toutes les secondes pour vérifier l'animation (le pion court/sprinte, ne glisse pas).",
   "join": true,
   "timeout_s": 600,
   "shots_every_s": 1,
@@ -10,7 +10,7 @@
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1", "-e33followtrace=1"],
   "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/twopc_sprint_sm.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_sprint_sm_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "600"] },
-  "expect": { "snapshots_received": "1", "joins_completed": "1", "follower_teleports": "0", "snapshot_hash_errors": "0", "join_errors": "0",
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "follower_teleports": "<=1", "follower_teleports_nogap": "0", "snapshot_hash_errors": "0", "join_errors": "0",
               "follow_sprints": ">=1", "follow_gap_max_sprint": "<250", "follow_gap_max_run": "<150", "follow_gap_max_walk": "<120", "follow_gap_rest_max": "<60",
               "follow_stalls": "0", "follow_frozen_ms_max": "<=150", "follow_dips": "0", "follow_speed_drops": "0", "follow_parasitic_stops": "0",
               "explore_hitches_mod": "0", "resyncs_while_moving": "0" }

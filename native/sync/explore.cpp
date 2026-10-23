@@ -247,7 +247,7 @@ void bump(const char* c, int n = 1) { if (s.net.bump) s.net.bump(c, n); }
 // entré ; client : instantané chargé, ou session sans « rejoindre » des tests de combat).
 bool sharing();
 void touch();   // événement d'exploration : la partie n'est pas « calme » (hash d'état)
-void send_world_resync(const std::string& differ);
+void send_world_resync(std::string differ);
 
 bool world_ready()
 {
@@ -517,6 +517,7 @@ struct FollowCtl {
     double frozen_since = -1;
     double dip_since = -1; bool dip_counted = false;
     double rest_since = -1;
+    int cls = -2; double cls_since = 0;     // classe d'allure du pilote rendu (marche, course, sprint) et depuis quand
     double last_drop_at = -10;
     double last_event_log = -10;
     std::deque<std::array<double, 3>> hist; // (instant, vitesse du pion, vitesse rendue du pilote) sur 0,3 s
@@ -627,12 +628,12 @@ bool follow_render(double r, Rendered& out)
     return true;
 }
 
-// MaxWalkSpeed réglée par le mod (sprint du suiveur) -> rendue (vitesse de course de l'ALS).
+// Vitesse de sprint de l'ALS relevée par le mod (rattrapage du suiveur) -> rendue.
 void max_speed_restore(UObject* pawn)
 {
     if (!fc.max_written || !pawn) return;
     fc.max_written = false;
-    if (float* mws = game::pawn_max_walk_speed(pawn)) *mws = fc.speeds_ok ? fc.speeds.run : fc.base_max;
+    if (fc.speeds_ok) game::set_pawn_sprint_speed(pawn, fc.speeds.sprint);
 }
 
 void sprint_start(UObject* pawn)
@@ -710,7 +711,8 @@ void follow_metrics(const Rendered& R, double rv, double own, double gap_now, do
     // Écarts par allure du pilote
     auto cls = [](double v) { return v < 5 ? 0 : v <= 40 ? -1 : v <= 260 ? 1 : v <= 500 ? 2 : 3; };
     const int c1 = cls(rv), c2 = cls(pilot_now_speed);
-    if (c1 == c2 && c1 > 0) gauge_max(c1 == 1 ? "follow_gap_max_walk" : c1 == 2 ? "follow_gap_max_run" : "follow_gap_max_sprint", gap_now);
+    if (c1 != fc.cls) { fc.cls = c1; fc.cls_since = s.now; }   // allure stable : même classe depuis 0,5 s
+    if (c1 == c2 && c1 > 0 && s.now - fc.cls_since >= 0.5) gauge_max(c1 == 1 ? "follow_gap_max_walk" : c1 == 2 ? "follow_gap_max_run" : "follow_gap_max_sprint", gap_now);
     if (c1 == 0 && c2 == 0) { if (fc.rest_since < 0) fc.rest_since = s.now; else if (s.now - fc.rest_since >= 2.0) gauge_max("follow_gap_rest_max", rest_gap); }
     else fc.rest_since = -1;
     // Pion arrêté alors que le pilote bouge
@@ -729,11 +731,14 @@ void follow_metrics(const Rendered& R, double rv, double own, double gap_now, do
         if (fc.dip_since < 0) { fc.dip_since = s.now; fc.dip_counted = false; }
         if (s.now - fc.dip_since >= 0.15 && !fc.dip_counted) { fc.dip_counted = true; bump("follow_dips"); follow_event("dip", own / std::max(1.0, rv) * 100.0, rv, own, gap_now); }
     } else fc.dip_since = -1;
-    // Chute brusque de la vitesse du pion (à-coup) sans ralentissement du pilote : comparée à il y a ~0,1 s.
+    // Chute brusque de la vitesse du pion (à-coup) : > 250 u/s en ~0,1 s, jusqu'à bien moins que le pilote, qui n'est
+    // pas descendu aussi bas pendant les 0,3 dernières s (sinon le pion ne fait que le suivre).
+    double rv_min = rv;
+    for (const auto& h : fc.hist) rv_min = std::min(rv_min, h[2]);
     for (const auto& h : fc.hist) {
         if (s.now - h[0] > 0.13) continue;
         if (s.now - h[0] < 0.09) break;
-        if (rv > 150 && h[1] - own > 250 && std::fabs(h[2] - rv) < 60 && s.now - fc.last_drop_at > 0.3) {
+        if (rv > 150 && h[1] - own > 250 && rv_min > own + 100 && s.now - fc.last_drop_at > 0.3) {
             fc.last_drop_at = s.now;
             bump("follow_speed_drops");
             follow_event("speed_drop", h[1] - own, rv, own, gap_now);
@@ -797,7 +802,7 @@ void follow_tick()
     s.local_speed_at = s.now;
     if (fc.follow_since < 0) fc.follow_since = s.now;
     // Vitesses ALS du pion (relues toutes les 2 s)
-    if (s.now - fc.speeds_at > 2.0) {
+    if (s.now - fc.speeds_at > 2.0 && !fc.max_written) {   // pas pendant que le mod a relevé le sprint
         fc.speeds_at = s.now;
         fc.speeds_ok = game::pawn_gait_speeds(pawn, fc.speeds);
         if (!fc.speeds_logged) {
@@ -881,13 +886,13 @@ void follow_tick()
         if (fc.stuck_since < 0) fc.stuck_since = s.now;
         else if (s.now - fc.stuck_since > 2.0) { teleport_follower(pawn, R, "stuck", err, dz, rv, own_speed); return; }
     } else fc.stuck_since = -1;
-    // Allure : sprint au-delà de la course (hystérésis 0,92-1,08 x course ; 0,3 s sous le seuil pour en sortir).
-    if (fc.moving && vc > run_speed * 1.08) { fc.sprint_low_since = -1; if (!fc.sprint) { fc.sprint = true; sprint_start(pawn); } }
-    else if (fc.sprint && !fc.moving) sprint_stop(pawn);
-    else if (fc.sprint && vc < run_speed * 0.92) {
-        if (fc.sprint_low_since < 0) fc.sprint_low_since = s.now;
-        else if (s.now - fc.sprint_low_since > 0.3) sprint_stop(pawn);
-    } else fc.sprint_low_since = -1;
+    // Allure : sprint quand le pilote rendu sprinte (> 1,1 x course), ou pour rattraper un retard net (> 120 u) ; course
+    // dès qu'il repasse sous la course et que le retard est faible. Sans délai : le pion ralentit avec le pilote (avant :
+    // sprint gardé 0,3 s, le pion dépassait le pilote puis freinait d'un coup).
+    const bool want_sprint = fc.moving && (rv > run_speed * 1.1 || (err > 120 && vc > run_speed * 1.08));
+    const bool keep_sprint = fc.moving && (rv > run_speed * 1.02 || err > 60);
+    if (want_sprint && !fc.sprint) { fc.sprint = true; sprint_start(pawn); }
+    else if (fc.sprint && !keep_sprint) sprint_stop(pawn);
     if (fc.sprint) {
         f.sprint_s += fdt;
         if (own_speed > run_speed + 50) f.sprint_gait_ok_s += fdt;
@@ -899,16 +904,17 @@ void follow_tick()
         fc.next_gait_assert = s.now + 0.5;
         if (game::pawn_gait(pawn, true) == 2) sprint_off(pawn);   // sprint resté après un combat ou un chargement
     }
-    float* mws = game::pawn_max_walk_speed(pawn);
+    const float* mws = game::pawn_max_walk_speed(pawn);
     if (!fc.sprint && fc.max_written) max_speed_restore(pawn);
     if (!fc.moving || vc < 1) return;
     double scale;
     if (fc.sprint) {
-        // Entrée pleine (l'ALS n'accorde le sprint qu'au-delà de 0,9) ; la vitesse est réglée par MaxWalkSpeed.
-        scale = 1.0;
-        if (mws) {
-            if (!fc.max_written) { fc.base_max = *mws; fc.max_written = true; }
-            *mws = static_cast<float>(std::clamp(vc, run_speed + 15.0, vmax));
+        // Entrée >= 0,92 (l'ALS n'accorde le sprint qu'au-delà de 0,9) : un peu plus lent si le pion est en avance.
+        // Rattrapage au-delà du sprint : vitesse de sprint des réglages ALS relevée (jusqu'à 1,2 x), rendue ensuite.
+        scale = std::clamp(vc / sprint_speed, 0.92, 1.0);
+        if (fc.speeds_ok && (vc > sprint_speed + 5 || fc.max_written)) {
+            fc.max_written = true;
+            game::set_pawn_sprint_speed(pawn, static_cast<float>(std::clamp(vc, sprint_speed, vmax)));
         }
     } else {
         const double cap = mws && *mws > 10.0f ? static_cast<double>(*mws) : run_speed;
@@ -1475,7 +1481,7 @@ void world_hash_tick()
     }
 }
 
-void send_world_resync(const std::string& differ)
+void send_world_resync(std::string differ)   // copie : l'appelant peut passer s.resync_deferred
 {
     s.resync_deferred.clear();
     if (s.now - s.last_motion_at < 0.5) bump("resyncs_while_moving");
@@ -1734,7 +1740,8 @@ void tick(double now)
     mount::tick(s.now);   // pion fantôme rendu si le suivi s'est arrêté
     follow_stats_flush(false);
     {   // Mouvement en cours (pilote vu d'ici, ou pion local) : pas de rechargement d'instantané (world_resync_tick).
-        const bool pilot_moving = !fc.buf.empty() && s.now - fc.last_arrival < 0.5 && std::hypot(fc.buf.back().vel[0], fc.buf.back().vel[1]) > 50;
+        // Pilote sans nouvelles (perte, pointe) : considéré encore en mouvement 5 s.
+        const bool pilot_moving = !fc.buf.empty() && s.now - fc.last_arrival < 5.0 && std::hypot(fc.buf.back().vel[0], fc.buf.back().vel[1]) > 50;
         const bool local_moving_now = s.local_speed_at >= 0 && s.now - s.local_speed_at < 0.5 && s.local_speed > 50;
         if (pilot_moving || local_moving_now) s.last_motion_at = s.now;
     }

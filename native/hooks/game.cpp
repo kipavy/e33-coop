@@ -788,6 +788,19 @@ float* pawn_max_walk_speed(UObject* pawn)
     return ue::value_ptr<float>(cmc, STR("MaxWalkSpeed"));
 }
 
+bool set_pawn_sprint_speed(UObject* pawn, float speed)
+{
+    // Vitesse de sprint des réglages ALS du pion (MaxWalkSpeed écrite directement est ignorée : mesuré le 2026-10-23,
+    // le pion restait à 720 avec MaxWalkSpeed à 365 ou 864). bRequestMovementSettingsChange : l'ALS recalcule
+    // MaxWalkSpeed depuis ces réglages à la fin du mouvement de l'image.
+    UObject* cmc = pawn ? ue::get_object(pawn, STR("CharacterMovement")) : nullptr;
+    auto* st = ue::value_ptr<float>(cmc, STR("CurrentMovementSettings"));
+    if (!st) return false;
+    st[2] = speed;
+    if (!ue::set_bool(cmc, STR("bRequestMovementSettingsChange"), true)) ue::set_int(cmc, STR("bRequestMovementSettingsChange"), 1);
+    return true;
+}
+
 bool move_info(UObject* pawn, MoveInfo& out)
 {
     if (!pawn) return false;
