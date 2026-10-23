@@ -33,6 +33,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ### Ajouts
 - Cinématiques en même temps : quand le meneur déclenche une scène, elle démarre aussitôt chez les autres joueurs (au
   lieu de se jouer l'une après l'autre) ; passer une scène la passe chez tout le monde.
+- Panneau Coop du menu pause utilisable comme le menu du jeu : souris (survol, clic), flèches du clavier ou croix /
+  stick de la manette pour passer d'une ligne à l'autre (Droite depuis le menu pour y entrer), Entrée / A ou
+  Gauche / Droite pour changer la répartition d'un personnage ou une option, Échap / B pour revenir au menu.
+  F9 / Maj+F9 marchent toujours.
 - Version du mod affichée au menu principal (sous les boutons) et en bas du panneau Coop (F9).
 - Carte du monde : le perso de l'autre joueur monte sur Esquie avec le meneur et le suit en marche, en vol et sur
   l'eau (au lieu de « nager en l'air »).

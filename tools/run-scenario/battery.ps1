@@ -23,7 +23,7 @@ $all = @(
     "p6_steam_selftest",
     "p6_world_host", "p6_world_client", "p6_world2_host", "p6_world2_client",
     "p6_newgame_host", "p6_newgame_client", "p6_duoparry_host", "p6_ownersui_host", "p7_intent_host", "p7_intent_client", "p7_menumirror_host", "p7_menumirror_off_host",
-    "p6_coopsave_client", "p6_coopsave_host", "p6_panel_host",
+    "p6_coopsave_client", "p6_coopsave_host", "p6_panel_host", "p6_panelnav_host",
     "p8_sprint_client", "p8_sprint_sm_client", "p8_sprint_long_client", "p8_sprint_hardnet_client",
     "p8_cutscene_host", "p8_cutscene_sync_client", "p8_cutscene_client", "p8_dialogue_host", "p8_dialogue_sync_client",
     "p8_esquie_host", "p8_esquie_client",

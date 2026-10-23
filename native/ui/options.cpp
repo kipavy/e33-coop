@@ -87,6 +87,18 @@ void apply(const char* key)
     else coop::reload_options();
 }
 
+// Valeur précédente : celle dont la suivante est la valeur actuelle (cycle).
+std::string previous_value(const char* key, const std::string& cur)
+{
+    std::string v = cur;
+    for (int i = 0; i < 32; ++i) {
+        const std::string n = release::next_setting_value(key, v);
+        if (n == cur) return v;
+        v = n;
+    }
+    return release::next_setting_value(key, cur);
+}
+
 } // namespace
 
 std::vector<Row> rows()
@@ -119,7 +131,9 @@ void select(int index)
     log().write("options_select", JsonObj().add("row", g_sel));
 }
 
-bool change()
+void keep_alive() { g_last_key = g_now; }
+
+bool change(int dir)
 {
     if (g_sel < 0) return false;
     g_last_key = g_now;
@@ -134,14 +148,14 @@ bool change()
     if (oi >= std::size(kOpts)) return false;
     const Opt& o = kOpts[oi];
     if ((o.host_only && is_client()) || (cmdline::from_command_line(o.key) && !cmdline::test_mode())) { ++g_counts["option_refused"]; return false; }
-    const std::string next = release::next_setting_value(o.key, current(o.key));
+    const std::string next = dir < 0 ? previous_value(o.key, current(o.key)) : release::next_setting_value(o.key, current(o.key));
     if (!cmdline::test_mode() && !cmdline::save_setting(o.key, next)) {
         log().write("options_error", JsonObj().add("key", o.key).add("what", "settings.ini"));
         return false;
     }
     if (!cmdline::test_mode()) apply(o.key);
     ++g_counts["option_changes"];
-    log().write("options_changed", JsonObj().add("key", o.key).add("value", next));
+    log().write("options_changed", JsonObj().add("key", o.key).add("value", next).add("dir", dir));
     return true;
 }
 
