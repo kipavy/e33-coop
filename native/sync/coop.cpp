@@ -3640,6 +3640,11 @@ static void explore_frames_tick(double dt)
         for (auto& [n, m] : ef.step_max) if (n == name) { m = std::max(m, ms); found = true; break; }
         if (!found) ef.step_max.emplace_back(name, ms);
     }
+    // Images > 50 ms pendant un mouvement (suivi, D23) ; « mod » : le travail du mod en fait au moins la moitié.
+    if (dt > 0.05 && dt < 3.0 && explore::motion_recent() && !game::map_change_in_progress()) {
+        bump("explore_hitches_moving");
+        if (last.total_ms > 500.0 * dt) bump("explore_hitches_mod");
+    }
     if (dt > 0.08 && dt < 3.0) {   // au-delà : chargement (écran figé attendu)
         bump("explore_frame_hitches");
         if (s.now - ef.last_line < 1.0) ++ef.suppressed;

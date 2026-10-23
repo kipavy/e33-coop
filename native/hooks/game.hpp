@@ -145,6 +145,12 @@ bool teleport_pawn(UObject* pawn, const double pos[3], double yaw);
 int pawn_gait(UObject* pawn, bool desired = false);
 bool pawn_sprint_action(UObject* pawn, bool on);
 bool set_pawn_desired_gait(UObject* pawn, int gait);
+// Vitesses ALS du pion (CharacterMovement.CurrentMovementSettings : marche, course, sprint) et vitesse maximale au sol
+// (CharacterMovement.MaxWalkSpeed, que l'ALS règle au changement d'allure permise ; le suiveur la règle lui-même en sprint).
+struct GaitSpeeds { float walk = 0, run = 0, sprint = 0; };
+bool pawn_gait_speeds(UObject* pawn, GaitSpeeds& out);
+float* pawn_max_walk_speed(UObject* pawn);
+bool set_pawn_sprint_speed(UObject* pawn, float speed);   // CurrentMovementSettings.SprintSpeed (rattrapage du suiveur)
 // Mode de déplacement d'un pion (carte du monde : Esquie, vol, nage ; 2026-10-22). move = EMovementMode de
 // CharacterMovement (-1 si illisible), mount = GI.IsMountInUse, world_map = bIsWorldMapPawn, attached = attaché à un acteur.
 struct MoveInfo { int move = -1; int custom = 0; bool mount = false; bool world_map = false; bool attached = false; std::string cls; };
