@@ -931,7 +931,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                            std::holds_alternative<proto::BattleReady>(l.msg) || std::holds_alternative<proto::Pong>(l.msg) ||
                            std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg) ||
                            std::holds_alternative<proto::IntentPreview>(l.msg) || std::holds_alternative<proto::AimView>(l.msg) ||
-                           std::holds_alternative<proto::MenuState>(l.msg)) {
+                           std::holds_alternative<proto::MenuState>(l.msg) || std::holds_alternative<proto::SceneStart>(l.msg) ||
+                           std::holds_alternative<proto::SceneSkip>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;

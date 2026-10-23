@@ -1,0 +1,20 @@
+{
+  "name": "p8_cutscene_host",
+  "description": "Cinématique de Sophie (Lumière, prologue) côté hôte/pilote : partie chargée depuis l'instantané réel p8_cutscene_snapshot (2026-10-22, avant la corde). Après l'entrée du faux client, le pilote est posé au bas de la corde et marche vers la zone qui déclenche la scène ; l'hôte doit publier la scène et sa cause (SceneStart : zone, game action), puis son passage (SceneSkip). Produit l'enregistrement rejoué par p8_cutscene_sync_client.",
+  "save": "e33coop-test/p8_cutscene_snapshot",
+  "timeout_s": 600,
+  "shots_every_s": 5,
+  "explore": [
+    { "do": "wait_join", "players": 1, "timeout": 300 },
+    { "do": "wait", "s": 5 },
+    { "do": "teleport", "pos": [13900, -45160, 6960], "yaw": 130 },
+    { "do": "wait", "s": 2 },
+    { "do": "move", "dir": [-0.645, 0.764], "s": 6 },
+    { "do": "wait", "until": "narratives_started", "is": ">=1", "timeout": 30 },
+    { "do": "skip_cinematic", "after_s": 12, "timeout": 240 },
+    { "do": "wait", "s": 15 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_follow.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "snapshots_sent": "1", "joined_players": "1", "narratives_started": ">=1", "scenes_published": ">=1", "scene_skips_published": "1", "snapshot_errors": "0" }
+}
