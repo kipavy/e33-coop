@@ -1594,7 +1594,7 @@ bool sharing() { return s.host ? joined_players() > 0 : (!s.want_join || s.cj ==
 struct WorldPart { const char* name; const wchar_t* field; };
 constexpr WorldPart kWorldParts[] = {
     {"gold", L"Gold"}, {"inventory2", L"Inventory"},   // inventory2 : nouvelle empreinte (minuscules, sans tenues), 2026-10-23
-     {"interacted", L"InteractedObjects"}, {"battled", L"BattledEnemies"},
+     {"interacted2", L"InteractedObjects"}, {"battled", L"BattledEnemies"},
     {"flags", L"NamedIDsStates"}, {"gpe", L"GPE_States"}, {"cinematics", L"InteractedCinematics"}, {"dialogs", L"InteractedDialogs"},
 };
 
@@ -1622,6 +1622,21 @@ reflect::Leaves inventory_leaves()
     return l;
 }
 
+// Objets utilisés sans les zones de passage ni les séquences de niveau : le pilote les déclenche en passant, le
+// suiveur pas toujours (zones sans cinématique ni dialogue, non rejouées) ; écart permanent, donc une resynchro toutes
+// les 10 à 20 s d'exploration (essai à deux PC du 2026-10-24). Le compte (« InteractedObjects#… ») est retiré aussi.
+reflect::Leaves interacted_leaves(reflect::Leaves in)
+{
+    reflect::Leaves out;
+    for (auto& kv : in) {
+        const std::string& k = kv.first;
+        if (k.find('#') != std::string::npos) continue;
+        if (k.find("_BP_GameActionTriggerZone") != std::string::npos || k.find("ObjectID_LevelSequence_") != std::string::npos) continue;
+        out.push_back(std::move(kv));
+    }
+    return out;
+}
+
 std::vector<proto::HashPart> world_parts(std::map<std::string, reflect::Leaves>* leaves = nullptr)
 {
     std::vector<proto::HashPart> out;
@@ -1631,6 +1646,7 @@ std::vector<proto::HashPart> world_parts(std::map<std::string, reflect::Leaves>*
     s.last_world_compute = s.now;
     for (const auto& p : kWorldParts) {
         reflect::Leaves l = std::string_view(p.name) == "inventory2" ? inventory_leaves() : reflect::field(gi, p.field);
+        if (std::string_view(p.name) == "interacted2") l = interacted_leaves(std::move(l));
         out.push_back({p.name, reflect::hash(l)});
         if (leaves) (*leaves)[p.name] = std::move(l);
     }

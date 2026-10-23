@@ -1966,6 +1966,19 @@ void on_turn_start(UObject* actor)
         s.early_turn_at = s.now;
     }
     if (s.role != Role::Solo && s.battle.active) duo_parry_check();
+    // Commandes de défense (parade, esquive, saut) : branchées par le jeu quand il lance lui-même le combat, pas
+    // quand le mod le lance (client : TriggerBattle). Essai à deux PC du 2026-10-24 : aucun appui défensif du client
+    // n'atteignait le jeu (TryStart* jamais appelés), alors qu'en solo sa parade marche.
+    if (s.role != Role::Solo && s.battle.active) {
+        UObject* ctrl = game::controller();
+        if (ctrl && !ue::get_bool(ctrl, STR("IsDefenseInputBound"))) {
+            ue::Call c(ctrl, STR("TryBindDefendInput"));
+            const bool called = c && c.invoke();
+            const bool bound = ue::get_bool(ctrl, STR("IsDefenseInputBound"));
+            bump(bound ? "defense_input_bound" : "defense_input_bind_failed");
+            log().write("coop_defense_input_bind", JsonObj().add("called", called).add("bound", bound), s.battle.turn);
+        }
+    }
     if (s.role == Role::Host) host_turn_start(actor);
     else if (s.role == Role::Client && s.battle.active) client_turn_start(actor);
     // Tour du héros d'un autre joueur : pas de choix d'action ici (son action arrive par le réseau).
