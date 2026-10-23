@@ -2,6 +2,16 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-23 nuit — v0.6.7 : chargement bloqué et combat joué seul (essai à deux PC avec TOTOFFF, branche `fix/join-load-stuck`, D27)
+
+- **Vu en vrai** (v0.6.6, journaux des deux PC ; ceux du client rapatriés par `remote.ps1 fetch-logs` avec l'accord de Killian, `runs/remote/20261023-231336-fetch-logs-49003`) : 2 fois, écran noir « Chargement de la partie de l'hôte » sans fin chez le client. Les deux fois, l'instantané est parti à la seconde même où le dialogue du client finissait (`NarrativeState` faux -> `SaveOffer` aussitôt) ; `LoadGameFromSaveFile` demandé, jeu fluide, mais monde jamais prêt, et aucune limite de temps.
+- **Resynchros inutiles** : empreinte d'inventaire différente à chaque dialogue, car l'hôte a des tenues / coiffures (`item:Skin*`, `item:Face*`, édition / DLC du compte) que le client n'a pas.
+- **Combat joué seul** : resynchro demandée au début du dialogue du mime -> client retiré de la partie (`Pending`) -> combat lancé 7 s plus tard joué seul de chaque côté (le client a joué Gustave, attribué à l'hôte).
+- **Corrigé** (D27) : instantané jamais envoyé pendant la narration du client ni dans les 3 s qui suivent ; client entré qui demande une resynchro gardé dans la partie jusqu'à l'envoi ; le client ne demande pas de resynchro en dialogue / cinématique / combat ; chargement après 2 s de calme (20 s au plus) ; monde pas prêt 45 s -> rechargement, puis `ResyncRequest` (`coop_join_wait_world` toutes les 10 s) ; empreinte `inventory2` (minuscules, sans Skin* / Face*).
+- **Tests** (build 40026366692) : `p9_join_stuck_client` (nouveau, `-e33joinstuck=2` : 2 chargements vus bloqués -> rechargement à 45 s, nouvel instantané, entrée en 5 s), `p4_session_client`, `p6_world_client`, `p8_dialogue_sync_client` verts. Non vérifiés par un scénario : client gardé dans le combat pendant une resynchro, délai de 3 s côté hôte. `p8_prologue_client` non relancé (Killian : publier tout de suite).
+- **Accord de Killian** : les anciens enregistrements (part `inventory`) ne comparent plus l'inventaire en rejeu (nouveau nom de part `inventory2`).
+- Panneau Coop : Droite depuis « Reprendre » n'entre pas encore dans le panneau, toujours à faire.
+
 ## 2026-10-23 soir — v0.6.6 publiée ; à reprendre
 
 - **v0.6.6 publiée** (main = `integ4` f664355) : D22 attentes de combat bornées, D23 suivi fluide, D24 dialogues ensemble, PA du combat engagé, petite version au menu. Batterie finale 25/25 verte (build 39993621393).

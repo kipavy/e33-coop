@@ -372,3 +372,22 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 **Limites** : l'appui sur Retour peut aussi passer par la gestion native de CommonUI (`NativeOnHandleBackAction`, sans UFunction) : dans ce cas Échap / B ferment le menu comme avant. Le survol ne déplace pas le focus (comme le menu du jeu). Non vérifié avec de vraies entrées (scénario `p6_panelnav_input_host`, à lancer avec l'accord de Killian ; manette à la main).
 
 **Remise en cause si** : `owners_ui_panel_back` absent alors qu'Échap a été pressé avec le focus dans le panneau (chemin Retour non couvert) ; `nav_bind_errors` > 0 ; ou un focus qui saute au mauvais bouton du menu.
+
+---
+
+## D27 — Instantané de resynchro : jamais à la fin d'un dialogue, client gardé dans la partie, chargement borné (2026-10-23, essai à deux PC)
+
+**Constat** (v0.6.6, Killian + TOTOFFF) : instantané envoyé dans la seconde de la fin du dialogue du client -> chargement
+resté sur l'écran noir (2 fois) ; resynchro demandée en début de dialogue -> client retiré de la partie, combat lancé
+par ce dialogue joué seul de chaque côté ; empreinte d'inventaire toujours différente (tenues / coiffures du compte).
+
+**Décision** :
+1. Hôte : instantané seulement au point sûr, sans narration du client, et au moins 3 s après la fin de sa dernière.
+2. Hôte : un client entré qui demande une resynchro reste `Joined` (combats compris) jusqu'à l'envoi.
+3. Client : resynchro d'exploration reportée pendant dialogue, cinématique, combat (en plus du mouvement, D23).
+4. Client : chargement après 2 s sans dialogue ni cinématique (20 s au plus) ; monde pas prêt 45 s après -> rechargement,
+   puis `ResyncRequest` ; journal `coop_join_wait_world` toutes les 10 s.
+5. Empreinte d'inventaire `inventory2` : noms en minuscules, `item:Skin*` et `item:Face*` exclus.
+
+**Remise en cause si** : `coop_join_load_stuck` en vrai (chercher dans `coop_join_wait_world` la condition qui manque) ;
+ou un objet d'édition / DLC autre que tenues et coiffures qui différerait encore.

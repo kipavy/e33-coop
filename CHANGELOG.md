@@ -14,6 +14,16 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.7] - 2026-10-23
+
+### Corrections
+- Rejoindre / resynchro : plus d'écran noir « Chargement de la partie de l'hôte » sans fin. La partie de l'hôte
+  n'arrive plus à la fin d'un dialogue ; si le chargement bloque quand même, il est relancé puis redemandé tout seul.
+- Combat lancé pendant une resynchro (ex. le mime du prologue) : l'autre joueur reste dans le combat de l'hôte au lieu
+  de le jouer seul chez lui (il ne peut plus jouer un perso qui ne lui est pas attribué).
+- Inventaire : les tenues et coiffures des éditions / DLC (présentes chez un joueur, absentes chez l'autre) ne
+  provoquent plus de rechargement de la partie à chaque dialogue.
+
 ## [0.6.6] - 2026-10-23
 
 ### Modifications
