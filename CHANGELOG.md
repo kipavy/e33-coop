@@ -15,6 +15,8 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ## [Non publié]
 
 ### Corrections
+- Dialogues en même temps : un dialogue déclenché par le meneur en passant à un endroit (ex. Maelle avant le duel du
+  prologue) démarre aussitôt chez les autres joueurs, au lieu de les laisser en attente.
 - Exploration : quand le meneur court ou sprinte, le perso de l'autre joueur le suit de façon fluide (plus d'à-coups,
   d'arrêts ni de téléportations), et la partie n'est plus rechargée pendant qu'on se déplace.
 - Duel du prologue contre Maelle en nouvelle partie ensemble : plus de blocage, l'autre joueur entre dans le combat

@@ -290,6 +290,9 @@ struct SceneStart {
     std::string cause_path;
     std::string action;
     double x = 0, y = 0, z = 0;
+    // Champ final facultatif (2026-10-23, D24) : cinématique (absent) ou dialogue ; pour un dialogue, sequence = chemin
+    // de l'acteur BP_Dialogue_C et scene vide.
+    NarrativeKind kind = NarrativeKind::Cinematic;
 };
 // Pilote -> autres : il passe la cinématique en cours (SkipCinematic) ; les autres passent la même (fin ensemble).
 struct SceneSkip { uint8_t player = 0; uint32_t seq = 0; std::string scene; };
