@@ -1,6 +1,7 @@
 name: release
 # Release joueur : sur un tag vX.Y.Z poussé (X.Y.Z = fichier VERSION), build release du mod et des outils (build.yml),
 # paquet joueur (zip), puis release GitHub avec le zip, l'installateur et SHA256SUMS. Procédure : docs/RELEASE.md.
+# Notes : section de la version dans CHANGELOG.md (tools/release/release-notes.ps1), obligatoire.
 # Essai à blanc (aucune release, seulement un artefact « release-dry-run ») : workflow_dispatch (une fois ce fichier
 # sur la branche par défaut), ou push d'une branche release-dry-run/<nom> (à supprimer ensuite).
 on:
@@ -33,6 +34,10 @@ jobs:
             echo "Le tag ${GITHUB_REF_NAME} ne correspond pas au fichier VERSION ($v) : release refusée."; exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Changelog
+        # Notes de version = section de CHANGELOG.md (source unique) : pas de release sans elle.
+        run: ./tools/release/release-notes.ps1 -Version "${{ steps.v.outputs.version }}"
+        shell: pwsh
 
   build:
     needs: check
@@ -80,21 +85,7 @@ jobs:
           Get-Content dist/SHA256SUMS
           Get-ChildItem dist | Select-Object Name, Length
       - name: Release notes
-        run: |
-          $v = $env:VERSION
-          @"
-          **E33 Coop $v** : mod coop en ligne pour *Clair Obscur: Expedition 33* (mod non officiel).
-
-          ### Installer (chaque joueur)
-          1. Télécharger **Installer.E33.Coop.exe** ci-dessous et le lancer (double-clic). Windows peut afficher « Windows a protégé votre ordinateur » (exe non signé) : *Informations complémentaires* › *Exécuter quand même*.
-          2. Cliquer **Installer**. L'installateur trouve le jeu, télécharge le paquet de cette release, vérifie son empreinte SHA-256 et installe UE4SS + le mod.
-          3. Lancer le jeu par Steam, **sans option de lancement**. Inviter : charger sa partie puis **F7**. Rejoindre : au menu principal, **Rejoindre <ami>** ou **F7**, ou accepter l'invitation Steam.
-
-          Mises à jour : automatiques par défaut (installées à la fermeture du jeu). Options : **F9** en jeu.
-          Hors ligne : poser `e33coop-player.zip` et `SHA256SUMS` à côté de l'installateur.
-
-          Empreintes : voir `SHA256SUMS`.
-          "@ | Set-Content dist-notes.md -Encoding utf8
+        run: ./tools/release/release-notes.ps1 -Version $env:VERSION -Out dist-notes.md
       - uses: actions/upload-artifact@v4
         with:
           name: release-dry-run
