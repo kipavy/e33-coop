@@ -42,7 +42,7 @@
 // pointeur gardé d'un passage à l'autre, donc rien de périmé quand le jeu détruit son HUD).
 // Bouton « Coop » dans la liste du menu pause : écarté (boutons CommonUI liés au graphe BP et à la navigation manette) ;
 // le panneau s'affiche donc de lui-même à droite dès que le menu pause est ouvert.
-// Navigation (D22) : chaque ligne modifiable (personnage de l'équipe chez l'hôte hors combat, option) est un vrai bouton
+// Navigation (D24) : chaque ligne modifiable (personnage de l'équipe chez l'hôte hors combat, option) est un vrai bouton
 // du jeu (WBP_BaseButton_C réglé comme « Paramètres » du menu pause, comme le bouton Rejoindre de l'écran titre) :
 // souris (survol, clic), flèches / croix / stick, Entrée / A. Le bouton est en navigation contrainte horizontale
 // (USFUIButtonBase, comme les lignes de l'écran Paramètres) : gauche / droite ne déplacent pas le focus, le jeu diffuse
@@ -535,6 +535,12 @@ int nav_focused()
     return -1;
 }
 UObject* current_menu() { return ue::get_object(game::controller(), L"PauseMenuWidget"); }
+// Un bouton du menu du jeu a-t-il le focus (journal : le jeu focalise-t-il « Reprendre » à l'ouverture) ?
+bool menu_has_focus_now(UObject* menu)
+{
+    for (UObject* b : menu_buttons(menu)) if (has_focus(b)) return true;
+    return false;
+}
 
 void focus_menu(UObject* menu)
 {
@@ -970,7 +976,7 @@ void tick_pause()
     log().write("owners_ui_pause_panel", JsonObj().add("rows", static_cast<int64_t>(rows.size())).add("hints", static_cast<int64_t>(hints.size()))
                                              .add("font", font != nullptr).add("sub", sub).add("selected", options::selected())
                                              .add("options", static_cast<int64_t>(opts.size())).add("buttons", static_cast<int64_t>(g_nav.rows.size()))
-                                             .add("focus", keep_focus));
+                                             .add("focus", keep_focus).add("menu_focus", menu_has_focus_now(menu)));
 }
 
 } // namespace

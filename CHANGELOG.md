@@ -14,6 +14,14 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Corrections
+- Exploration : quand le meneur court ou sprinte, le perso de l'autre joueur le suit de façon fluide (plus d'à-coups,
+  d'arrêts ni de téléportations), et la partie n'est plus rechargée pendant qu'on se déplace.
+- Duel du prologue contre Maelle en nouvelle partie ensemble : plus de blocage, l'autre joueur entre dans le combat
+  même si le meneur est encore dans le dialogue.
+- Combat : plus aucune attente sans fin. Un joueur qui charge, regarde une scène ou choisit son action est toujours
+  attendu ; aucune action n'est jouée à sa place tant que son jeu montre qu'il est là.
+
 ## [0.6.5] - 2026-10-23
 
 ### Ajouts

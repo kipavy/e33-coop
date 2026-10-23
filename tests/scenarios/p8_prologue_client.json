@@ -1,0 +1,21 @@
+{
+  "name": "p8_prologue_client",
+  "description": "Duel du prologue contre Maelle (essai réel à deux PC du 2026-10-22, Lumière) côté client : le faux hôte rejoue la tranche réelle twopc_prologue (instantané n° 5 ; dialogue de l'hôte actif de 26,6 s à 117,6 s, BattleStart à 54,4 s, BattleEnd à 102,2 s, sans fin de narration avant la fin du duel), positions à 20/s, réseau simulé ; positions retenues après 15 s (--pilot-gap) : comme chez le vrai client, le pion suiveur reste en arrière et ne déclenche pas le dialogue de Maelle (sans ça, il le déclenche aussi : voir p8_prologue_dlg_client). En 0.6.1 : client tenu par la barrière narrative tout le duel, BattleReady jamais envoyé, hôte figé. Attendu : la barrière se lève au BattleStart, le client entre dans le combat en quelques secondes, envoie BattleReady, rejoue le tour de l'hôte et finit le combat proprement. Une défense sans réponse est normale : l'hôte enregistré était figé (aucun DefenseResult avant sa fin de combat).",
+  "join": true,
+  "timeout_s": 700,
+  "shots_every_s": 5,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "until": "barrier_waits", "is": ">=1", "timeout": 90 },
+    { "do": "battle", "timeout": 60 },
+    { "do": "wait", "s": 20 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/twopc_prologue.jsonl", "--snapshot", "{repo}/.tools/testsaves/p8_prologue_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--pilot-gap", "15:200", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "snapshot_hash_errors": "0", "join_errors": "0",
+              "battle_end": "any", "remote_actions": ">=1", "barrier_releases_battle": ">=1", "barrier_holds_in_battle": "0",
+              "battle_ready_delay_ms": "<15000", "defense_timeouts": "<=1", "battle_frame_max_ms": "<3500", "wait_max_ms": "<3500",
+              "game_thread_stalls_battle": "0", "battles_finalized": ">=1" }
+}

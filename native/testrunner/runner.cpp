@@ -276,6 +276,8 @@ std::string state_json()
 
 struct Check { std::string name, expected, actual; bool ok; };
 
+HWND game_window();
+
 int metric(const std::string& name)
 {
     if (name.rfind("ui:", 0) == 0) return ui::count(name.substr(3));   // textes affichés (phase 5)
@@ -287,6 +289,7 @@ int metric(const std::string& name)
     if (name == "panel:buttons") return owners_ui::panel_buttons();
     if (name == "panel:menu_focus") return owners_ui::menu_has_focus() ? 1 : 0;
     if (name == "panel:menu_visible") return game::pause_menu_visible() ? 1 : 0;
+    if (name == "game:foreground") return game_window() && GetForegroundWindow() == game_window() ? 1 : 0;   // avant de vraies entrées
     if (name.rfind("mount:", 0) == 0) return mount::count(name.substr(6));            // banc d'essai de la monture (Esquie)
     if (auto it = g.metrics.find(name); it != g.metrics.end()) return it->second;
     return coop::counter(name);
@@ -1124,6 +1127,9 @@ void run_explore_step(float dt)
         // {"key":"down"} (left, right, up, down, enter, escape, f9) | {"click":[fx,fy]} | {"move":[fx,fy]} (fractions de la fenêtre)
         HWND w = game_window();
         if (!w) { fail("input: no game window"); return; }
+        // Fenêtre du jeu pas au premier plan : rien n'est envoyé (les touches iraient à une autre application ou
+        // passeraient par des messages postés, autre chemin que le joueur), échec propre.
+        if (GetForegroundWindow() != w) { fail("input: game window not in foreground, nothing sent"); return; }
         static const std::map<std::string, unsigned> keys = {{"left", VK_LEFT}, {"right", VK_RIGHT}, {"up", VK_UP}, {"down", VK_DOWN},
                                                              {"enter", VK_RETURN}, {"escape", VK_ESCAPE}, {"f9", VK_F9}};
         if (st["key"].is_string()) {

@@ -1,0 +1,16 @@
+{
+  "name": "p8_thinking_host",
+  "description": "Garde de tour bloqué sans faux positif (exigence de Killian) : le faux client (Maelle) réfléchit 45 s à chacun de ses tours en fouillant ses menus (MenuState, IntentPreview), soit plus de 4 fois le seuil réglé à 10 s (-e33stuckturn=10), et n'envoie jamais de StateHash : ses menus suffisent à prouver qu'il est dans son tour. Aucune attaque automatique, aucune défense sautée ; le combat finit normalement.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 900,
+  "wait_players": 1,
+  "max_turns": 60,
+  "shots_every_s": 10,
+  "actions": [{ "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Maelle:1", "-e33seed=8", "-e33stuckturn=10", "-e33readyidle=15"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_thinking.json", "--timeout", "900"] },
+  "expect": { "battle_end": "any", "turn_stuck_forced": "0", "defense_waits_skipped": "0", "battle_ready_timeouts": "0", "remote_actions": ">=1", "action_waits_long": ">=1", "hashes_compared": "any" }
+}
