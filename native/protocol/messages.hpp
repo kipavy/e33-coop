@@ -183,6 +183,7 @@ struct FreeAimEvent {
     uint32_t t_ms = 0;
     double x = 0, y = 0, z = 0;           // Aim / Shot : point visé
     Unit target{ActorKind::Enemy, kAutoSpot};
+    uint8_t part = 0xFF;                  // Shot : zone touchée (indice dans FreeAimTargetParts de la cible, point relatif à elle) ; 0xFF = aucune (champ final facultatif, 2026-10-24)
 };
 // Ce que le propriétaire d'un héros prépare pendant son tour (aperçu chez les autres) : action et compétence/objet
 // choisis dans la roue, cibles visées. Propriétaire -> hôte -> autres, à chaque changement (10 fois/s au plus).

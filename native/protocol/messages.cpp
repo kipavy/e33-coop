@@ -104,6 +104,7 @@ void encode_payload(const Message& m, wire::Writer& w)
         } else if constexpr (std::is_same_v<T, FreeAimEvent>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u8(static_cast<uint8_t>(x.kind)); w.u16(x.seq); w.u32(x.t_ms);
             w.f64(x.x); w.f64(x.y); w.f64(x.z); w_unit(w, x.target);
+            w.u8(x.part);   // champ final facultatif
         } else if constexpr (std::is_same_v<T, BattleRewards>) {
             w.u32(x.battle_id); w.i32(x.xp); w.i32(x.gold);
             w.u16(static_cast<uint16_t>(x.loot.size()));
@@ -285,6 +286,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
     case MsgType::FreeAimEvent: {
         FreeAimEvent x; x.battle_id = r.u32(); x.turn = r.u32(); x.spot = r.u8(); const uint8_t k = r.u8(); if (k > 5) r.fail();
         x.kind = static_cast<FreeAimKind>(k); x.seq = r.u16(); x.t_ms = r.u32(); x.x = r.f64(); x.y = r.f64(); x.z = r.f64(); x.target = r_unit(r);
+        if (r.ok() && !r.at_end()) x.part = r.u8();   // facultatif (zone touchée, 2026-10-24)
         if (!std::isfinite(x.x) || !std::isfinite(x.y) || !std::isfinite(x.z)) r.fail();
         return finish(x);
     }
@@ -571,7 +573,7 @@ std::string to_json(const Message& m)
                 .add("gradient_charges", x.gradient_charges).add("gradient_progress", x.gradient_progress);
         } else if constexpr (std::is_same_v<T, FreeAimEvent>) {
             o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("kind", static_cast<int>(x.kind)).add("seq", static_cast<int>(x.seq))
-                .add("t_ms", x.t_ms).add("x", x.x).add("y", x.y).add("z", x.z).raw("target", unit_json(x.target));
+                .add("t_ms", x.t_ms).add("x", x.x).add("y", x.y).add("z", x.z).raw("target", unit_json(x.target)).add("part", static_cast<int>(x.part));
         } else if constexpr (std::is_same_v<T, BattleRewards>) {
             std::string ls = "[";
             for (size_t i = 0; i < x.loot.size(); ++i) { if (i) ls += ","; ls += JsonObj().add("item", x.loot[i].item).add("qty", x.loot[i].quantity).str(); }

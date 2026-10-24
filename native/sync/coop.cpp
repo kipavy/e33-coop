@@ -119,6 +119,7 @@ struct FreeAimOwner {                                      // visée libre d'un 
     bool seen_aiming = false;                              // IsAiming vu vrai : sa retombée = fin de visée
     std::array<double, 3> point{}, shot_point{};
     UObject* shot_hit = nullptr;                           // combattant touché par le tir en cours (OnFreeAimProjectileHit)
+    UObject* shot_part = nullptr;                          // zone touchée (TargetBodyPartBP : point faible…), même tir
 };
 
 struct FreeAimReplay {                                     // visée libre rejouée (héros d'un autre joueur)
@@ -300,6 +301,7 @@ struct State {
     bool input_enabled = true;
     int defense_try_logs = 0;                              // diagnostic : appuis de défense du propriétaire journalisés
     int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
+    int fa_part_logs = 0;   // journal coop_free_aim_part (plafonné)
     double fa_diag_at = -1;                                // diagnostic : contextes 0,5 s après le début d'une visée libre d'ici
     bool enemy_turn = false;                               // tour en cours : un ennemi (tous les rôles)
     int imc_logs = 0;                                      // diagnostic : contextes d'entrée au début des tours ennemis
@@ -546,6 +548,31 @@ uint8_t owner_of_spot(int spot)
 bool controls(int spot) { return owner_of_spot(spot) == s.my_player_id; }
 
 proto::Unit actor_unit(UObject* actor) { return sync::unit_of(actor); }
+
+// Visée libre : zone touchée (BP_FreeAimTargetPart_C, ex. point faible bleu) et sa position. Vu en vrai le 2026-10-24 :
+// un tir rejoué au même point relatif au combattant manquait la petite boule (animation décalée d'un PC à l'autre).
+int free_aim_part_index(UObject* actor, UObject* part)
+{
+    if (!actor || !part) return -1;
+    const auto parts = ue::get_object_array(actor, STR("FreeAimTargetParts"));
+    for (size_t i = 0; i < parts.size() && i < 0xFF; ++i) if (parts[i] == part) return static_cast<int>(i);
+    return -1;
+}
+
+UObject* free_aim_part_at(UObject* actor, int index)
+{
+    const auto parts = ue::get_object_array(actor, STR("FreeAimTargetParts"));
+    return index >= 0 && index < static_cast<int>(parts.size()) ? parts[static_cast<size_t>(index)] : nullptr;
+}
+
+bool free_aim_part_location(UObject* part, double out[3])
+{
+    ue::Call c(part, STR("K2_GetComponentLocation"));
+    if (!c || !c.invoke() || c.param_size(STR("ReturnValue")) != 24) return false;
+    const auto* v = static_cast<const double*>(c.param_ptr(STR("ReturnValue")));
+    out[0] = v[0]; out[1] = v[1]; out[2] = v[2];
+    return true;
+}
 
 void refresh_enemy_spots()
 {
@@ -2761,6 +2788,7 @@ void subscribe()
             s.fa_own.in_raycast = true;
             s.fa_own.raycast_point = false;
             s.fa_own.shot_hit = nullptr;
+            s.fa_own.shot_part = nullptr;
             return;
         }
         // Rejeu : point exact du tir du propriétaire (attente bornée ; avec le décalage, il est déjà là).
@@ -2775,8 +2803,17 @@ void subscribe()
         if (!shot) { bump("free_aim_timeouts"); return; }
         std::array<double, 3> p{shot->x, shot->y, shot->z};
         if (shot->target.spot != proto::kAutoSpot) {   // point relatif au combattant touché chez le propriétaire (ou visé par le faux client)
+            UObject* unit = game::find_unit(shot->target.kind == proto::ActorKind::Hero, shot->target.spot);
             double a[3];
-            if (game::location(game::find_unit(shot->target.kind == proto::ActorKind::Hero, shot->target.spot), a)) p = {a[0] + p[0], a[1] + p[1], a[2] + p[2]};
+            // Zone touchée chez le propriétaire (point faible…) : visée là où elle est ici. Sinon (zone absente ici, ancien
+            // message) : point relatif au combattant (approché si le point était relatif à la zone).
+            const bool on_part = shot->part != 0xFF && free_aim_part_location(free_aim_part_at(unit, shot->part), a);
+            if (on_part) bump("free_aim_part_aims");
+            else if (shot->part != 0xFF) {
+                bump("free_aim_part_missing");
+                log().write("coop_free_aim_part_missing", JsonObj().add("seq", static_cast<int>(seq)).add("part", static_cast<int>(shot->part)), s.battle.turn);
+            }
+            if (on_part || game::location(unit, a)) p = {a[0] + p[0], a[1] + p[1], a[2] + p[2]};
             else {
                 bump("free_aim_anchor_missing");
                 log().write("coop_free_aim_anchor_missing", JsonObj().add("seq", static_cast<int>(seq)).add("kind", static_cast<int>(shot->target.kind))
@@ -2822,8 +2859,20 @@ void subscribe()
             double a[3];
             if (game::location(hit, a)) {
                 e.target = actor_unit(hit);
-                e.x -= a[0]; e.y -= a[1]; e.z -= a[2];
                 hit_spot = e.target.spot;
+                // Zone touchée connue (point faible…) : point relatif à elle, le rejeu la vise là où elle est chez lui.
+                const int pi = free_aim_part_index(hit, s.fa_own.shot_part);
+                double pl[3];
+                if (pi >= 0 && free_aim_part_location(s.fa_own.shot_part, pl)) {
+                    e.part = static_cast<uint8_t>(pi);
+                    a[0] = pl[0]; a[1] = pl[1]; a[2] = pl[2];
+                }
+                e.x -= a[0]; e.y -= a[1]; e.z -= a[2];
+                if (++s.fa_part_logs <= 40)
+                    log().write("coop_free_aim_part", JsonObj().add("seq", static_cast<int>(s.fa_own.shots)).add("index", pi).add("sent", e.part != 0xFF)
+                                                         .add("part", s.fa_own.shot_part ? ue::short_name(s.fa_own.shot_part) : std::string())
+                                                         .add("type", s.fa_own.shot_part ? static_cast<int>(ue::get_int(s.fa_own.shot_part, STR("BodyPartType"), -1)) : -1),
+                                s.battle.turn);
             }
         }
         publish(e);
@@ -2833,7 +2882,7 @@ void subscribe()
     bus.post(fn(game::FreeAimComp, L"OnFreeAimProjectileHit"), [](HookCtx& ctx, UFunction* f) {
         if (s.role == Role::Solo || !s.battle.active) return;
         UObject* target = ue::read_param_object(ctx, f, STR("Character"));
-        if (s.fa_own.in_raycast && !s.fa_own.shot_hit) s.fa_own.shot_hit = target;
+        if (s.fa_own.in_raycast && !s.fa_own.shot_hit) { s.fa_own.shot_hit = target; s.fa_own.shot_part = ue::read_param_object(ctx, f, STR("TargetBodyPartBP")); }
         if (s.fa_rep.in_raycast && s.fa_rep.hit_spot < 0 && target) s.fa_rep.hit_spot = game::spot(target);
         bump("free_aim_hits");
         log().write("coop_free_aim_hit", JsonObj().add("target", game::char_class(target)).add("spot", game::spot(target))

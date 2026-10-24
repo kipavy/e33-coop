@@ -2,6 +2,11 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 16h — v0.6.14 : tir sur point faible manqué chez l'hôte (essai à deux PC en 0.6.12)
+
+- **Vu en vrai** (15:50) : TOTOFFF tire sur les points faibles (boules bleues) du Portier puis du Volester : touchés chez lui, `coop_free_aim_replay_miss` chez l'hôte (`hit` -1) alors que le point rejoué est identique au mm ; l'état de l'hôte fait foi, la boule reste intacte. Cause : point envoyé relatif au centre du combattant, la petite boule bouge avec l'animation (décalée d'un PC à l'autre).
+- **Corrigé** : `FreeAimEvent.part` (champ final facultatif) = indice de la zone touchée (`TargetBodyPartBP` d'`OnFreeAimProjectileHit`) dans `FreeAimTargetParts` du combattant, point relatif à `K2_GetComponentLocation` de la zone ; le rejeu vise la zone là où elle est chez lui. Journaux `coop_free_aim_part` (propriétaire), `coop_free_aim_part_missing`, compteurs `free_aim_part_aims` / `free_aim_part_missing`. **Non testé** (publié à la demande de Killian) : regarder `coop_free_aim_part` (sent vrai ?) et `coop_free_aim_replay_miss` au prochain essai.
+
 ## 2026-10-24 fin d'après-midi — v0.6.13 : attaques du Portier différentes (essai à deux PC en 0.6.12)
 
 - **Vu en vrai** : attaque de zone du Portier chez l'hôte, un seul héros visé chez TOTOFFF (15:36, journaux `runs/remote/20261024-153711-fetch-logs-79708` + hôte `logs/20261024-152909`). Le Portier tire un `RandomBool` à son `OnBattleStart` (mise en place) ; l'ennemi n'est pas encore dans le cache (rempli au tour 1) -> tirage laissé au jeu de chaque côté (D30 ne couvrait pas les ennemis). Signes : `coop_draw_count_diff` (GetRandomAliveHero chez le client, coup de plus chez l'hôte), défense du client imposée après 3 s chez l'hôte.
