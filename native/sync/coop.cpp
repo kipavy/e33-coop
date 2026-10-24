@@ -1587,7 +1587,10 @@ void host_turn_start(UObject* actor)
                     std::vector<std::string> in_battle;
                     for (UObject* h : heroes) { const std::string n = game::hardcoded_name(h); if (!n.empty() && n != "None") in_battle.push_back(n); }
                     const bool prefix = in_battle.size() <= bs.party.size() && std::equal(in_battle.begin(), in_battle.end(), bs.party.begin());
-                    if (!in_battle.empty() && !prefix) {   // préfixe (réserve en plus) : équipe gardée telle quelle
+                    // Équipe complète en combat : ordre d'exploration gardé. Le jeu ne place pas les héros dans l'ordre de
+                    // l'équipe (Frey, Lune, Maelle -> emplacements Lune, Maelle, Frey) : envoyer l'ordre des emplacements
+                    // décalait tout chez le client (0.6.25, Maelle à TOTOFFF et ordre des tours différent).
+                    if (!in_battle.empty() && !prefix && in_battle.size() < bs.party.size()) {   // préfixe (réserve en plus) : équipe gardée telle quelle
                         log().write("coop_battle_party_subset", JsonObj().add("party", static_cast<int64_t>(bs.party.size())).add("in_battle", static_cast<int64_t>(in_battle.size())));
                         bs.party = in_battle;
                     }

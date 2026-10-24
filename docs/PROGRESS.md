@@ -2,6 +2,11 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 22h55 — v0.6.27 : équipe du combat remise dans l'ordre d'exploration
+
+- 22:48 (0.6.26), combat Bruler / Luster : Maelle contrôlée par TOTOFFF chez lui, ordre des tours différent. Cause : 0.6.25 envoyait `BattleStart.party` dans l'ordre des emplacements (Lune, Maelle, Frey) dès que ce n'était pas un préfixe de l'équipe ; or le jeu ne place pas les héros dans l'ordre de l'équipe (équipe Frey, Lune, Maelle -> emplacements Lune, Maelle, Frey), donc le client, équipe réordonnée, avait Maelle à l'emplacement 0 (resynchro au tour 1, désync). Correctif : l'équipe des héros en combat n'est envoyée que s'il y en a moins que dans l'équipe (duel du marchand).
+- Marchand (journal de TOTOFFF, `runs/remote/20261024-224939-fetch-logs-60836`) : l'hôte publie bien article focalisé (hover 2), achat (4) et fermeture (3), tous reçus. 1er passage : miroir posé mais `SetFocus` sur la ligne sans effet visible. 2e passage (dialogue relancé après le combat du marchand, cause 3) : `coop_scene_sync_result ok false` -> pas de fenêtre chez le client, seulement le message d'achat. À corriger ensuite.
+
 ## 2026-10-24, 22h45 — v0.6.26 : classes de buff chargées par chemin
 
 - 22:15 (0.6.24) : combat Cruler / Bruler, `coop_repair_error` « buff class not loaded: BP_LU_SimpleBreaker_C » (picto du Gustave de Killian, jamais chargé chez TOTOFFF qui ne le possède pas) à chaque tour -> dégâts de brise différents, PV des monstres qui divergent, monstre mort chez le client et pas chez l'hôte (Killian bloqué au tour de TOTOFFF). Corrigé : `StateSync.class_paths` (champ final facultatif, classes `BP_LU_*` / `BP_BattleBuff*`) ; le client charge une classe absente par `MakeSoftClassPath` -> `Conv_SoftClassPathToSoftClassRef` -> `LoadClassAsset_Blocking` (`coop_buff_class_loaded`).
