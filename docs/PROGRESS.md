@@ -2,6 +2,30 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## Bugs ouverts, priorisés (2026-10-25, 01h45, après la partie du 24-25/10)
+
+P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible sans divergence durable ; P3 = confort.
+
+**P1**
+1. Monstres pas au même endroit : J2 meneur, le pion suiveur de l'hôte touche un monstre que J2 n'a pas touché -> combat imposé. Piste : quand le client mène, ennemis de l'hôte passifs comme chez le client, combats seulement par la demande D34 (0.6.29).
+2. Améliorations d'armes faites en même temps au camp : niveau 3 chez l'hôte, 4 chez J2 (deltas `level:` de D13 croisés).
+3. Objet utilisé par J2 en exploration (élixir de chroma : soin) non rejoué chez l'hôte.
+4. Gels de 2 s quand un monstre attaque (D28) : 0 gel voulu ; repenser avec `p8_turnlag_*`.
+5. À vérifier en jeu (corrigés sans test) : cinématique de zone chez J2 (0.6.31), arme changée par J2 (0.6.30), marchand (0.6.29), combat lancé par J2 meneur (0.6.29, D34).
+
+**P2**
+6. J2 meneur : son sprint vu comme une marche avec téléportations chez l'hôte (le lissage D23 ne marche que dans le sens hôte -> client ?).
+7. Pétank : ses déplacements ne sont pas vus par J2 (acteur du monde qui bouge, non synchronisé).
+8. Tirs en exploration (0.6.29, à vérifier : `coop_freeaim_world_hit`).
+9. Écran de défaite (D33, 0.6.20) jamais testé ; scénarios `p3_defeat_*` jamais lancés.
+10. Journaux d'expédition : sélection non synchro (écran à préciser par Killian).
+11. 1 PA de Lune en moins chez le client (`p9_rng_client`, tolérance `raw_hash_diffs<=1` à retirer).
+
+**P3**
+12. Animation d'escalade de rebord absente chez le client.
+13. Meneur bloqué (diagnostic `coop_pilot_stuck`).
+14. Panneau Coop au clavier / manette (D25).
+
 ## 2026-10-25, 01h30 — v0.6.31 : cinématique de zone non lancée chez le suiveur (non testé)
 
 - 01:08 (0.6.28), camp après le boss Goblu : `MCS_GobluOutro` joué chez les deux ; puis zone d'entrée du camp (action conditionnelle `DA_GA_SQT_COND_RelationshipQuests`) exécutée chez les deux, `MCS_MaelleThePyro` lancée seulement chez l'hôte ; client : `coop_scene_sync_skip` « zone_already_run » -> resté à attendre. Désormais : zone déjà passée ici mais aucune scène commencée depuis -> après 3 s, exécution de l'action qui a appelé `TriggerCinematic` chez le pilote (remontée de la pile, `coop_cinematic_caller` : action, frames), envoyée dans `SceneStart.action` ; journal `coop_scene_zone_forced` (found, ran) puis `coop_scene_sync_result` method 4. Si l'action trouvée est encore conditionnelle, il faudra lancer la séquence elle-même.
