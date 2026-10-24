@@ -410,6 +410,67 @@ bool position_version(UObject* panel, UObject* anchor, UObject* w)
     return true;
 }
 
+// Diagnostic (2026-10-24) : « placed » vrai mais version absente des captures de l'écran titre. Pour chaque menu
+// principal et chaque BuildText vivant : dans le viewport / visible, chaîne des parents, et état de notre texte.
+// Plafonné (kVersionDiagMax lignes).
+int g_version_diag = 0;
+constexpr int kVersionDiagMax = 8;
+
+std::string widget_state(UObject* w)
+{
+    if (!w) return "null";
+    ue::Call v(w, STR("GetVisibility"));
+    const int64_t vis = v && v.invoke() ? v.out_int(STR("ReturnValue"), -1) : -1;
+    std::string s = ue::short_name(w) + " vis=" + std::to_string(vis) + " shown=" + (call_bool(w, STR("IsVisible")) ? "1" : "0") +
+                    " op=" + std::to_string(ue::get_double(w, STR("RenderOpacity"), -1.0));
+    ue::Call ds(w, STR("GetDesiredSize"));
+    double dx = 0, dy = 0;
+    if (ds && ds.invoke() && vec2_out(ds, dx, dy)) s += " size=" + std::to_string(static_cast<int>(dx)) + "x" + std::to_string(static_cast<int>(dy));
+    return s;
+}
+
+// Chaîne des parents d'un widget jusqu'à son UserWidget (outer du WidgetTree), avec l'état de chacun.
+std::string widget_chain(UObject* w)
+{
+    std::string s;
+    UObject* last = w;
+    for (int i = 0; i < 12 && w; ++i) {
+        if (!s.empty()) s += " < ";
+        s += ue::short_name(w->GetClassPrivate()) + ":" + widget_state(w);
+        last = w;
+        w = call_obj(w, STR("GetParent"));
+    }
+    // UserWidget propriétaire : outer du WidgetTree qui contient la racine.
+    UObject* tree = last ? last->GetOuterPrivate() : nullptr;
+    UObject* uw = tree ? tree->GetOuterPrivate() : nullptr;
+    if (uw) s += " | owner " + ue::short_name(uw) + " viewport=" + (call_bool(uw, STR("IsInViewport")) ? "1" : "0") + " " + widget_state(uw);
+    return s;
+}
+
+void version_diag(const char* why, UObject* menu, UObject* w)
+{
+    if (g_version_diag >= kVersionDiagMax) return;
+    ++g_version_diag;
+    JsonObj o;
+    o.add("why", why).add("n", static_cast<int64_t>(g_version_diag)).add("menu", menu ? ue::short_name(menu) : std::string("null"))
+     .add("controller", game::controller() != nullptr);
+    std::vector<UObject*> menus;
+    UObjectGlobals::FindAllOf(STR("WBP_MM_MainMenu_C"), menus);
+    std::string ms;
+    for (UObject* m : menus) ms += ue::short_name(m) + (call_bool(m, STR("IsInViewport")) ? "(vp) " : " ");
+    o.add("menus", ms);
+    // Tous les BuildText vivants (le numéro visible peut appartenir à un autre widget que celui où l'on se pose).
+    std::vector<UObject*> texts;
+    UObjectGlobals::FindAllOf(STR("TextBlock"), texts);
+    int k = 0;
+    for (UObject* t : texts) {
+        if (!t || ue::short_name(t) != "BuildText" || k >= 4) continue;
+        o.add("build" + std::to_string(k++), widget_chain(t));
+    }
+    o.add("ours", w ? widget_chain(w) : std::string("none"));
+    log().write("ui_version_diag", o);
+}
+
 void place_version(UObject* menu)
 {
     if (g_version_errors >= 3 || !menu) return;
@@ -454,7 +515,11 @@ void place_version(UObject* menu)
         log().write("ui_version", JsonObj().add("version", E33COOP_VERSION).add("parent", ue::short_name(panel->GetClassPrivate()))
                                         .add("anchor", ue::short_name(anchor)).add("anchor_class", ue::short_name(anchor->GetClassPrivate()))
                                         .add("slot", aslot ? ue::short_name(aslot->GetClassPrivate()) : std::string()).add("placed", placed));
+        version_diag("fresh", menu, w);
     }
+    // Diagnostic : état relu 5 passages plus tard puis toutes les 10 (mise en page faite).
+    static int passes = 0;
+    if (!fresh && (++passes == 5 || passes % 10 == 0)) version_diag("pass", menu, w);
 }
 
 bool any_focus(std::initializer_list<UObject*> ws)
@@ -485,7 +550,9 @@ void tick(double now, const std::string& friend_name)
     // touche » seulement) ; une fois par seconde, hors partie chargée (pas de contrôleur du monde), comme le mode neutre.
     if (static double next_version = 0; now >= next_version) {
         next_version = now + 1.0;
-        if (!game::controller()) if (UObject* m = game::main_menu()) place_version(m);
+        UObject* m = game::main_menu();
+        if (m && !game::controller()) place_version(m);
+        else if (static bool said = false; m && !said) { said = true; version_diag("controller_present", m, g_version); }
     }
     // Repli clavier / souris (chaque image ; le focus et le survol sont relus 4 fois par seconde) : Entrée sur notre
     // bouton sélectionné, clic gauche dessus. Le hook du clic suffit normalement ; un double signal est sans effet.
