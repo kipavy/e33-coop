@@ -2,6 +2,11 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 22h30 — v0.6.25 : combat du marchand, sélection du marchand
+
+- 22:05 (0.6.24) : fenêtre du marchand bien bloquée chez TOTOFFF, mais sélection et achats invisibles (hôte : `coop_merchant_opened/closed`, aucun `merchant_focus_published` : `FocusedMerchantItem` ne désigne pas une entrée de `DynamicEntryBox_Items`). Repli : focus / survol de l'entrée ; diagnostic `coop_merchant_focus_diag` ; achat du pilote (`BP_MerchantComponent.TryBuyItem`) -> `DialogueChoice.hover 4` -> toast « Le meneur a acheté un article ».
+- Combat du marchand (duel, Maelle seule) : `BattleStart.party` = équipe d'exploration (Frey, Lune, Maelle) -> client avec toute l'équipe, emplacements décalés (il voyait Killian jouer Lune). Désormais les héros réellement en combat (par emplacement) quand ce n'est pas un préfixe de l'équipe (`coop_battle_party_subset`). Non testé.
+
 ## 2026-10-24, 22h10 — v0.6.24 : messages au-dessus des menus
 
 - Confirmé par Killian en 0.6.22 : combat lancé pendant l'inventaire du client, plus de gel (attente du menu OK). Mais la bannière « fermez le menu » ne s'affichait pas : cartes de l'overlay ajoutées au viewport en ZOrder 500, sous les menus du jeu. ZOrder 30000. Non testé.

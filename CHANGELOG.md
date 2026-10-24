@@ -14,6 +14,14 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.25] - 2026-10-24
+
+### Corrections
+- Combat contre un marchand : l'autre joueur a la même équipe que le meneur (le ou les héros choisis pour le duel),
+  au lieu de toute l'équipe avec des rôles décalés.
+- Marchand : l'article sélectionné par le meneur devrait maintenant apparaître chez l'autre joueur, avec un message
+  à chaque achat.
+
 ## [0.6.24] - 2026-10-24
 
 ### Corrections
@@ -237,7 +245,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.24...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.25...HEAD
+[0.6.25]: https://github.com/kipavy/e33-coop/compare/v0.6.24...v0.6.25
 [0.6.24]: https://github.com/kipavy/e33-coop/compare/v0.6.23...v0.6.24
 [0.6.23]: https://github.com/kipavy/e33-coop/compare/v0.6.22...v0.6.23
 [0.6.22]: https://github.com/kipavy/e33-coop/compare/v0.6.21...v0.6.22

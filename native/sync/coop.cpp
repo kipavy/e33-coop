@@ -1578,6 +1578,20 @@ void host_turn_start(UObject* actor)
                 bs.engage = static_cast<uint8_t>(engage);
                 bs.world_enemy = explore::take_world_enemy();
                 bs.party = game::party_names();   // équipe réelle : celle du client peut être restée l'ancienne
+                // Héros réellement en combat, par emplacement : un combat contre un marchand se joue avec les seuls héros
+                // choisis (ex. Maelle seule, 2026-10-24) ; avec l'équipe d'exploration, le client avait toute l'équipe et des
+                // emplacements décalés (il voyait Killian jouer Lune).
+                {
+                    auto heroes = game::players();
+                    std::sort(heroes.begin(), heroes.end(), [](UObject* x, UObject* y) { return game::spot(x) < game::spot(y); });
+                    std::vector<std::string> in_battle;
+                    for (UObject* h : heroes) { const std::string n = game::hardcoded_name(h); if (!n.empty() && n != "None") in_battle.push_back(n); }
+                    const bool prefix = in_battle.size() <= bs.party.size() && std::equal(in_battle.begin(), in_battle.end(), bs.party.begin());
+                    if (!in_battle.empty() && !prefix) {   // préfixe (réserve en plus) : équipe gardée telle quelle
+                        log().write("coop_battle_party_subset", JsonObj().add("party", static_cast<int64_t>(bs.party.size())).add("in_battle", static_cast<int64_t>(in_battle.size())));
+                        bs.party = in_battle;
+                    }
+                }
                 bump("world_battles");
             }
         }

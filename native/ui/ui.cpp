@@ -34,6 +34,7 @@ constexpr Entry kTexts[] = {
     {"duo_parry", "Parade en duo ! +{1} PA ({0})", "Duo parry! +{1} AP ({0})"},
     {"turn_forced", "Temps écoulé : {0} attaque automatiquement", "Time is up: {0} attacks automatically"},
     {"pilot_at_merchant", "Le meneur est chez le marchand : ses achats arrivent chez vous", "The leader is at the merchant: their purchases reach you"},
+    {"pilot_bought", "Le meneur a acheté un article", "The leader bought an item"},
     // Aperçu de l'action que prépare un autre joueur pendant son tour ({1} : action, {2} : cibles)
     {"intent_target", "{0} prépare {1} → {2}", "{0} is preparing {1} → {2}"},
     {"intent_action", "{0} prépare {1}", "{0} is preparing {1}"},

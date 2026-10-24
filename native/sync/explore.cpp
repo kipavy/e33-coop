@@ -154,6 +154,7 @@ struct S {
     int choice_diag = 0;
     bool merchant_open = false, merchant_locked = false, merchant_close = false;   // fenêtre du marchand (pilote : ouverte ; suiveur : miroir posé, fermeture demandée)
     int merchant_sent = -1, merchant_want = -1, merchant_shown = -1;
+    int merchant_diag = 0;
     bool sequence_playing = false;                // OnSequenceStarted reçu, pas encore OnSequenceFinished
     // Narration (barrière) et pause
     double next_poll = 0;
@@ -1558,11 +1559,19 @@ void merchant_tick()
             if (s.merchant_open) { s.merchant_open = false; s.net.publish(proto::DialogueChoice{++s.seq, 0, 3}, true); log().write("coop_merchant_closed", JsonObj()); }
             return;
         }
-        if (!s.merchant_open) { s.merchant_open = true; s.merchant_sent = -1; log().write("coop_merchant_opened", JsonObj()); }
+        if (!s.merchant_open) { s.merchant_open = true; s.merchant_sent = -1; s.merchant_diag = 0; log().write("coop_merchant_opened", JsonObj()); }
         UObject* focused = ue::get_object(win, STR("FocusedMerchantItem"));
         const auto entries = merchant_entries(win);
         int idx = -1;
         for (size_t i = 0; i < entries.size(); ++i) if (entries[i] == focused) idx = static_cast<int>(i);
+        // FocusedMerchantItem ne désigne pas forcément l'entrée (rien envoyé en 0.6.23) : focus ou survol de l'entrée.
+        for (size_t i = 0; i < entries.size() && idx < 0; ++i)
+            if (widget_flag(entries[i], STR("HasAnyUserFocus")) || widget_flag(entries[i], STR("HasFocusedDescendants")) || widget_flag(entries[i], STR("IsHovered"))) idx = static_cast<int>(i);
+        static double diag_next = 0;
+        if (s.merchant_diag < 8 && s.now >= diag_next && ++s.merchant_diag)
+            log().write("coop_merchant_focus_diag", JsonObj().add("entries", static_cast<int64_t>(entries.size())).add("focused", focused ? ue::short_name(focused->GetClassPrivate()) : std::string("null"))
+                                                       .add("entry_class", entries.empty() ? std::string() : ue::short_name(entries[0]->GetClassPrivate())).add("idx", idx));
+        if (s.merchant_diag <= 8 && s.now >= diag_next) diag_next = s.now + 2.0;
         if (idx >= 0 && idx != s.merchant_sent && idx <= 255) {
             s.merchant_sent = idx;
             s.net.publish(proto::DialogueChoice{++s.seq, idx, 2}, true);
@@ -2582,6 +2591,7 @@ bool handle(uint8_t from, const proto::Message& m)
         if (dc->hover == 1) { s.choice_hover_want = dc->index; return true; }   // survol seulement : surbrillance, pas de choix
         if (dc->hover == 2) { s.merchant_want = dc->index; return true; }       // article du marchand sélectionné par le pilote
         if (dc->hover == 3) { s.merchant_close = true; s.merchant_want = -1; return true; }   // le pilote a fermé la fenêtre
+        if (dc->hover == 4) { ui::toast("pilot_bought"); bump("merchant_buys_seen"); return true; }   // achat du pilote
         if (dc->hover) return true;
         s.choices.emplace_back(*dc, s.now);
         touch();
@@ -2700,6 +2710,13 @@ void subscribe()
             log().write("coop_interaction", JsonObj().add("actor", path).add("instant", instant));
         });
     }
+    // Achat du pilote chez le marchand : signalé au suiveur (DialogueChoice.hover 4), qui voit l'article dans son miroir.
+    bus.post(L"/Game/Gameplay/Inventory/Merchant/BP_MerchantComponent.BP_MerchantComponent_C:TryBuyItem", [](HookCtx&, UFunction*) {
+        if (!s.active || !sharing() || !is_pilot()) return;
+        s.net.publish(proto::DialogueChoice{++s.seq, std::max(0, s.merchant_sent), 4}, true);
+        bump("merchant_buys_published");
+        log().write("coop_merchant_buy", JsonObj().add("index", s.merchant_sent));
+    });
     RC::Unreal::Hook::RegisterProcessEventPreCallback(&gpe_pe_hook, {false, false, STR("E33Coop"), STR("ExploreGPE")});
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
         s.choice_pending = false;
