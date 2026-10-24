@@ -1337,7 +1337,7 @@ std::string imc_mappings(UObject* imc, const char* only_key)
     return out;
 }
 
-// Contextes actifs (tous ceux chargÃ©s) qui lient cette touche, avec leur prioritÃ© et l'action liÃ©e.
+// Contextes actifs (tous ceux chargés) qui lient cette touche, avec leur priorité et l'action liée.
 std::string active_contexts_with_key(const char* key)
 {
     UObject* sub = input_subsystem();
@@ -1358,7 +1358,7 @@ std::string active_contexts_with_key(const char* key)
     return out;
 }
 
-// Contexte actif de plus haute prioritÃ© qui lie cette touche : celui qui la reÃ§oit (Enhanced Input).
+// Contexte actif de plus haute priorité qui lie cette touche : celui qui la reçoit (Enhanced Input).
 std::string top_context_for_key(const char* key)
 {
     UObject* sub = input_subsystem();

@@ -279,6 +279,7 @@ struct State {
     int defense_try_logs = 0;                              // diagnostic : appuis de défense du propriétaire journalisés
     int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
     bool stray_fix = true;                                 // -e33straycontexts=0 : contextes de tour de héros laissés en tour ennemi
+    double fa_diag_at = -1;                                // diagnostic : contextes 0,5 s après le début d'une visée libre d'ici
     bool enemy_turn = false;                               // tour en cours : un ennemi (tous les rôles)
     int imc_logs = 0;                                      // diagnostic : contextes d'entrée au début des tours ennemis
     int defense_path_logs = 0;                             // diagnostic : appuis de défense (contrôleur, gestionnaire)
@@ -2380,6 +2381,7 @@ void subscribe()
         s.fa_own.active = true;
         s.fa_own.spot = game::spot(cur);
         s.fa_own.t0 = SteadyClock::now();
+        s.fa_diag_at = s.now + 0.5;
         bump("free_aims_published");
         publish(fa_event(proto::FreeAimKind::Start, 0, {}));
     });
@@ -4058,6 +4060,19 @@ void tick(double dt)
             bump("free_aim_cancels_published");
             log().write("coop_free_aim_local_exit", JsonObj().add("spot", s.fa_own.spot), s.battle.turn);
         }
+    }
+    // Diagnostic (TOTOFFF vise mais ne tire pas, à la manette) : touches de la visée et contexte qui reçoit RT / clic.
+    if (s.fa_diag_at > 0 && s.now >= s.fa_diag_at) {
+        s.fa_diag_at = -1;
+        static bool mapped = false;
+        UObject* fa_imc = ue::find_object(L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/IMC_Battle_FreeAim.IMC_Battle_FreeAim");
+        JsonObj o;
+        if (!mapped) { mapped = true; o.add("mappings", game::imc_mappings(fa_imc)); }
+        o.add("active", s.fa_own.active).add("input_enabled", s.input_enabled)
+         .add("rt_top", game::top_context_for_key("Gamepad_RightTrigger")).add("rt", game::active_contexts_with_key("Gamepad_RightTrigger"))
+         .add("rb", game::active_contexts_with_key("Gamepad_RightShoulder")).add("lmb_top", game::top_context_for_key("LeftMouseButton"))
+         .add("input_type", game::common_input_type()).add("widgets", game::active_common_widgets());
+        log().write("coop_free_aim_inputs", o, s.battle.turn);
     }
     // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
     if (s.fa_own.active && s.fa_own.have_point && s.now >= s.fa_own.next_aim_s) {
