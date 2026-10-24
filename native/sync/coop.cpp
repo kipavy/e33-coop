@@ -2137,7 +2137,11 @@ void subscribe()
         // Hôte, démarrage synchronisé (D28) : tour ennemi retenu tant qu'un client qui a des héros ne l'a pas commencé chez lui.
         if (s.role == Role::Host) {
             auto& b = s.battle;
-            if (!s.turn_align || !b.active || b.ending || b.hold || b.align_active || ctx.Context != turn_deps()) return;
+            if (!s.turn_align || !b.active || b.ending || ctx.Context != turn_deps()) return;
+            // Diagnostic : chaque écoute du début de tour (ordre par rapport à StartCharacterTurn / OnTurnStart).
+            log().write("coop_turn_listen", JsonObj().add("turn", b.turn).add("sct", b.sct_seq).add("ots", b.ots_seq).add("cur_enemy", b.cur_enemy)
+                                                .add("next_enemy", b.next_enemy).add("hold", b.hold).add("align_active", b.align_active), b.turn);
+            if (b.hold || b.align_active) return;
             if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
             const bool after = b.ots_seq == b.sct_seq;   // OnTurnStart de ce tour déjà passé ?
             const uint32_t turn = after ? b.turn : b.turn + 1;
