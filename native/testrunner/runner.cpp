@@ -102,6 +102,7 @@ struct Scenario {
     // "spam_local_input": true : pendant le tour de chaque héros d'un autre joueur (avant son action), le « joueur » d'ici
     // appuie sur des touches de menu et clique (vraies entrées Windows) ; tout effet est une fuite (local_input_leaks).
     bool spam_local_input = false;
+    bool stray_targeting = false;         // tour ennemi : ciblage rÃ©enregistrÃ© (comme le jeu chez le client, 2026-10-24)
     double spam_every_s = 0.12;
 };
 
@@ -244,6 +245,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.end_on_session_end = v["end_on_session_end"].as_bool(false);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
     s.spam_local_input = v["spam_local_input"].as_bool(false);
+    s.stray_targeting = v["stray_targeting"].as_bool(false);
     s.spam_every_s = v["spam_every_s"].as_number(0.12);
     if (s.save.empty() && !s.join && !s.new_game) { err = "scenario needs save (or join, or new_game)"; return false; }
     if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
@@ -814,6 +816,16 @@ void subscribe()
             ++g.metrics["pauses_opened"];
             log().write("tr_pause_open", JsonObj(), g.turn);
         }
+        // Ciblage laissÃ© enregistrÃ© au dÃ©but d'un tour ennemi (vu chez le client : RegisterTargetingInput du jeu juste
+        // avant le tour ennemi) : contexte IMC_Battle_Targeting (prioritÃ© 1000) devant la dÃ©fense.
+        if (g.sc.stray_targeting && !game::is_player(ch) && !counter) {
+            UObject* bs = ue::get_object(bm, STR("BattleScreenWidget"));
+            ue::Call c(bs, STR("RegisterTargetingInput"));
+            const bool called = c && c.invoke();
+            ++g.metrics["stray_targeting_injected"];
+            log().write("tr_stray_targeting", JsonObj().add("called", called).add("registered", ue::get_bool(bs, STR("IsTargetingRegistered")))
+                                                  .add("rb", game::top_context_for_key("Gamepad_RightShoulder")), g.turn);
+        }
         if (game::is_player(ch) && !counter && coop::controls_spot(game::spot(ch))) {
             ++g.player_turns;
             g.pending_actor = ch;
@@ -831,6 +843,14 @@ void subscribe()
         if (!coop::controls_spot(game::spot(defender))) return;   // héros d'un autre joueur
         const std::string decision = defense_decision(ue::read_param_object(ctx, f, STR("AttackingCharacter")));
         g.decision[stats] = decision;
+        // Qui reÃ§oit RB (parade Ã  la manette) et E (parade au clavier) au moment du coup : la dÃ©fense, sinon c'est perdu.
+        {
+            const std::string rb = game::top_context_for_key("Gamepad_RightShoulder");
+            const std::string e = game::top_context_for_key("E");
+            ++g.metrics[rb == "IMC_BattleDefense" ? "rb_to_defense" : "rb_elsewhere"];
+            ++g.metrics[e == "IMC_BattleDefense" ? "e_to_defense" : "e_elsewhere"];
+            log().write("tr_key_owner", JsonObj().add("rb", rb).add("e", e), g.turn);
+        }
         bool started = false;
         if (decision == "parry") { ++g.parry_cmd; started = game::start_parry(defender); }
         else if (decision == "dodge" || decision == "perfect_dodge") { ++g.dodge_cmd; started = start_dodge(defender, decision == "perfect_dodge"); }

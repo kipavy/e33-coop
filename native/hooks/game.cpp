@@ -1304,7 +1304,7 @@ bool economy_apply(const std::string& key, int64_t delta, std::string& err)
 namespace e33::game {
 
 // Diagnostic (parade du client à la manette) : liste « action=touche » d'un contexte Enhanced Input (membre Mappings).
-std::string imc_mappings(UObject* imc)
+std::string imc_mappings(UObject* imc, const char* only_key)
 {
     if (!imc) return "";
     auto* ap = CastField<FArrayProperty>(ue::prop(imc, STR("Mappings")));
@@ -1324,10 +1324,60 @@ std::string imc_mappings(UObject* imc)
         UObject* a = *static_cast<UObject**>(action->ContainerPtrToValuePtr<void>(m));
         void* k = key->ContainerPtrToValuePtr<void>(m);
         FName* kn = static_cast<FName*>(key_name->ContainerPtrToValuePtr<void>(k));
+        const std::string kname = ue::to_utf8(kn->ToString());
+        if (only_key) {
+            if (kname != only_key) continue;
+            if (!out.empty()) out += "+";
+            out += a ? ue::short_name(a) : std::string("null");
+            continue;
+        }
         if (!out.empty()) out += ";";
-        out += (a ? ue::short_name(a) : std::string("null")) + "=" + ue::to_utf8(kn->ToString());
+        out += (a ? ue::short_name(a) : std::string("null")) + "=" + kname;
     }
     return out;
+}
+
+// Contextes actifs (tous ceux chargÃ©s) qui lient cette touche, avec leur prioritÃ© et l'action liÃ©e.
+std::string active_contexts_with_key(const char* key)
+{
+    UObject* sub = input_subsystem();
+    if (!sub) return "?";
+    std::vector<UObject*> all;
+    UObjectGlobals::FindAllOf(STR("InputMappingContext"), all);
+    std::string out;
+    for (UObject* imc : all) {
+        ue::Call has(sub, STR("HasMappingContext"));
+        if (!imc || !has) continue;
+        has.set_object(STR("MappingContext"), imc).invoke();
+        if (!has.out_bool(STR("ReturnValue"))) continue;
+        const std::string acts = imc_mappings(imc, key);
+        if (acts.empty()) continue;
+        if (!out.empty()) out += ",";
+        out += ue::short_name(imc) + ":" + std::to_string(has.out_int(STR("OutFoundPriority"))) + "[" + acts + "]";
+    }
+    return out;
+}
+
+// Contexte actif de plus haute prioritÃ© qui lie cette touche : celui qui la reÃ§oit (Enhanced Input).
+std::string top_context_for_key(const char* key)
+{
+    UObject* sub = input_subsystem();
+    if (!sub) return "?";
+    std::vector<UObject*> all;
+    UObjectGlobals::FindAllOf(STR("InputMappingContext"), all);
+    std::string best;
+    int64_t best_prio = -1000000;
+    for (UObject* imc : all) {
+        ue::Call has(sub, STR("HasMappingContext"));
+        if (!imc || !has) continue;
+        has.set_object(STR("MappingContext"), imc).invoke();
+        if (!has.out_bool(STR("ReturnValue"))) continue;
+        const int64_t prio = has.out_int(STR("OutFoundPriority"));
+        if (prio <= best_prio || imc_mappings(imc, key).empty()) continue;
+        best_prio = prio;
+        best = ue::short_name(imc);
+    }
+    return best;
 }
 
 // Widgets CommonUI activés (ils peuvent prendre des boutons de la manette avant le jeu).

@@ -39,7 +39,9 @@ UObject* main_menu();         // WBP_MM_MainMenu_C s'il existe
 UObject* world_pawn();        // pion d'exploration (BP_jRPG_Character_World_C) : nul au démarrage et au menu ; sans ProcessEvent
 UObject* input_subsystem();   // sous-système Enhanced Input du joueur local (contextes d'entrée) ; FindFirstOf, pas à chaque image
 // Diagnostic : touches d'un contexte d'entrée (« IA_x=Key;… ») ; widgets CommonUI activés ; type d'entrée courant (0 souris/clavier, 1 tactile, 2 manette).
-std::string imc_mappings(UObject* imc);
+std::string imc_mappings(UObject* imc, const char* only_key = nullptr);
+std::string active_contexts_with_key(const char* key);
+std::string top_context_for_key(const char* key);       // contexte actif de plus haute prioritÃ© qui lie cette touche ("" : aucun)   // « IMC:prio[action],… » des contextes actifs (tous) qui lient cette touche
 std::string active_common_widgets();
 int common_input_type();
 bool map_change_in_progress();

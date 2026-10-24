@@ -278,6 +278,8 @@ struct State {
     bool input_enabled = true;
     int defense_try_logs = 0;                              // diagnostic : appuis de défense du propriétaire journalisés
     int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
+    bool stray_fix = true;                                 // -e33straycontexts=0 : contextes de tour de héros laissés en tour ennemi
+    bool enemy_turn = false;                               // tour en cours : un ennemi (tous les rôles)
     int imc_logs = 0;                                      // diagnostic : contextes d'entrée au début des tours ennemis
     int defense_path_logs = 0;                             // diagnostic : appuis de défense (contrôleur, gestionnaire)
     UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
@@ -1967,6 +1969,7 @@ void on_turn_start(UObject* actor)
         s.early_turn_actor = actor;
         s.early_turn_at = s.now;
     }
+    s.enemy_turn = actor && !game::is_player(actor);
     if (s.role != Role::Solo && s.battle.active) duo_parry_check();
     // Commandes de défense (parade, esquive, saut) : branchées par le jeu quand il lance lui-même le combat, pas
     // quand le mod le lance (client : TriggerBattle). Essai à deux PC du 2026-10-24 : aucun appui défensif du client
@@ -3135,6 +3138,7 @@ void read_settings()
     if (const std::wstring v = arg(L"e33readyidle"); !v.empty()) s.ready_idle_s = std::wcstod(v.c_str(), nullptr);
     if (const std::wstring v = arg(L"e33stuckturn"); !v.empty()) s.stuck_turn_s = std::wcstod(v.c_str(), nullptr);
     s.turn_align = arg(L"e33turnalign") == L"1";
+    s.stray_fix = arg(L"e33straycontexts") != L"0";
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
     ui::init();
@@ -3535,13 +3539,46 @@ void run_remote_action()
                                          .raw("targets", ts + "]").add("auto_target", auto_target), b.turn);
 }
 
+// Parade du client à la manette sans effet (essai à deux PC du 2026-10-24) : RB (parade) et RT (tir) ne passaient
+// pas, B (esquive) si. Pendant un tour ennemi le jeu n'a aucun contexte de tour de héros ; s'il en reste un (ciblage
+// réenregistré par le jeu à la fin d'un tour rejoué, visée), il passe avant IMC_BattleDefense et prend ces boutons.
+static void clear_stray_turn_contexts(UObject* sub)
+{
+    static UObject* imcs[4] = {};
+    static const wchar_t* names[] = {L"IMC_Battle_Targeting", L"IMC_Battle_MainWheel", L"IMC_Battle_PlayerTurn", L"IMC_Battle_FreeAim"};
+    for (int i = 0; i < 4; ++i) {
+        if (!imcs[i]) imcs[i] = ue::find_object((std::wstring(L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/") + names[i] + L"." + names[i]).c_str());
+        if (!imcs[i]) continue;
+        ue::Call has(sub, STR("HasMappingContext"));
+        if (!has) return;
+        has.set_object(STR("MappingContext"), imcs[i]).invoke();
+        if (!has.out_bool(STR("ReturnValue"))) continue;
+        const int prio = static_cast<int>(has.out_int(STR("OutFoundPriority")));
+        ue::Call rm(sub, STR("RemoveMappingContext"));
+        if (!rm) return;
+        { game::ModCall mod; rm.set_object(STR("MappingContext"), imcs[i]).invoke(); }
+        bump("enemy_turn_stray_contexts");
+        static int n = 0;
+        if (n++ < 100) log().write("coop_enemy_turn_stray_context", JsonObj().add("removed", ue::to_utf8(names[i])).add("priority", prio), s.battle.turn);
+    }
+    // Ciblage encore enregistré auprès de l'écran de combat : désenregistré (il remettrait son contexte).
+    UObject* bs = ue::get_object(game::battle_manager(), STR("BattleScreenWidget"));
+    if (bs && ue::get_bool(bs, STR("IsTargetingRegistered"))) {
+        ue::Call c(bs, STR("UnregisterTargetingInput"));
+        if (c) { game::ModCall mod; c.invoke(); }
+        bump("enemy_turn_stray_targeting");
+        static int u = 0;
+        if (u++ < 100) log().write("coop_enemy_turn_stray_context", JsonObj().add("unregistered", "targeting").add("after", ue::get_bool(bs, STR("IsTargetingRegistered"))), s.battle.turn);
+    }
+}
+
 // Diagnostic (2026-10-24 : parade du client sans effet) : à chaque image en combat, apparition / disparition des
 // contextes de défense, de blocage et de visée libre, et du drapeau IsDefenseInputBound. Comparer hôte et client.
 static void defense_context_watch()
 {
     static int logs = 0;
     static int last[4] = {-2, -2, -2, -2};   // -1 absent, sinon priorité ; dernier : drapeau bound
-    if (!s.battle.active || logs > 400) { last[0] = last[1] = last[2] = last[3] = -2; return; }
+    if (!s.battle.active || s.role == Role::Solo) { last[0] = last[1] = last[2] = last[3] = -2; return; }
     UObject* sub = game::input_subsystem();
     if (!sub) return;
     static const wchar_t* names[] = {L"IMC_BattleDefense", L"IMC_Battle_InputBlocker", L"IMC_Battle_FreeAim"};
@@ -3555,7 +3592,7 @@ static void defense_context_watch()
         const int now = has.out_bool(STR("ReturnValue")) ? static_cast<int>(has.out_int(STR("OutFoundPriority"))) : -1;
         if (now == last[i]) continue;
         last[i] = now;
-        ++logs;
+        if (++logs > 400) continue;
         log().write("coop_imc_change", JsonObj().add("imc", ue::to_utf8(names[i])).add("active", now >= 0).add("priority", now)
                                            .add("input_enabled", s.input_enabled), s.battle.turn);
         // Contexte de défense ouvert : ses touches (une fois), widgets CommonUI activés et type d'entrée (manette ?).
@@ -3563,15 +3600,24 @@ static void defense_context_watch()
             static bool mapped = false;
             JsonObj o;
             if (!mapped) { mapped = true; o.add("mappings", game::imc_mappings(imcs[0])); }
-            log().write("coop_defense_ui_state", o.add("input_type", game::common_input_type()).add("widgets", game::active_common_widgets()), s.battle.turn);
+            log().write("coop_defense_ui_state", o.add("input_type", game::common_input_type()).add("widgets", game::active_common_widgets())
+                                                    .add("rb", game::active_contexts_with_key("Gamepad_RightShoulder"))
+                                                    .add("rt", game::active_contexts_with_key("Gamepad_RightTrigger"))
+                                                    .add("e", game::active_contexts_with_key("E")), s.battle.turn);
         }
+    }
+    // Tour ennemi, défense ouverte : contextes d'un tour de héros restés actifs (ciblage 1000, roue 100, tour 99, visée)
+    // retirés. Ils passent avant la défense (priorité 0) et prennent RB (parade) / RT à la manette, pas B ni E.
+    static double next_clear = 0;
+    if (s.stray_fix && s.enemy_turn && last[0] >= 0 && s.now >= next_clear) {
+        next_clear = s.now + 0.1;
+        clear_stray_turn_contexts(sub);
     }
     UObject* ctrl = game::controller();
     const int bound = ctrl ? (ue::get_bool(ctrl, STR("IsDefenseInputBound")) ? 1 : 0) : -1;
     if (bound != last[3]) {
         last[3] = bound;
-        ++logs;
-        log().write("coop_imc_change", JsonObj().add("imc", "IsDefenseInputBound").add("active", bound == 1).add("input_enabled", s.input_enabled), s.battle.turn);
+        if (++logs <= 400) log().write("coop_imc_change", JsonObj().add("imc", "IsDefenseInputBound").add("active", bound == 1).add("input_enabled", s.input_enabled), s.battle.turn);
     }
 }
 
