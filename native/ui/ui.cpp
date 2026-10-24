@@ -49,6 +49,7 @@ constexpr Entry kTexts[] = {
     // Défaite (D31) : seul l'hôte choisit « Réessayer » ou « Abandonner »
     {"defeat_host_choosing", "Défaite : {0} choisit (réessayer ou abandonner)…", "Defeat: {0} is choosing (retry or give up)…"},
     {"defeat_host_retry", "{0} réessaie le combat", "{0} retries the battle"},
+    {"defeat_host_reserve", "{0} envoie l'équipe de réserve", "{0} sends the reserve team"},
     {"defeat_host_abandon", "{0} abandonne le combat : chargement de sa partie…", "{0} gave up the battle: loading their game…"},
     {"defeat_host_silent", "{0} ne choisit pas : à vous de choisir", "{0} is not choosing: your call"},
     {"player_joined", "{0} a rejoint la partie", "{0} joined the game"},

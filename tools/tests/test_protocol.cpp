@@ -62,7 +62,7 @@ static std::vector<proto::Message> samples()
             proto::SceneStart{1, 4, "", "", proto::SceneCause::Unknown, "", "", 0, 0, 0},
             proto::SceneStart{0, 6, "", "/Game/Levels/X.X:PersistentLevel.BP_Dialogue_C_1", proto::SceneCause::Zone, "/Game/Levels/X.X:PersistentLevel.Zone_1", "",
                               1, 2, 3, proto::NarrativeKind::Dialogue},proto::SceneSkip{0, 5, "SQT_Lumiere_Sophie"},
-            proto::DefeatChoice{2, 1}, proto::DefeatChoice{3, 0}};
+            proto::DefeatChoice{2, 0, 1}, proto::DefeatChoice{3, 1, 0}};
 }
 
 static void test_roundtrip()

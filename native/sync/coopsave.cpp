@@ -295,7 +295,7 @@ void subscribe()
         if (slot.rfind("e33coop", 0) != 0) reset_coop_game("load personal save");
     });
     // Diagnostic (D31) : chemin de chargement du jeu (abandon après une défaite : quelle save est rechargée ?).
-    for (const wchar_t* fn : {L"RequestLoadGame", L"ProcessLoadRequest", L"RetrieveSaveDataFromSlotName", L"LoadGameFromSaveData", L"PrepareToLoadSaveGame"}) {
+    for (const wchar_t* fn : {L"RequestLoadGame", L"RetrieveSaveDataFromSlotName", L"LoadGameFromSaveData", L"PrepareToLoadSaveGame"}) {
         bus.pre(std::wstring(kSaveMgr) + fn, [fn](HookCtx& ctx, UFunction* f) {
             log().write("save_trace", JsonObj().add("fn", ue::to_utf8(fn)).add("slot", std::wstring(fn) == L"RetrieveSaveDataFromSlotName" ? str_of(str_param(ctx, f, STR("SlotName"))) : std::string()));
         });

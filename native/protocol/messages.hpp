@@ -328,9 +328,10 @@ struct BuildChunk { uint32_t xfer = 0; uint32_t offset = 0; std::vector<uint8_t>
 // se resynchronise).
 struct EconomyPart { std::string key; int64_t delta = 0; };
 struct EconomyDelta { uint32_t seq = 0; uint8_t origin = 0; bool authoritative = false; bool rejected = false; std::vector<EconomyPart> parts; };
-// Défaite (D31) : seul l'hôte choisit sur l'écran de défaite ; hôte -> clients, qui suivent son choix. retry : 1 « Réessayer »
-// (chacun relance le combat chez lui), 0 « Abandonner » (l'hôte recharge sa partie, le client attend son instantané).
-struct DefeatChoice { uint32_t battle_id = 0; uint8_t retry = 0; };
+// Défaite (D31) : seul l'hôte répond aux fenêtres de l'écran de défaite ; hôte -> clients, qui suivent sa réponse.
+// prompt : 0 « Réessayer / Abandonner » (yes = réessayer : chacun relance le combat ; non = abandon : l'hôte recharge sa
+// partie, le client attend son instantané), 1 « Envoyer l'équipe de réserve ? » (yes = oui : le combat continue avec elle).
+struct DefeatChoice { uint32_t battle_id = 0; uint8_t prompt = 0; uint8_t yes = 0; };
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
                              DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,

@@ -305,11 +305,16 @@ struct State {
         bool armed = false;                                // défaite vue ici (StartBattleEndFlow, résultat 2)
         uint32_t battle = 0;                               // n° (mod) du combat perdu
         double at = -1;
-        int host_choice = -1;                              // client : choix de l'hôte (-1 inconnu, 0 abandonner, 1 réessayer)
-        double host_choice_at = -1;
-        double prompt_at = -1;                             // client : fenêtre de choix vue ici
-        bool applied = false;                              // client : choix de l'hôte appliqué ici
+        bool retry_prompted = false;                       // PromptBattleRetry vu : la fenêtre ouverte est « Réessayer / Abandonner »
+        // Par fenêtre (0 « Réessayer / Abandonner », 1 « équipe de réserve ») : choix de l'hôte (-1 inconnu, 0 non, 1 oui)
+        int host_choice[2] = {-1, -1};
+        double host_choice_at[2] = {-1, -1};
+        bool applied[2] = {false, false};                  // client : choix de l'hôte appliqué ici
+        int prompt_kind = -1;                              // client : dernière fenêtre de choix vue ici (en attente du choix)
+        double prompt_at = -1;
+        UObject* prompt_modal = nullptr;
         double applied_at = -1;
+        int done_kind = -1;                                // client : choix suivi qui finit l'attente (statut retiré ensuite)
         bool local_allowed = false;                        // client : repli, le joueur d'ici choisit (hôte muet)
         bool applying = false;                             // réponse donnée par le mod (pas un clic du joueur)
         double next_poll = 0;
@@ -2362,14 +2367,14 @@ void apply_host_party(const proto::BattleStart& bs)
 }
 
 // --- Défaite (D31) -------------------------------------------------------------------------------
-// Écran de défaite du jeu (WBP_jRPG_GameOverScreen) : « Réessayer » / « Abandonner ». Seul l'hôte choisit (DefeatChoice).
-// Client : la fenêtre de choix est refermée dès qu'elle s'ouvre (statut « l'hôte choisit »), puis le choix de l'hôte
-// est appliqué ici :
-//   - réessayer : même réponse donnée à l'écran de défaite d'ici (le jeu relance le combat ; le mod le suit comme un
-//     combat engagé ici avant le BattleStart de l'hôte) ;
+// Écran de défaite du jeu (WBP_jRPG_GameOverScreen) : d'abord « Envoyer l'équipe de réserve ? » si elle existe, puis
+// « Réessayer » / « Abandonner ». Seul l'hôte répond (DefeatChoice). Client : chaque fenêtre de choix est refermée dès
+// qu'elle s'ouvre (statut « l'hôte choisit »), puis la réponse de l'hôte est donnée ici :
+//   - équipe de réserve (oui / non) et réessayer : même réponse donnée à l'écran d'ici (le jeu continue ou relance le
+//     combat ; le mod le suit comme un combat engagé ici avant le BattleStart de l'hôte) ;
 //   - abandonner : pas d'abandon ici (il rechargerait la save du joueur, pas la partie de l'hôte : écran noir chez
 //     TOTOFFF le 2026-10-24) ; on demande l'instantané de l'hôte (ResyncRequest), chargé dès qu'il arrive.
-// Hôte muet 120 s après l'ouverture de la fenêtre : le joueur d'ici retrouve la fenêtre et choisit lui-même.
+// Hôte muet 120 s après l'ouverture d'une fenêtre : le joueur d'ici choisit lui-même.
 constexpr double kDefeatHostSilentS = 120.0;
 
 void defeat_reset(uint32_t battle)
@@ -2384,52 +2389,61 @@ void defeat_arm()
 {
     auto& d = s.defeat;
     // Choix de l'hôte déjà reçu pour ce combat (il a pu choisir avant notre fin de combat) : gardé.
-    if (d.battle != s.battle.id || d.applied) defeat_reset(s.battle.id);
+    if (d.battle != s.battle.id || d.done_kind >= 0) defeat_reset(s.battle.id);
     d.armed = true;
     d.at = s.now;
     d.next_poll = 0;
-    log().write("coop_defeat", JsonObj().add("battle", d.battle).add("host_choice", d.host_choice).add("sync", s.defeat_sync), s.battle.turn);
+    log().write("coop_defeat", JsonObj().add("battle", d.battle).add("host_retry", d.host_choice[0]).add("host_reserve", d.host_choice[1])
+                                   .add("sync", s.defeat_sync), s.battle.turn);
 }
 
 void defeat_on_host_choice(const proto::DefeatChoice& dc)
 {
     auto& d = s.defeat;
-    if (d.battle != dc.battle_id || d.applied) defeat_reset(dc.battle_id);
-    d.host_choice = dc.retry ? 1 : 0;
-    d.host_choice_at = s.now;
+    if (d.battle != dc.battle_id || d.done_kind >= 0) defeat_reset(dc.battle_id);
+    const int k = dc.prompt == 1 ? 1 : 0;
+    d.host_choice[k] = dc.yes ? 1 : 0;
+    d.host_choice_at[k] = s.now;
     d.next_poll = 0;
     bump("defeat_choices_received");
-    log().write("coop_defeat_host_choice", JsonObj().add("battle", dc.battle_id).add("retry", static_cast<int>(dc.retry))
-                                               .add("armed", d.armed).add("prompt_seen", d.prompt_at >= 0).add("sync", s.defeat_sync));
+    log().write("coop_defeat_host_choice", JsonObj().add("battle", dc.battle_id).add("prompt", k).add("yes", static_cast<int>(dc.yes))
+                                               .add("armed", d.armed).add("prompt_seen", d.prompt_kind).add("sync", s.defeat_sync));
 }
 
 // Fenêtre de choix refermée ici (le joueur ne peut pas choisir) : désactivée (ses touches ne répondent plus) et réduite.
 void defeat_hide(UObject* modal)
 {
     auto& d = s.defeat;
-    game::ModCall mod;
-    ue::Call off(modal, STR("DeactivateWidget"));
-    if (off) off.invoke();
-    ue::Call vis(modal, STR("SetVisibility"));
-    if (vis) { vis.set_int(STR("InVisibility"), 1); vis.invoke(); }   // ESlateVisibility::Collapsed
+    {
+        game::ModCall mod;
+        ue::Call off(modal, STR("DeactivateWidget"));
+        if (off) off.invoke();
+        ue::Call vis(modal, STR("SetVisibility"));
+        if (vis) { vis.set_int(STR("InVisibility"), 1); vis.invoke(); }   // ESlateVisibility::Collapsed
+    }
     ++d.hidden;
     bump("defeat_prompts_hidden");
     ui::set_status("defeat", "defeat_host_choosing", {player_name(0)});
     bool still = false;
     game::defeat_modal(game::defeat_screen(), &still);
-    log().write("coop_defeat_prompt_hidden", JsonObj().add("battle", d.battle).add("n", d.hidden).add("still_visible", still));
+    log().write("coop_defeat_prompt_hidden", JsonObj().add("battle", d.battle).add("prompt", d.prompt_kind).add("n", d.hidden).add("still_visible", still));
 }
 
-// Choix de l'hôte appliqué ici. modal : fenêtre de choix encore ouverte (réponse donnée par elle, comme un clic).
-void defeat_apply(UObject* screen, UObject* modal)
+// Réponse de l'hôte à la fenêtre k donnée ici. modal : fenêtre encore ouverte (réponse par elle, comme un clic).
+void defeat_apply(int k, UObject* screen, UObject* modal)
 {
     auto& d = s.defeat;
-    d.applied = true;
+    d.applied[k] = true;
     d.applied_at = s.now;
+    d.prompt_kind = -1;
+    d.prompt_modal = nullptr;
     bump("defeat_choices_applied");
+    const bool yes = d.host_choice[k] == 1;
     const std::string host = player_name(0);
-    if (d.host_choice == 1 || s.defeat_abandon_mirror) {
-        const int resp = d.host_choice == 1 ? game::RespConfirm : game::RespCancel;
+    // Réserve refusée : la fenêtre « Réessayer / Abandonner » suit, l'attente continue.
+    if (k == 0 || yes) d.done_kind = k;
+    if (k == 1 || yes || s.defeat_abandon_mirror) {
+        const int resp = yes ? game::RespConfirm : game::RespCancel;
         bool ok = false;
         const char* how = "none";
         d.applying = true;
@@ -2440,14 +2454,15 @@ void defeat_apply(UObject* screen, UObject* modal)
                 if (c) { c.set_int(STR("InUserResponse"), resp); ok = c.invoke(); how = "modal"; }
             }
             if (!ok && screen) {
-                ue::Call c(screen, STR("OnRetryUserResponse"));
+                ue::Call c(screen, k == 1 ? STR("OnReserveTeamModalResponse") : STR("OnRetryUserResponse"));
                 if (c) { c.set_int(STR("InUserResponse"), resp); ok = c.invoke(); how = "screen"; }
             }
         }
         d.applying = false;
         if (!ok) bump("defeat_apply_errors");
-        ui::set_status("defeat", d.host_choice == 1 ? "defeat_host_retry" : "defeat_host_abandon", {host});
-        log().write("coop_defeat_applied", JsonObj().add("battle", d.battle).add("retry", d.host_choice).add("how", how).add("ok", ok)
+        if (k == 1 && !yes) ui::set_status("defeat", "defeat_host_choosing", {host});
+        else ui::set_status("defeat", k == 1 ? "defeat_host_reserve" : yes ? "defeat_host_retry" : "defeat_host_abandon", {host});
+        log().write("coop_defeat_applied", JsonObj().add("battle", d.battle).add("prompt", k).add("yes", yes).add("how", how).add("ok", ok)
                                                .add("response", resp).add("wait_s", d.prompt_at >= 0 ? s.now - d.prompt_at : -1.0));
         return;
     }
@@ -2455,7 +2470,7 @@ void defeat_apply(UObject* screen, UObject* modal)
     publish(proto::ResyncRequest{"host abandoned the battle"});
     bump("defeat_resyncs_requested");
     ui::set_status("defeat", "defeat_host_abandon", {host});
-    log().write("coop_defeat_applied", JsonObj().add("battle", d.battle).add("retry", 0).add("how", "resync").add("ok", true)
+    log().write("coop_defeat_applied", JsonObj().add("battle", d.battle).add("prompt", 0).add("yes", false).add("how", "resync").add("ok", true)
                                            .add("wait_s", d.prompt_at >= 0 ? s.now - d.prompt_at : -1.0));
 }
 
@@ -2466,42 +2481,61 @@ void defeat_tick()
     static bool screen_class_loaded = false;
     if (!screen_class_loaded && s.battle.active) { screen_class_loaded = true; game::load_asset(game::kGameOverScreenClass); }
     if (s.role != Role::Client || !s.defeat_sync) return;
-    // Statut « l'hôte choisit / réessaie / recharge » retiré une fois le choix suivi (nouveau combat, ou monde rechargé).
-    if (d.applied) {
+    if (s.now < d.next_poll) return;
+    // Statut retiré une fois le choix suivi (nouveau combat ou combat repris, ou monde rechargé après l'abandon).
+    if (d.done_kind >= 0) {
+        d.next_poll = s.now + 0.5;
+        const bool abandon = d.done_kind == 0 && d.host_choice[0] == 0;
         const bool done = s.now - d.applied_at > 120.0 ||
-                          (d.host_choice == 1 && s.battle.active && s.battle.id != d.battle) ||
-                          (d.host_choice == 0 && s.now - d.applied_at > 5.0 && s.now >= d.next_poll && game::controller() && !game::in_battle());
-        if (s.now >= d.next_poll) d.next_poll = s.now + 0.5;
-        if (done) { ui::clear_status("defeat"); log().write("coop_defeat_done", JsonObj().add("battle", d.battle).add("after_s", s.now - d.applied_at)); defeat_reset(0); }
+                          (!abandon && s.battle.active && s.battle.id != d.battle) ||
+                          (abandon && s.now - d.applied_at > 5.0 && game::controller() && !game::in_battle());
+        if (done) {
+            ui::clear_status("defeat");
+            log().write("coop_defeat_done", JsonObj().add("battle", d.battle).add("prompt", d.done_kind).add("after_s", s.now - d.applied_at));
+            defeat_reset(0);
+        }
         return;
     }
-    if ((!d.armed && d.host_choice < 0) || s.now < d.next_poll) return;
+    if (!d.armed && d.host_choice[0] < 0 && d.host_choice[1] < 0) return;
     d.next_poll = s.now + 0.2;   // FindAllOf : pas à chaque image
     UObject* screen = game::defeat_screen();
     bool visible = false;
     UObject* modal = screen ? game::defeat_modal(screen, &visible) : nullptr;
-    if (modal && d.prompt_at < 0) {
+    if (modal && modal != d.prompt_modal) {
+        // Nouvelle fenêtre de choix : « Réessayer / Abandonner » si PromptBattleRetry est passé, sinon l'équipe de réserve.
+        d.prompt_modal = modal;
+        d.prompt_kind = d.retry_prompted ? 0 : 1;
         d.prompt_at = s.now;
         bump("defeat_prompts_seen");
-        log().write("coop_defeat_prompt", JsonObj().add("battle", d.battle).add("host_choice", d.host_choice).add("visible", visible)
-                                              .add("after_s", s.now - d.at));
+        log().write("coop_defeat_prompt", JsonObj().add("battle", d.battle).add("prompt", d.prompt_kind).add("host_choice", d.host_choice[d.prompt_kind])
+                                              .add("visible", visible).add("after_s", s.now - d.at));
     }
-    // Choix de l'hôte connu : appliqué dès que l'écran d'ici est prêt (fenêtre ouverte), ou 15 s après sans fenêtre.
-    if (d.host_choice >= 0 && !d.local_allowed && (d.prompt_at >= 0 || (screen && s.now - d.host_choice_at > 15.0) || (!d.armed && s.now - d.host_choice_at > 30.0))) {
-        defeat_apply(screen, modal);
-        return;
-    }
+    const int k = d.prompt_kind;
+    // Réponse de l'hôte connue pour la fenêtre ouverte ici : donnée tout de suite.
+    if (k >= 0 && !d.local_allowed && d.host_choice[k] >= 0 && !d.applied[k]) { defeat_apply(k, screen, modal); return; }
+    // Sans fenêtre vue ici 15 s après la réponse de l'hôte (écran pas encore là, autre déroulé) : réponse donnée à l'écran.
+    for (int j = 0; j < 2 && k < 0 && screen && !d.local_allowed; ++j)
+        if (d.host_choice[j] >= 0 && !d.applied[j] && s.now - d.host_choice_at[j] > 15.0 && (j == 1 || !d.applied[1] || d.host_choice[1] == 0)) {
+            log().write("coop_defeat_no_prompt_apply", JsonObj().add("prompt", j));
+            defeat_apply(j, screen, nullptr);
+            return;
+        }
+    // Abandon de l'hôte sans écran de défaite ici (combat local pas perdu) : instantané demandé quand même.
+    if (!screen && !d.applied[0] && d.host_choice[0] == 0 && s.now - d.host_choice_at[0] > 30.0) { defeat_apply(0, nullptr, nullptr); return; }
     if (modal && visible && !d.local_allowed) defeat_hide(modal);
-    // Hôte muet : le joueur d'ici choisit (fenêtre rouverte).
-    if (!d.local_allowed && d.host_choice < 0 && d.prompt_at >= 0 && s.now - d.prompt_at > kDefeatHostSilentS && screen) {
+    // Hôte muet : le joueur d'ici choisit (« Réessayer / Abandonner » rouverte ; réserve : refusée ici, la suivante s'ouvre).
+    if (!d.local_allowed && k >= 0 && d.host_choice[k] < 0 && s.now - d.prompt_at > kDefeatHostSilentS && screen) {
         d.local_allowed = true;
         bump("defeat_local_fallbacks");
-        game::ModCall mod;
-        ue::Call c(screen, STR("PromptBattleRetry"));
-        const bool ok = c && c.invoke();
+        bool ok = false;
+        {
+            game::ModCall mod;
+            if (k == 0) { ue::Call c(screen, STR("PromptBattleRetry")); ok = c && c.invoke(); }
+            else { ue::Call c(screen, STR("OnReserveTeamModalResponse")); if (c) { c.set_int(STR("InUserResponse"), game::RespCancel); ok = c.invoke(); } }
+        }
         ui::clear_status("defeat");
         ui::toast("defeat_host_silent", {player_name(0)}, 10.0);
-        log().write("coop_defeat_local_fallback", JsonObj().add("battle", d.battle).add("reprompt", ok));
+        log().write("coop_defeat_local_fallback", JsonObj().add("battle", d.battle).add("prompt", k).add("ok", ok));
     }
     // Diagnostic : écran de défaite sans fenêtre de choix reconnue 20 s après la défaite (autre parent ?).
     if (screen && d.prompt_at < 0 && !d.diag_logged && s.now - d.at > 20.0) {
@@ -2517,6 +2551,7 @@ void defeat_tick()
         log().write("coop_defeat_no_prompt", JsonObj().add("screen", ue::short_name(screen)).raw("modals", list + "]"));
     }
 }
+
 void subscribe()
 {
     using game::path::fn;
@@ -3283,34 +3318,40 @@ void subscribe()
     });
 
 
-    // Défaite (D31). Réponse donnée à l'écran de défaite (tous les chemins : fenêtre, mod) : l'hôte la publie ; chez un
-    // client, un choix qui ne vient pas du mod est une fuite (compté), et il est remplacé par celui de l'hôte s'il est connu.
-    bus.pre(fn(game::path::BattleMgr, L"OnRetryEncounterResponse"), [](HookCtx& ctx, UFunction* f) {
-        auto* p = static_cast<uint8_t*>(ue::param_address(ctx, f, STR("ShouldRetry")));
-        const int retry = p ? (*p != 0 ? 1 : 0) : -1;
-        auto& d = s.defeat;
-        log().write("coop_defeat_response", JsonObj().add("retry", retry).add("by_mod", d.applying || game::mod_call_depth() > 0)
-                                                .add("host_choice", d.host_choice).add("local_allowed", d.local_allowed).add("battle", s.battle.id));
-        if (s.role == Role::Host) {
-            if (!s.defeat_sync || retry < 0) return;
-            broadcast(proto::DefeatChoice{s.battle.id, static_cast<uint8_t>(retry)});
-            bump("defeat_choices_published");
-            log().write("coop_defeat_choice_sent", JsonObj().add("battle", s.battle.id).add("retry", retry).add("players", connected_players()));
-            return;
-        }
-        if (s.role != Role::Client || !s.defeat_sync) return;
-        if (!d.applying && !d.local_allowed) {
-            bump("defeat_local_choices");
-            log().write("coop_defeat_local_choice", JsonObj().add("retry", retry).add("host_choice", d.host_choice));
-        }
-        if (p && d.host_choice >= 0 && retry != d.host_choice && !d.local_allowed) {
-            *p = static_cast<uint8_t>(d.host_choice);
-            bump("defeat_choices_rewritten");
-            log().write("coop_defeat_choice_rewritten", JsonObj().add("local", retry).add("host", d.host_choice));
-        }
-    });
-    // Fenêtre de choix ouverte : refermée (client) à l'image suivante.
+    // Défaite (D31). Réponse donnée à une fenêtre de l'écran de défaite (k = 0 « Réessayer / Abandonner », 1 équipe de
+    // réserve ; tous les chemins : fenêtre, mod) : l'hôte la publie ; chez un client, une réponse qui ne vient pas du mod
+    // est une fuite (comptée), remplacée par celle de l'hôte si elle est connue.
+    for (int k = 0; k < 2; ++k) {
+        const wchar_t* name = k == 0 ? L"OnRetryEncounterResponse" : L"OnReserveTeamResponse";
+        const wchar_t* param = k == 0 ? L"ShouldRetry" : L"ShouldSendReserve";
+        bus.pre(fn(game::path::BattleMgr, name), [k, param](HookCtx& ctx, UFunction* f) {
+            auto* p = static_cast<uint8_t*>(ue::param_address(ctx, f, param));
+            const int yes = p ? (*p != 0 ? 1 : 0) : -1;
+            auto& d = s.defeat;
+            log().write("coop_defeat_response", JsonObj().add("prompt", k).add("yes", yes).add("by_mod", d.applying || game::mod_call_depth() > 0)
+                                                    .add("host_choice", d.host_choice[k]).add("local_allowed", d.local_allowed).add("battle", s.battle.id));
+            if (s.role == Role::Host) {
+                if (!s.defeat_sync || yes < 0) return;
+                broadcast(proto::DefeatChoice{s.battle.id, static_cast<uint8_t>(k), static_cast<uint8_t>(yes)});
+                bump("defeat_choices_published");
+                log().write("coop_defeat_choice_sent", JsonObj().add("battle", s.battle.id).add("prompt", k).add("yes", yes).add("players", connected_players()));
+                return;
+            }
+            if (s.role != Role::Client || !s.defeat_sync) return;
+            if (!d.applying && !d.local_allowed) {
+                bump("defeat_local_choices");
+                log().write("coop_defeat_local_choice", JsonObj().add("prompt", k).add("yes", yes).add("host_choice", d.host_choice[k]));
+            }
+            if (p && d.host_choice[k] >= 0 && yes != d.host_choice[k] && !d.local_allowed) {
+                *p = static_cast<uint8_t>(d.host_choice[k]);
+                bump("defeat_choices_rewritten");
+                log().write("coop_defeat_choice_rewritten", JsonObj().add("prompt", k).add("local", yes).add("host", d.host_choice[k]));
+            }
+        });
+    }
+    // « Réessayer / Abandonner » ouverte : la prochaine fenêtre de choix est celle-là (client : refermée à l'image suivante).
     bus.post(std::wstring(game::kGameOverScreenClass) + L":PromptBattleRetry", [](HookCtx&, UFunction*) {
+        s.defeat.retry_prompted = true;
         s.defeat.next_poll = 0;
     });
     // Diagnostic : déroulé de la fin de combat perdue (fonctions du jeu, premier paramètre), 80 lignes au plus par défaite.
@@ -3322,6 +3363,7 @@ void subscribe()
             {bm + L"OnAllHeroesKilled", nullptr}, {bm + L"ShowReserveTeamGameOver", nullptr}, {bm + L"OnReserveTeamResponse", L"ShouldSendReserve"},
             {bm + L"OnGameOverScreenClosed", nullptr}, {bm + L"RequestRestartCurrentEncounter", nullptr}, {bm + L"PrepareForEncounterRestart", nullptr},
             {bm + L"LoadRestartState", nullptr}, {bm + L"TriggerAbandonBattle", nullptr}, {bm + L"StartBattleNEW", nullptr},
+            {bm + L"SpawnBackupTeam", nullptr}, {bm + L"OnBackupTeamLoaded", nullptr},
             {ctrl + L"RestartCurrentEncounter", nullptr}, {ctrl + L"ResumeExplorationOnBattleEnd", nullptr},
             {screen + L"PromptBattleRetry", nullptr}, {screen + L"OnRetryUserResponse", L"InUserResponse"},
             {screen + L"OnReserveTeamModalResponse", L"InUserResponse"}, {screen + L"DisappearAndRemove", L"FadeBackToBattle"},
@@ -3334,7 +3376,7 @@ void subscribe()
             const wchar_t* param = t.second;
             bus.pre(t.first, [name, param](HookCtx& ctx, UFunction* f) {
                 auto& d = s.defeat;
-                if (!d.armed && d.host_choice < 0) return;   // seulement autour d'une défaite
+                if (!d.armed && d.host_choice[0] < 0 && d.host_choice[1] < 0) return;   // seulement autour d'une défaite
                 if (++d.traces > 80) return;
                 int size = 0;
                 const auto* v = param ? static_cast<const uint8_t*>(ue::param_address(ctx, f, param, &size)) : nullptr;
@@ -3343,6 +3385,7 @@ void subscribe()
             });
         }
     }
+
     // Fuite : retour à l'exploration sans StartBattleEndFlow (vu le 2026-10-20) -> fin « neutre », même chemin.
     bus.post(fn(game::path::CtrlWorld, L"ResumeExplorationOnBattleEnd"), [](HookCtx&, UFunction*) {
         auto& b = s.battle;
@@ -3691,6 +3734,7 @@ bool battle_finalized() { return s.battle.finalized; }
 // le testeur, qui agit directement, attend aussi).
 bool holding() { return s.battle.hold || s.battle.dep_active || s.battle.dep_finish_pending; }
 bool session_ended() { return s.ended; }
+int defeat_prompt_kind() { return s.defeat.retry_prompted ? 0 : 1; }
 bool action_forced(int spot) { return s.battle.forced.count({s.battle.turn, spot}) > 0; }
 int remote_turn_open()
 {

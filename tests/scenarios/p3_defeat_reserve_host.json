@@ -1,0 +1,21 @@
+{
+  "name": "p3_defeat_reserve_host",
+  "description": "Défaite, choix de l'hôte (D31) : comme p3_defeat_choice_host, mais l'hôte accepte d'envoyer l'équipe de réserve (Monoco, Sciel) : le combat continue avec elle (publié : DefeatChoice prompt 1). Produit l'enregistrement rejoué par p3_defeat_reserve_client.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Lune"],
+  "setup": { "Lune": { "hp": 1, "shield": 0 } },
+  "timeout_s": 600,
+  "max_turns": 30,
+  "shots_every_s": 6,
+  "defense": ["fail"],
+  "explore": [
+    { "do": "trigger", "players": 1 },
+    { "do": "defeat", "reserve": "yes", "after_s": 3, "timeout": 120 },
+    { "do": "battle", "timeout": 300 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Lune:1", "-e33seed=16250036901998647475"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_energy_reserve.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "defeat_screens": "1", "defeat_reserve_yes_chosen": "1", "defeat_choices_published": "1", "hero_deaths": ">=1" }
+}

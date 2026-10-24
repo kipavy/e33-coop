@@ -1241,7 +1241,20 @@ void run_explore_step(float dt)
             if (g.defeat_open_since < 0) { g.defeat_open_since = g.step_t; ++g.metrics["defeat_modals_seen"]; log().write("tr_defeat_modal", JsonObj().add("t", g.step_t)); }
             int& mx = g.metrics["defeat_modal_open_ms_max"];
             mx = std::max(mx, static_cast<int>((g.step_t - g.defeat_open_since) * 1000.0));
-            if ((choice == "retry" || choice == "abandon") && g.step_t - g.defeat_open_since >= st["after_s"].as_number(2)) {
+            // Fenêtre « équipe de réserve » (avant « Réessayer / Abandonner » quand l'équipe de réserve existe) : "reserve" yes | no.
+            if (choice != "follow" && choice != "watch" && coop::defeat_prompt_kind() == 1 && g.step_t - g.defeat_open_since >= st["after_s"].as_number(2)) {
+                const bool yes = st["reserve"].as_string("no") == "yes";
+                ue::Call c(modal, STR("NotifyUserResponse"));
+                bool ok = false;
+                if (c) { c.set_int(STR("InUserResponse"), yes ? game::RespConfirm : game::RespCancel); ok = c.invoke(); }
+                ++g.metrics[yes ? "defeat_reserve_yes_chosen" : "defeat_reserve_no_chosen"];
+                log().write("tr_defeat_reserve", JsonObj().add("yes", yes).add("ok", ok));
+                if (!ok) { fail("defeat: NotifyUserResponse (reserve) failed"); return; }
+                g.defeat_open_since = -1;
+                if (yes) next_step("reserve sent");
+                return;
+            }
+            if ((choice == "retry" || choice == "abandon") && coop::defeat_prompt_kind() == 0 && g.step_t - g.defeat_open_since >= st["after_s"].as_number(2)) {
                 const int resp = st["response"].is_number() ? static_cast<int>(st["response"].as_int()) : (choice == "retry" ? game::RespConfirm : game::RespCancel);
                 ue::Call c(modal, STR("NotifyUserResponse"));
                 bool ok = false;

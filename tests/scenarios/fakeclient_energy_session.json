@@ -9,5 +9,5 @@
     { "type": "skip" }
   ],
   "defense": ["fail"],
-  "expect": { "battle_starts": ">=2", "defeat_retries": "1", "defeat_abandons": "1", "snapshots": ">=1" }
+  "expect": { "battle_starts": ">=2", "defeat_reserve_no": "2", "defeat_retries": "1", "defeat_abandons": "1", "snapshots": ">=1" }
 }

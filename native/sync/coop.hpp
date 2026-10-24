@@ -33,6 +33,8 @@ bool battle_finalized();
 bool holding();
 // Client : session terminée (hôte parti ou injoignable, refus de version) ; hôte : retour au menu principal.
 bool session_ended();
+// Écran de défaite (D31) : fenêtre de choix ouverte en dernier, 0 « Réessayer / Abandonner », 1 équipe de réserve.
+int defeat_prompt_kind();
 // Tour d'un héros d'un autre joueur en cours ici, avant l'exécution de son action (test des entrées bloquées) : son
 // emplacement, -1 sinon.
 int remote_turn_open();
