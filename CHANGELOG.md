@@ -14,6 +14,14 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.11] - 2026-10-24
+
+### Corrections
+- Menu principal : la version du mod s'affiche enfin, en petit en bas à droite, juste à gauche du numéro du jeu
+  (elle était invisible).
+- Combat : quand un autre joueur lance une compétence, une attaque ou un objet, ses menus ne s'ouvrent et ne se
+  ferment plus plusieurs fois très vite juste avant l'action.
+
 ## [0.6.10] - 2026-10-24
 
 ### Corrections
@@ -138,7 +146,12 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.6...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.11...HEAD
+[0.6.11]: https://github.com/kipavy/e33-coop/compare/v0.6.10...v0.6.11
+[0.6.10]: https://github.com/kipavy/e33-coop/compare/v0.6.9...v0.6.10
+[0.6.9]: https://github.com/kipavy/e33-coop/compare/v0.6.8...v0.6.9
+[0.6.8]: https://github.com/kipavy/e33-coop/compare/v0.6.7...v0.6.8
+[0.6.7]: https://github.com/kipavy/e33-coop/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/kipavy/e33-coop/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/kipavy/e33-coop/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/kipavy/e33-coop/compare/v0.6.3...v0.6.4
