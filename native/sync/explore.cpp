@@ -155,6 +155,9 @@ struct S {
     bool merchant_open = false, merchant_locked = false, merchant_close = false;   // fenêtre du marchand (pilote : ouverte ; suiveur : miroir posé, fermeture demandée)
     int merchant_sent = -1, merchant_want = -1, merchant_shown = -1;
     int merchant_diag = 0;
+    int merchant_buy = -1;            // suiveur : achat du pilote à rejouer (index de l'article)
+    double merchant_seen_at = -1;     // suiveur : premier message du marchand du pilote (sélection), pour ouvrir la fenêtre
+    bool merchant_open_tried = false; // suiveur : ouverture de secours déjà tentée pour cette visite
     bool sequence_playing = false;                // OnSequenceStarted reçu, pas encore OnSequenceFinished
     // Narration (barrière) et pause
     double next_poll = 0;
@@ -1579,9 +1582,38 @@ void merchant_tick()
         }
         return;
     }
-    if (!win) { s.merchant_locked = false; s.merchant_shown = -1; return; }
+    if (!win) {
+        s.merchant_locked = false; s.merchant_shown = -1;
+        // Fenêtre absente alors que le pilote est chez le marchand depuis 6 s (ex. dialogue relancé après le combat du
+        // marchand, pas rejoué ici, 2026-10-24) : ouverte directement sur le marchand le plus proche.
+        if (s.merchant_seen_at >= 0 && !s.merchant_open_tried && s.now - s.merchant_seen_at > 6.0 && !s.choice_pending && s.choices.empty()) {
+            s.merchant_open_tried = true;
+            std::vector<UObject*> comps;
+            RC::Unreal::UObjectGlobals::FindAllOf(STR("BP_MerchantComponent_C"), comps);
+            double me[3]{}, best = 1e30;
+            UObject* merchant = nullptr;
+            const bool have_me = game::location(game::world_pawn(), me);
+            for (UObject* c : comps) {
+                UObject* owner = ue::component_owner(c);
+                double p[3]{};
+                if (!owner || !game::location(owner, p)) continue;
+                const double d = have_me ? (p[0] - me[0]) * (p[0] - me[0]) + (p[1] - me[1]) * (p[1] - me[1]) + (p[2] - me[2]) * (p[2] - me[2]) : 0;
+                if (d < best) { best = d; merchant = owner; }
+            }
+            bool ok = false;
+            if (merchant) {
+                ue::Call c(ue::get_object(game::controller(), STR("BP_DialogueSystemComponent")), STR("OpenMerchantWindow"));
+                if (c && c.set_object(STR("Merchant"), merchant).invoke()) ok = c.out_bool(STR("IsOpened"));
+            }
+            bump(ok ? "merchant_windows_opened" : "merchant_open_errors");
+            log().write("coop_follower_merchant_open", JsonObj().add("ok", ok).add("merchants", static_cast<int64_t>(comps.size()))
+                                                         .add("merchant", merchant ? ue::short_name(merchant) : std::string("null")).add("dist", std::sqrt(best)));
+        }
+        return;
+    }
     if (!s.merchant_locked) {
         s.merchant_locked = true;
+        s.merchant_open_tried = true;   // fenêtre ouverte par le dialogue : pas d'ouverture de secours
         s.merchant_close = false;
         for (const wchar_t* b : {STR("BuyItemButton"), STR("FightMerchantButton"), STR("LeaveButton")}) {
             ue::Call c(ue::get_object(win, b), STR("SetIsInteractionEnabled"));
@@ -1602,11 +1634,42 @@ void merchant_tick()
         log().write("coop_follower_merchant_closed", JsonObj().add("ok", ok));
         return;
     }
-    if (s.merchant_want >= 0 && s.merchant_want != s.merchant_shown) {
-        const auto entries = merchant_entries(win);
-        if (s.merchant_want < static_cast<int>(entries.size())) {
-            ue::Call c(entries[static_cast<size_t>(s.merchant_want)], STR("SetFocus"));
-            if (c) c.invoke();
+    const auto entries = merchant_entries(win);
+    // Achat du pilote rejoué ici (même article, même prix) : or, inventaire et stock du marchand restent identiques
+    // (D13 : ressources communes). Avant (0.6.25), seul un message s'affichait et rien ne changeait chez le suiveur.
+    if (s.merchant_buy >= 0 && s.merchant_buy < static_cast<int>(entries.size())) {
+        UObject* row = entries[static_cast<size_t>(s.merchant_buy)];
+        s.merchant_buy = -1;
+        using namespace RC::Unreal;
+        auto* sp = CastField<FStructProperty>(ue::prop(row, STR("MerchantItem")));
+        void* item = sp ? sp->ContainerPtrToValuePtr<void>(row) : nullptr;
+        FProperty* name_p = sp ? ue::struct_member(sp->GetStruct(), STR("MerchantItemRowName")) : nullptr;
+        FProperty* qty_p = sp ? ue::struct_member(sp->GetStruct(), STR("RemainingQuantity")) : nullptr;
+        const int qty_before = qty_p ? *static_cast<int32_t*>(qty_p->ContainerPtrToValuePtr<void>(item)) : -1;
+        auto read_gold = [] { auto* g = ue::value_ptr<int32_t>(game::gi(), STR("Gold")); return g ? static_cast<int64_t>(*g) : int64_t(-1); };
+        const int64_t gold_before = read_gold();
+        bool ok = false;
+        ue::Call c(ue::get_object(win, STR("MerchantComponent")), STR("TryBuyItem"));
+        if (c && name_p && c.param_size(STR("MerchantItemRowName")) == static_cast<size_t>(name_p->GetSize()))
+            ok = c.set_raw(STR("MerchantItemRowName"), name_p->ContainerPtrToValuePtr<void>(item)).invoke();
+        bump(ok ? "merchant_buys_replayed" : "merchant_buy_errors");
+        log().write("coop_follower_merchant_buy", JsonObj().add("ok", ok).add("qty_before", qty_before).add("gold_before", gold_before).add("gold_after", read_gold()));
+        s.merchant_shown = -1;   // lignes peut-être reconstruites : sélection reposée
+    }
+    // Sélection du pilote : focus sur le bouton de la ligne (surbrillance), puis panneau mis à jour (nom, stock, détails)
+    // s'il ne suit pas. Reposée si le suiveur déplace la sienne. 0.6.25 : SetFocus sur la ligne elle-même, sans effet.
+    if (s.merchant_want >= 0 && s.merchant_want < static_cast<int>(entries.size())) {
+        UObject* row = entries[static_cast<size_t>(s.merchant_want)];
+        UObject* focused = ue::get_object(win, STR("FocusedMerchantItem"));
+        if (s.merchant_want != s.merchant_shown || (focused && focused != row)) {
+            UObject* button = ue::get_object(row, STR("WBP_BaseButton"));
+            { ue::Call c(button ? button : row, STR("SetFocus")); if (c) c.invoke(); }
+            const bool by_focus = ue::get_object(win, STR("FocusedMerchantItem")) == row;
+            if (!by_focus) { ue::Call p(win, STR("OnMerchantItemFocused")); if (p) p.set_object(STR("Widget"), row).invoke(); }
+            static int logged = 0;
+            if (logged++ < 20)
+                log().write("coop_follower_merchant_focus", JsonObj().add("idx", s.merchant_want).add("by_focus", by_focus)
+                                                              .add("panel_ok", ue::get_object(win, STR("FocusedMerchantItem")) == row));
             s.merchant_shown = s.merchant_want;
         }
     }
@@ -2589,9 +2652,9 @@ bool handle(uint8_t from, const proto::Message& m)
     if (auto* dc = std::get_if<proto::DialogueChoice>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
         if (dc->hover == 1) { s.choice_hover_want = dc->index; return true; }   // survol seulement : surbrillance, pas de choix
-        if (dc->hover == 2) { s.merchant_want = dc->index; return true; }       // article du marchand sélectionné par le pilote
-        if (dc->hover == 3) { s.merchant_close = true; s.merchant_want = -1; return true; }   // le pilote a fermé la fenêtre
-        if (dc->hover == 4) { ui::toast("pilot_bought"); bump("merchant_buys_seen"); return true; }   // achat du pilote
+        if (dc->hover == 2) { s.merchant_want = dc->index; if (s.merchant_seen_at < 0) s.merchant_seen_at = s.now; return true; }   // article du marchand sélectionné par le pilote
+        if (dc->hover == 3) { s.merchant_close = true; s.merchant_want = -1; s.merchant_buy = -1; s.merchant_seen_at = -1; s.merchant_open_tried = false; return true; }   // le pilote a fermé la fenêtre
+        if (dc->hover == 4) { ui::toast("pilot_bought"); bump("merchant_buys_seen"); s.merchant_buy = dc->index; return true; }   // achat du pilote, rejoué ici
         if (dc->hover) return true;
         s.choices.emplace_back(*dc, s.now);
         touch();
