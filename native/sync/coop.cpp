@@ -1263,6 +1263,8 @@ void begin_turn_common()
     s.fa_rep = FreeAimReplay{};
 }
 
+void align_begin(uint32_t turn, const char* how);
+
 void host_turn_start(UObject* actor)
 {
     auto& b = s.battle;
@@ -1330,6 +1332,10 @@ void host_turn_start(UObject* actor)
     broadcast(proto::StateHash{b.id, b.turn, h});
     broadcast(st);
     check_hash(b.turn);
+    // D28 : tour ennemi retenu dès son début (l'état du tour vient de partir), sans attendre que le jeu écoute de
+    // lui-même les dépendances du début de tour : il ne le fait que si un effet de début de tour s'y inscrit (vu le
+    // 2026-10-24 : tours 9, 16, 30 du Lancelier Alpha jamais écoutés). Notre inscription le fait écouter.
+    if (b.cur_enemy) align_begin(b.turn, "turn_start");
 }
 
 // Client : test de resynchro (-e33perturb=N) : fausse volontairement l'état local au début du tour N,
@@ -1896,6 +1902,30 @@ std::vector<uint8_t> align_missing(uint32_t turn)
     return out;
 }
 
+// Hôte : retient le tour ennemi `turn` (déjà commencé ici : son état est parti) tant qu'un client attendu ne l'a pas
+// commencé chez lui. Inscription d'une dépendance de début de tour, résolue par align_tick.
+void align_begin(uint32_t turn, const char* how)
+{
+    auto& b = s.battle;
+    if (s.role != Role::Host || !s.turn_align || !b.active || b.ending || b.hold || b.align_active || turn <= 1) return;
+    if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
+    const std::vector<uint8_t> missing = align_missing(turn);
+    if (missing.empty()) return;
+    UObject* deps = turn_deps();
+    ue::Call reg(deps, STR("Register Dependency"));
+    if (!reg) return;
+    reg.set_object(STR("Dependency"), game::save_manager()).invoke();
+    b.align_active = true;
+    b.align_turn = turn;
+    b.align_since = s.now;
+    b.align_paused_s = 0;
+    bump("turn_aligns");
+    std::string w = "[";
+    for (uint8_t p : missing) w += (w.size() > 1 ? "," : "") + std::to_string(p);
+    log().write("coop_turn_align", JsonObj().add("turn", turn).add("how", how).add("listening", ue::get_bool(deps, STR("IsListening")))
+                                       .raw("waiting_for", w + "]"), turn);
+}
+
 void align_tick()
 {
     auto& b = s.battle;
@@ -1909,6 +1939,10 @@ void align_tick()
     const bool expired = s.now - b.align_since - b.align_paused_s > kAlignTimeout;
     if (!done && !expired) return;
     b.align_active = false;
+    // Diagnostic : le jeu écoutait-il nos dépendances (sinon la retenue n'a rien retenu) ?
+    const bool listening = ue::get_bool(turn_deps(), STR("IsListening"));
+    const bool triggered = ue::get_bool(turn_deps(), STR("HasTriggered"));
+    if (!listening) bump("turn_align_not_listening");
     ue::Call solve(turn_deps(), STR("SolveDependency"));
     if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
     b.play_since = s.now;   // le tour se joue à partir d'ici (DefenseRequest.turn_ms)
@@ -1918,7 +1952,8 @@ void align_tick()
     std::string missing = "[";
     if (!done) for (uint8_t p : align_missing(b.align_turn)) missing += (missing.size() > 1 ? "," : "") + std::to_string(p);
     log().write("coop_turn_aligned", JsonObj().add("turn", b.align_turn).add("waited_ms", ms).add("timeout", !done)
-                                         .add("paused_ms", static_cast<int>(b.align_paused_s * 1000.0)).raw("missing", missing + "]"), b.align_turn);
+                                         .add("paused_ms", static_cast<int>(b.align_paused_s * 1000.0)).raw("missing", missing + "]")
+                                         .add("listening", listening).add("triggered", triggered), b.align_turn);
 }
 
 // Parade en duo : pendant le tour qui finit, des héros d'au moins deux joueurs ont été touchés (attaque de groupe ou
@@ -2153,17 +2188,7 @@ void subscribe()
                 log().write("coop_turn_align_skipped", JsonObj().add("turn", turn).add("why", "before_turn_start"), turn);
                 return;
             }
-            ue::Call reg(ctx.Context, STR("Register Dependency"));
-            if (!reg) return;
-            reg.set_object(STR("Dependency"), game::save_manager()).invoke();
-            b.align_active = true;
-            b.align_turn = turn;
-            b.align_since = s.now;
-            b.align_paused_s = 0;
-            bump("turn_aligns");
-            std::string missing = "[";
-            for (uint8_t p : align_missing(turn)) missing += (missing.size() > 1 ? "," : "") + std::to_string(p);
-            log().write("coop_turn_align", JsonObj().add("turn", turn).add("after_turn_start", after).raw("waiting_for", missing + "]"), turn);
+            align_begin(turn, "listen");
             return;
         }
         if (s.role != Role::Client || !s.turn_dep || !s.battle.active || s.battle.strict || s.battle.ending) return;
