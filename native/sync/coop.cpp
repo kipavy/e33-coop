@@ -330,6 +330,8 @@ struct State {
     int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
     int fa_part_logs = 0;   // journal coop_free_aim_part (plafonné)
     bool menu_wait_logged = false;   // combat de l'hôte en attente : menu du jeu ouvert ici
+    double menu_wait_next_log = 0;
+    double menu_widget_since = -1;
     double fa_diag_at = -1;                                // diagnostic : contextes 0,5 s après le début d'une visée libre d'ici
     bool enemy_turn = false;                               // tour en cours : un ennemi (tous les rôles)
     int imc_logs = 0;                                      // diagnostic : contextes d'entrée au début des tours ennemis
@@ -4093,7 +4095,21 @@ void start_pending_battle()
     const bool ready = game::controller() && !game::map_change_in_progress() && !game::main_menu();
     // Menu du jeu ouvert ici (équipe, pictos, pause : jeu en pause) : lancer le combat dedans a figé le jeu de TOTOFFF
     // (2026-10-24, Lune déformée dans l'écran des pictos). On attend sa fermeture, avec un message.
-    const bool in_menu = game::pause_menu_visible();   // pas IsGamePaused : la barrière narrative met aussi le jeu en pause
+    // Écrans de menu CommonUI actifs (l'inventaire ne lève peut-être pas IsPauseMenuVisible : jeu de TOTOFFF figé
+    // encore en 0.6.20, 21:15). Liste relevée pour le diagnostic.
+    const std::string widgets = game::active_common_widgets();
+    bool menu_widget = false;
+    for (const char* k : {"Menu", "Inventory", "Character", "Equip", "Picto", "Lumina", "Skill", "Shop", "Merchant", "Journal", "Outfit", "Weapon"})
+        menu_widget = menu_widget || widgets.find(k) != std::string::npos;
+    // Filet : un écran « menu » qui resterait actif sans en être un (nom trompeur) ne bloque pas le combat plus de 90 s.
+    if (menu_widget && !game::pause_menu_visible()) { if (s.menu_widget_since < 0) s.menu_widget_since = s.now; }
+    else s.menu_widget_since = -1;
+    const bool widget_timeout = s.menu_widget_since >= 0 && s.now - s.menu_widget_since > 90.0;
+    const bool in_menu = game::pause_menu_visible() || (menu_widget && !widget_timeout);   // pas IsGamePaused : la barrière narrative met aussi le jeu en pause
+    if (in_menu && s.now >= s.menu_wait_next_log) {
+        s.menu_wait_next_log = s.now + 15.0;
+        log().write("coop_battle_wait_menu_widgets", JsonObj().add("pause_menu", game::pause_menu_visible()).add("widgets", widgets));
+    }
     if (in_menu) {
         ui::set_status("battle_menu", "battle_close_menu");
         if (!s.menu_wait_logged) { s.menu_wait_logged = true; bump("battle_starts_waiting_menu"); log().write("coop_battle_wait_menu", JsonObj()); }
@@ -4103,6 +4119,7 @@ void start_pending_battle()
     if (s.menu_wait_logged) { s.menu_wait_logged = false; ui::clear_status("battle_menu"); }
     s.world_ready_s = ready ? s.world_ready_s + kStep : 0;
     if (s.world_ready_s < 5.0) return;
+    log().write("coop_battle_start_widgets", JsonObj().add("widgets", widgets).add("widget_timeout", widget_timeout));
     const proto::BattleStart bs = *s.pending_start;
     std::string err;
     bool started = game::in_battle();

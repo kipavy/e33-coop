@@ -296,10 +296,24 @@ std::vector<Item> fetch_items(int count, std::vector<std::string>& notes)
     uint64_t total = 0;
     std::error_code ec;
     // 1. Derniers dossiers de journaux du mod (ue4ss/Mods/E33Coop/logs/<date-heure> ou remote-<date-heure>).
+    // Aussi les journaux des sauvegardes de l'installateur (Win6433coop-backup-*E4ssMods33Coopogs) : une mise à
+    // jour juste après un bug les y déplaçait, hors de portée (2026-10-24). Même nom de dossier : le plus récent gardé.
     std::vector<std::pair<fs::file_time_type, fs::path>> dirs;
-    for (auto it = fs::directory_iterator(mod_dir() / L"logs", ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+    std::vector<fs::path> roots{mod_dir() / L"logs"};
+    const fs::path win64 = mod_dir().parent_path().parent_path().parent_path();
+    for (auto it = fs::directory_iterator(win64, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
         std::error_code e2;
-        if (it->is_directory(e2)) dirs.push_back({fs::last_write_time(it->path(), e2), it->path()});
+        if (it->is_directory(e2) && it->path().filename().wstring().rfind(L"e33coop-backup-", 0) == 0)
+            roots.push_back(it->path() / L"ue4ss" / L"Mods" / L"E33Coop" / L"logs");
+    }
+    ec.clear();
+    std::set<std::wstring> names;
+    for (const fs::path& root : roots) {
+        std::error_code e1;
+        for (auto it = fs::directory_iterator(root, e1); !e1 && it != fs::directory_iterator(); it.increment(e1)) {
+            std::error_code e2;
+            if (it->is_directory(e2) && names.insert(it->path().filename().wstring()).second) dirs.push_back({fs::last_write_time(it->path(), e2), it->path()});
+        }
     }
     std::sort(dirs.begin(), dirs.end(), [](auto& a, auto& b) { return a.first > b.first; });
     for (int i = 0; i < count && i < static_cast<int>(dirs.size()); ++i) {

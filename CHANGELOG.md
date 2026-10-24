@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.22] - 2026-10-24
+
+### Corrections
+- Combat lancé par l'hôte pendant que l'autre joueur est dans l'inventaire ou un autre menu : il attend aussi la
+  fermeture de ces menus (la 0.6.19 ne reconnaissait que le menu pause).
+
 ## [0.6.21] - 2026-10-24
 
 ### Corrections
@@ -218,7 +224,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.21...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.22...HEAD
+[0.6.22]: https://github.com/kipavy/e33-coop/compare/v0.6.21...v0.6.22
 [0.6.21]: https://github.com/kipavy/e33-coop/compare/v0.6.20...v0.6.21
 [0.6.20]: https://github.com/kipavy/e33-coop/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/kipavy/e33-coop/compare/v0.6.18...v0.6.19

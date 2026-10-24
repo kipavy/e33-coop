@@ -2,6 +2,12 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 21h30 — v0.6.22 : menu du client (suite), journaux des sauvegardes de l'installateur
+
+- 21:15 (0.6.20) : combat lancé pendant que TOTOFFF était dans l'inventaire, toujours figé (hôte : `coop_battle_hold_waiting` 30 s, client jamais prêt). Journal du client introuvable : sa mise à jour (installateur 0.6.19, qui ne recopiait pas les journaux) l'a déplacé dans `Win6433coop-backup-*`.
+- Corrigé (hypothèse : l'inventaire ne lève pas `IsPauseMenuVisible`) : attente aussi tant qu'un widget CommonUI actif a un nom de menu (Menu, Inventory, Character, Equip, Picto, Lumina, Skill, Shop, Merchant, Journal, Outfit, Weapon), filet de 90 s si seul ce critère bloque ; journaux `coop_battle_wait_menu_widgets` (toutes les 15 s) et `coop_battle_start_widgets` (écrans actifs au lancement).
+- `fetch-logs` lit aussi les journaux des sauvegardes de l'installateur (`Win6433coop-backup-*`). Le journal du bug de 21:15 chez TOTOFFF devrait donc être récupérable une fois son jeu en 0.6.22.
+
 ## 2026-10-24, 21h15 — v0.6.21 : réparation des buffs manquants
 
 - `coop_repair_error` « buff class not loaded: BP_BattleBuff_Powerful_125_C » à chaque tour contre l'Évêque alors que ce buff existait chez le client (sur l'Évêque) : `find_class_by_short_name` reposait sur `FindAllOf("BlueprintGeneratedClass")`, qui ne rend rien (constat du 2026-10-23 dans mount.cpp). Désormais : classe d'une instance vivante (`FindFirstOf`), sinon parcours de tous les objets. Non testé (`p3_resync_client` couvrirait une réparation de buffs).
