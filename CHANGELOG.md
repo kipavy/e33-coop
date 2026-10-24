@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.13] - 2026-10-24
+
+### Corrections
+- Combat : les ennemis qui tirent leur comportement au sort au début du combat (ex. le Portier) font les mêmes attaques
+  chez tous les joueurs (l'un pouvait voir une attaque de zone, l'autre une attaque sur un seul héros).
+
 ## [0.6.12] - 2026-10-24
 
 ### Corrections
@@ -154,7 +160,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.12...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.13...HEAD
+[0.6.13]: https://github.com/kipavy/e33-coop/compare/v0.6.12...v0.6.13
 [0.6.12]: https://github.com/kipavy/e33-coop/compare/v0.6.11...v0.6.12
 [0.6.11]: https://github.com/kipavy/e33-coop/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/kipavy/e33-coop/compare/v0.6.9...v0.6.10
