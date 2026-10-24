@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-25, 00h50 — v0.6.30 : équipement des builds reçus (non testé)
+
+- 00:24 (0.6.28) : TOTOFFF change l'arme de Lune, Killian voit toujours « Lunerim » même en rouvrant l'inventaire. Build reçu et appliqué chez l'hôte (`coop_build_accepted`), mais empreinte toujours différente (`coop_build_hash_mismatch` à chaque application, Frey / Maelle aussi chez le client). `LoadCharacterState` reprend `EquippedItemsPerSlot` (emplacement -> identifiant) mais pas `EquipmentInstancePerSlot` (objet réellement équipé). Désormais, après chaque chargement : instance de `InventorySystem.ItemInstances` portant cet identifiant -> `ReplaceItemInstanceInSlot` (`coop_build_equip` : item, was, found, ok). Si found est faux, les clés de `ItemInstances` ne sont pas les identifiants : chercher par `ItemStaticData`.
+
 ## 2026-10-25, 00h40 — v0.6.29 : combat demandé par le client meneur (D34), tirs en exploration, marchand verrouillé (non testé)
 
 - D34 : client meneur dont le pion lance un combat -> `BattleStart` n° 0 à l'hôte, qui lance le même ennemi (`coop_battle_request`, `coop_battle_request_received`). Cas du 24/10 22:27 : 17 s d'écart entre les deux combats.

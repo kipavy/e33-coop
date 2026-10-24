@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.30] - 2026-10-25
+
+### Corrections
+- Équipement : une arme ou un picto changé par l'autre joueur sur son personnage apparaît aussi chez vous (avant,
+  l'ancienne arme restait affichée et utilisée).
+
 ## [0.6.29] - 2026-10-25
 
 ### Corrections
@@ -273,7 +279,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.29...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.30...HEAD
+[0.6.30]: https://github.com/kipavy/e33-coop/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/kipavy/e33-coop/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/kipavy/e33-coop/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/kipavy/e33-coop/compare/v0.6.26...v0.6.27
