@@ -1,0 +1,23 @@
+{
+  "name": "p9_rng_host",
+  "description": "D30 : vrai jeu hôte face au faux client, équipe Lune + Monoco (tous deux à l'hôte). Les tirages de la mise en place du combat (position de départ de la roue de Monoco au BeginPlay, équipement de début de combat) sont dérivés de la graine de l'hôte et publiés avec le BattleStart (tour 0). Monoco joue des compétences qui font tourner sa roue, Lune des compétences qui créent puis consomment des taches. Produit l'enregistrement rejoué par p9_rng_client et p9_rng_old_client.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Lune", "Monoco"],
+  "timeout_s": 600,
+  "wait_players": 1,
+  "max_turns": 40,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Lune", "type": "skill", "skill": "ElementalTrick", "combo": ["success", "perfect"], "else": { "type": "attack" } },
+    { "hero": "Lune", "type": "skill", "skill": "Mayhem", "else": { "type": "attack" } },
+    { "hero": "Lune", "type": "attack" },
+    { "hero": "Monoco", "type": "skill", "skill": "ChevaliereCAC", "else": { "type": "attack" } },
+    { "hero": "Monoco", "type": "skill", "skill": "StormBlood", "else": { "type": "skill", "skill": "ChalierRelentlessSword", "else": { "type": "attack" } } },
+    { "hero": "Monoco", "type": "attack" }
+  ],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=7340291"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_basic.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "actions_skill": ">=1", "setup_draws_replaced": ">=1", "setup_draws_natural": "0", "setup_windows_missing": "0" }
+}

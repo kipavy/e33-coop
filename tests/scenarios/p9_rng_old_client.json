@@ -1,0 +1,16 @@
+{
+  "name": "p9_rng_old_client",
+  "description": "D30 (avant) : comme p9_rng_client avec -e33setupdraws=0 (ancien comportement : tirages de la mise en place laissés au jeu). Montre l'écart : tirages de gameplay du tour 0 non synchronisés (setup_draws_natural), position de départ de la roue de Monoco tirée au hasard ici (start_mech_diffs, coop_start_mech), réparée au tour 1 (raw_hash_diffs).",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Lune", "Monoco"],
+  "timeout_s": 600,
+  "max_turns": 40,
+  "shots_every_s": 6,
+  "actions": [{ "type": "attack" }],
+  "defense": ["fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33setupdraws=0"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p9_rng_host.jsonl", "--paced", "1", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "remote_actions": ">=2", "rewards_checked": "any", "setup_draws_replaced": "0", "setup_draws_natural": ">=1",
+              "start_mech_diffs": "any", "raw_mech_diffs": "any", "raw_hash_diffs": "any", "repair_failures": "0" }
+}

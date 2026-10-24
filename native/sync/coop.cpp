@@ -232,6 +232,24 @@ struct Battle {
     double timer_elapsed = 0;                              // temps de jeu du tour (hors pauses et attente des joueurs)
 };
 
+// Tirages de la mise en place d'un combat (D30) : avant le tour 1 (BeginPlay des héros, équipement, effets de début de
+// combat). Ex. : position de départ de la roue de Monoco (BP_UniqueMechanic_TransformMasks_Component, ReceiveBeginPlay).
+// Fenêtre ouverte au lancement du combat (StartBattleNEW, ou avis précoce de l'hôte), fermée au tour 1 ou à la fin.
+struct SetupDraws {
+    bool open = false;
+    bool seeded = false;                                   // graine de l'hôte connue ici (sinon tirages laissés au jeu)
+    bool from_notice = false;                              // hôte : ouverte par l'avis précoce (StartBattleNEW pas encore vu)
+    bool bm_started = false;                               // StartBattleNEW vu pour cette fenêtre
+    uint64_t seed = 0;
+    std::string source;                                    // d'où vient la graine (journal)
+    double opened_at = 0;
+    int traced = 0;
+    int natural_logs = 0;
+    std::map<uint32_t, uint16_t> rank;                     // flux -> rang du prochain tirage
+    std::map<uint64_t, double> draws;                      // (flux << 16 | rang) -> valeur
+    std::map<uint32_t, std::string> names;
+};
+
 struct State {
     Role role = Role::Solo;
     std::unique_ptr<net::Transport> transport;
@@ -265,6 +283,8 @@ struct State {
     double replay_lag_s = 1.0;                             // décalage minimal derrière son propriétaire (-e33replaylag) : ses QTE sont connus à temps
     std::optional<uint64_t> fixed_seed;                    // hôte : -e33seed=N
     std::vector<std::string> draw_filter;                  // diagnostic : -e33draws=none | sous-chaînes
+    bool setup_draws = true;                               // -e33setupdraws=0 : ancien comportement (mise en place laissée au jeu)
+    SetupDraws setup;
     std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
     std::optional<uint32_t> perturb_end_turn;              // client : -e33perturbend=N (test de la fin imposée : ennemis increvables ici)
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
@@ -975,6 +995,11 @@ void handle(Peer& p, proto::Message& m)
         s.battle.start_rx_at = s.now;
         for (auto& o : bs->owners) s.battle.owner_by_spot[o.spot] = o.player_id;
         s.battle.rng_seed = bs->rng_seed;
+        // Mise en place déjà commencée ici avec la graine de l'avis précoce : ce doit être la même (D30).
+        if (s.setup.open && s.setup.seeded && s.setup.seed != bs->rng_seed) {
+            bump("setup_seed_mismatches");
+            log().write("coop_setup_seed_mismatch", JsonObj().add("setup", std::to_string(s.setup.seed)).add("host", std::to_string(bs->rng_seed)).add("source", s.setup.source));
+        }
         s.battle.turn_timer_s = bs->turn_timer_s;
         s.battle.duo_parry = bs->duo_parry != 0;   // réglage de l'hôte, jamais le nôtre : même calcul partout
         log().write("coop_battle_start_received", JsonObj().add("battle", bs->battle_id).add("encounter", bs->encounter));
@@ -1029,14 +1054,24 @@ UObject* script_caller(HookCtx& ctx, UFunction** node_out = nullptr)
     return nullptr;
 }
 
-// Diagnostic : chaîne des cadres de script d'un tirage (5 premiers appels par fonction, puis 600 par combat).
+// Fenêtre de mise en place ouverte (D30). Sécurité : jamais plus de 120 s (un combat annulé ne la laisse pas ouverte
+// en exploration, où les tirages ne doivent jamais être touchés).
+bool setup_window()
+{
+    return s.setup.open && s.now - s.setup.opened_at < 120.0;
+}
+
+// Diagnostic : chaîne des cadres de script d'un tirage (5 premiers appels par fonction, puis 600 par combat, et 400
+// pendant la mise en place).
 void trace_random(HookCtx& ctx, const std::string& fname)
 {
     static std::map<std::string, int> seen;
     const bool early = seen[fname]++ < 5;
     const bool in_battle = s.battle.active && s.battle.traced_draws < 600;
-    if (!early && !in_battle) return;
+    const bool in_setup = !in_battle && setup_window() && s.setup.traced < 400;
+    if (!early && !in_battle && !in_setup) return;
     if (in_battle) ++s.battle.traced_draws;
+    if (in_setup) ++s.setup.traced;
     std::string frames = "[";
     RC::Unreal::FFrame* f = &ctx.TheStack;
     for (int depth = 0; f && depth < 4; ++depth) {
@@ -1046,7 +1081,7 @@ void trace_random(HookCtx& ctx, const std::string& fname)
         if (prev == f) break;
         f = prev;
     }
-    log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).raw("frames", frames + "]")
+    log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).add("setup", setup_window() && !(s.battle.active && s.battle.turn > 0)).raw("frames", frames + "]")
                                  .add("has_result", ctx.RESULT_DECL != nullptr), s.battle.turn);
 }
 
@@ -1062,11 +1097,13 @@ uint64_t splitmix64(uint64_t x)
 }
 
 // Uniforme dans [0, 1), identique sur toutes les instances pour (graine, tour, flux, rang).
-double derived_uniform(uint32_t turn, uint32_t key, uint16_t rank)
+double derived_uniform_seed(uint64_t seed, uint32_t turn, uint32_t key, uint16_t rank)
 {
-    const uint64_t h = splitmix64(s.battle.rng_seed ^ splitmix64((static_cast<uint64_t>(turn) << 32) | key) ^ splitmix64(0x5EED0000ull + rank));
+    const uint64_t h = splitmix64(seed ^ splitmix64((static_cast<uint64_t>(turn) << 32) | key) ^ splitmix64(0x5EED0000ull + rank));
     return static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0);
 }
+
+double derived_uniform(uint32_t turn, uint32_t key, uint16_t rank) { return derived_uniform_seed(s.battle.rng_seed, turn, key, rank); }
 
 uint32_t fnv32(const std::string& str)
 {
@@ -1094,17 +1131,21 @@ void record_draw(const std::string& stream, uint32_t key, uint16_t rank, double 
 
 // Nom du flux si le tirage vient du gameplay (premier appelant BP), vide sinon.
 // Gameplay (traces du 2026-10-19, GAME-INTERNALS §15) : IA d'un ennemi, critiques, Luminas (BP_LU_*), activation de
-// buffs, effets de buffs, scripts de compétence, récompenses (RollBattleRewards + système de butin).
-std::string gameplay_stream(HookCtx& ctx, const std::string& fname)
+// buffs, effets de buffs, scripts de compétence, récompenses (RollBattleRewards + système de butin), mécaniques propres
+// des héros (composants *Mechanic* / StainHolder : roue de Monoco, taches de Lune…, D30).
+// setup : mise en place du combat (avant le tour 1) : le cache des ennemis est celui du combat précédent chez l'hôte,
+// il n'est pas consulté (même nom de flux partout).
+std::string gameplay_stream(HookCtx& ctx, const std::string& fname, bool setup = false)
 {
     UFunction* node = nullptr;
     UObject* caller = script_caller(ctx, &node);
     if (!caller) return {};
-    const int es = cached_enemy_spot(caller);
+    const int es = setup ? -1 : cached_enemy_spot(caller);
     const std::string cls = game::char_class(caller);
     const std::string fn = ue::short_name(node);
     const bool gameplay = es >= 0 || cls == "BP_BattleDamages_C" || cls.rfind("BP_LU_", 0) == 0 || cls == "AC_jRPG_CharacterBattleStats_C" ||
                           cls.rfind("BP_BattleBuff", 0) == 0 || cls.rfind("BP_LootSystemComponent", 0) == 0 ||
+                          cls.find("Mechanic") != std::string::npos || cls.find("StainHolder") != std::string::npos ||
                           (cls == "AC_jRPG_BattleManager_C" && fn == "RollBattleRewards") || ue::is_a(caller, STR("BP_Battle_SkillScript_C"));
     if (!gameplay) return {};
     std::string name = cls + ":" + fn + ":" + fname;
@@ -1112,12 +1153,29 @@ std::string gameplay_stream(HookCtx& ctx, const std::string& fname)
     return name;
 }
 
-// Remplace la valeur de retour par la valeur dérivée ; l'hôte la publie pour vérification.
-void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string& stream)
+// Tirage de la mise en place (D30) : graine de la fenêtre, « tour 0 », rang propre à la fenêtre.
+double next_setup_uniform(const std::string& stream, uint32_t& key, uint16_t& rank)
+{
+    key = fnv32(stream);
+    rank = s.setup.rank[key]++;
+    s.setup.names.emplace(key, stream);
+    return derived_uniform_seed(s.setup.seed, 0, key, rank);
+}
+
+void record_setup_draw(const std::string& stream, uint32_t key, uint16_t rank, double v, double a, double b)
+{
+    bump("setup_draws_replaced");
+    s.setup.draws[(static_cast<uint64_t>(key) << 16) | rank] = v;
+    log().write("coop_draw", JsonObj().add("stream", stream).add("rank", static_cast<int>(rank)).add("value", v).add("a", a).add("b", b).add("setup", true), 0);
+}
+
+// Remplace la valeur de retour par la valeur dérivée ; l'hôte la publie pour vérification (mise en place : publiée
+// avec le BattleStart, voir host_turn_start).
+void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string& stream, bool setup = false)
 {
     uint32_t key = 0;
     uint16_t rank = 0;
-    const double u = next_uniform(stream, key, rank);
+    const double u = setup ? next_setup_uniform(stream, key, rank) : next_uniform(stream, key, rank);
     auto num = [&](const wchar_t* name, double& out) {
         int size = 0;
         void* p = ue::param_address(ctx, f, name, &size);
@@ -1165,7 +1223,8 @@ void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string
         log().write("coop_draw_param_missing", JsonObj().add("stream", stream), s.battle.turn);
         return;
     }
-    record_draw(stream, key, rank, v, a, b);
+    if (setup) record_setup_draw(stream, key, rank, v, a, b);
+    else record_draw(stream, key, rank, v, a, b);
 }
 
 bool draw_allowed(const std::string& stream)
@@ -1231,6 +1290,126 @@ void compare_draws(uint32_t turn)
     s.battle.host_draws.erase(turn);
 }
 
+// --- Mise en place du combat (D30) ---------------------------------------------------------
+
+void setup_reset(uint64_t seed, bool seeded, const std::string& source)
+{
+    s.setup = SetupDraws{};
+    s.setup.open = true;
+    s.setup.opened_at = s.now;
+    s.setup.seed = seed;
+    s.setup.seeded = seeded;
+    s.setup.source = source;
+    log().write("coop_setup_open", JsonObj().add("seeded", seeded).add("source", source).add("seed", std::to_string(seed)).add("enabled", s.setup_draws));
+}
+
+// Hôte : graine du prochain combat choisie dès son lancement (avis précoce d'un combat de la carte, ou StartBattleNEW,
+// commun à tous les lancements). host_turn_start la reprend pour le BattleStart : mise en place et tours, même graine.
+void host_setup_open(bool notice)
+{
+    const auto& u = s.setup;
+    const bool recent = u.open && s.now - u.opened_at < 30.0;
+    // Avis précoce : StartBattleNEW a pu passer juste avant (même combat). StartBattleNEW : fenêtre gardée seulement si
+    // elle vient de l'avis précoce de ce combat.
+    const bool keep = recent && (notice ? true : (u.from_notice && !u.bm_started));
+    if (!keep) {
+        const uint64_t seed = s.fixed_seed ? *s.fixed_seed
+                                           : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ (static_cast<uint64_t>(s.next_battle_id) << 40));
+        setup_reset(seed, true, notice ? "host notice" : "host StartBattleNEW");
+        s.setup.from_notice = notice;
+    }
+    if (!notice) s.setup.bm_started = true;
+}
+
+// Client : graine du combat de l'hôte, si elle est déjà connue au lancement du combat ici (combat lancé par le mod après
+// le BattleStart, ou engagé par le pion suiveur après l'avis précoce). Sinon tirages laissés au jeu (réparés au tour 1).
+void client_setup_open()
+{
+    const proto::BattleStart* p = nullptr;
+    std::string src = "none";
+    if (s.pending_start) { p = &*s.pending_start; src = "pending BattleStart"; }
+    else if (s.last_start && s.last_start->battle_id == s.battle.id && s.battle.turn == 0 && !s.battle.finalized) { p = &*s.last_start; src = "BattleStart"; }
+    else if (s.early_start && s.now - s.early_start_at < 30.0 && s.early_start->rng_seed != 0) { p = &*s.early_start; src = "notice"; }
+    setup_reset(p ? p->rng_seed : 0, p && p->rng_seed != 0, src);
+    s.setup.bm_started = true;
+}
+
+// Fin de la mise en place (tour 1, ou fin de combat) : ses tirages deviennent ceux du « tour 0 » du combat.
+void setup_close()
+{
+    if (!s.setup.open) return;
+    s.setup.open = false;
+    for (auto& [k, v] : s.setup.draws) s.battle.local_draws[0][k] = v;
+    for (auto& [k, n] : s.setup.names) s.battle.stream_names.emplace(k, n);
+    log().write("coop_setup_closed", JsonObj().add("draws", static_cast<int>(s.setup.draws.size())).add("seeded", s.setup.seeded)
+                                         .add("source", s.setup.source), s.battle.turn);
+}
+
+// Client, tour 1 : tirages de la mise en place comparés à ceux de l'hôte (publiés avec son BattleStart). Un hôte plus
+// ancien (ou un enregistrement d'avant D30) n'en publie pas : rien à comparer.
+void compare_setup_draws()
+{
+    auto& b = s.battle;
+    if (!b.host_draws.count(0) || !s.setup_draws || !s.setup.seeded) {
+        log().write("coop_setup_draws_unverified", JsonObj().add("local", static_cast<int>(b.local_draws[0].size())).add("host_published", b.host_draws.count(0) > 0)
+                                                       .add("seeded", s.setup.seeded).add("enabled", s.setup_draws), b.turn);
+        b.local_draws.erase(0);
+        b.host_draws.erase(0);
+        return;
+    }
+    compare_draws(0);
+}
+
+// Client, tour 1 : mécaniques propres des héros (roue de Monoco, taches de Lune…) comparées à l'hôte avant toute
+// réparation. Chaque champ différent compte (start_mech_diffs) ; position de départ de la roue journalisée des deux côtés.
+void check_start_mech(const proto::StateSync& mine, const proto::StateSync& host)
+{
+    for (const auto& h : host.units) {
+        const proto::UnitState* m = nullptr;
+        for (const auto& x : mine.units) if (x.unit.kind == h.unit.kind && x.unit.spot == h.unit.spot) { m = &x; break; }
+        if (!m) continue;
+        for (const auto& hf : h.mech) {
+            const proto::MechField* mf = nullptr;
+            for (const auto& x : m->mech) if (x.name == hf.name) { mf = &x; break; }
+            const bool differs = !mf || mf->value != hf.value;
+            if (differs) bump("start_mech_diffs");
+            if (differs || hf.name.find("Starting_Position") != std::string::npos || hf.name.find("CurrentMeter") != std::string::npos)
+                log().write("coop_start_mech", JsonObj().add("unit", h.cls).add("field", hf.name).add("host", hf.value)
+                                                   .add("local", mf ? mf->value : -1).add("same", !differs), 1);
+        }
+    }
+}
+
+// Mécanique propre (champs des composants *Mechanic* / StainHolder) différente pour au moins un héros.
+bool mech_differs(const proto::StateSync& mine, const proto::StateSync& host)
+{
+    for (const auto& h : host.units) {
+        for (const auto& m : mine.units) {
+            if (m.unit.kind != h.unit.kind || m.unit.spot != h.unit.spot) continue;
+            if (m.mech.size() != h.mech.size()) return true;
+            for (size_t i = 0; i < h.mech.size(); ++i)
+                if (m.mech[i].name != h.mech[i].name || m.mech[i].value != h.mech[i].value) return true;
+        }
+    }
+    return false;
+}
+
+// Tirage hors des tours d'un combat. Dans la fenêtre de mise en place, avec la graine : valeur dérivée (D30). Sinon,
+// tirage de gameplay laissé au jeu, compté (setup_draws_natural) : il peut différer d'une machine à l'autre.
+// Hors combat et hors fenêtre (exploration) : jamais touché ni compté.
+void offturn_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string& fname)
+{
+    const bool window = setup_window();
+    if (!window && !s.battle.active) return;
+    const std::string stream = gameplay_stream(ctx, fname, true);
+    if (stream.empty()) return;
+    if (window && s.setup.seeded && s.setup_draws && draw_allowed(stream)) { replace_draw(ctx, f, kind, stream, true); return; }
+    bump("setup_draws_natural");
+    if (++s.setup.natural_logs <= 40)
+        log().write("coop_draw_offturn", JsonObj().add("stream", stream).add("value", natural_value(ctx, kind)).add("window", window)
+                                             .add("seeded", s.setup.seeded).add("enabled", s.setup_draws), s.battle.turn);
+}
+
 // --- Synchro des tours ---------------------------------------------------------------------
 
 std::vector<std::wstring> party_wide(const std::vector<std::string>& v)
@@ -1254,6 +1433,7 @@ uint8_t default_owner(int index, int spot, const std::string& name)
 void begin_turn_common()
 {
     ++s.battle.turn;
+    if (s.battle.turn == 1) setup_close();   // mise en place finie : tirages des tours à partir d'ici (D30)
     s.battle.draw_rank.clear();
     s.battle.hit_seq.clear();
     s.battle.combo_seq.clear();
@@ -1289,7 +1469,14 @@ void host_turn_start(UObject* actor)
                 bump("world_battles");
             }
         }
-        b.rng_seed = s.fixed_seed ? *s.fixed_seed : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ b.id);
+        // Graine choisie au lancement du combat (mise en place, D30) ; repli : tirée ici comme avant.
+        if (setup_window() && s.setup.seeded) {
+            b.rng_seed = s.setup.seed;
+        } else {
+            b.rng_seed = s.fixed_seed ? *s.fixed_seed : splitmix64((static_cast<uint64_t>(GetTickCount64()) << 20) ^ s.session_id ^ b.id);
+            bump("setup_windows_missing");
+            log().write("coop_setup_missing", JsonObj().add("open", s.setup.open).add("age_s", s.setup.open ? s.now - s.setup.opened_at : -1.0));
+        }
         bs.rng_seed = b.rng_seed;
         b.turn_timer_s = s.turn_timer_s;
         bs.turn_timer_s = s.turn_timer_s;
@@ -1308,6 +1495,16 @@ void host_turn_start(UObject* actor)
         for (auto& p : s.peers) if (in_game(p)) b.hold = true;
         b.hold_since = s.now;
         broadcast(bs);
+        // Tirages de la mise en place (tour 0), pour vérification chez les clients (comparés à leur tour 1).
+        // Par paquets de 32 (le protocole refuse les listes de plus de 64 ; une mise en place en fait ~100).
+        if (setup_window() && !s.setup.draws.empty()) {
+            proto::Draws d{b.id, 0, {}};
+            for (auto& [k, v] : s.setup.draws) {
+                d.draws.push_back({static_cast<uint32_t>(k >> 16), static_cast<uint16_t>(k & 0xFFFF), v});
+                if (d.draws.size() == 32) { broadcast(d); d.draws.clear(); }
+            }
+            if (!d.draws.empty()) broadcast(d);
+        }
         log().write("coop_battle_inventory", JsonObj().raw("inventory", game::battle_inventory_json()));
         // Diagnostic : composants de chaque héros (mécaniques propres : perfection, taches, masques… à couvrir par le hash).
         for (UObject* h : game::players()) {
@@ -1527,14 +1724,17 @@ void client_turn_finish(UObject* actor)
     }
     // Les tirages de l'hôte pour le tour précédent sont arrivés avant son TurnStart (lien ordonné).
     if (b.turn > 1) compare_draws(b.turn - 1);
+    else if (b.turn == 1) compare_setup_draws();
     const proto::StateSync& host = b.host_sync[b.turn];
     // Comparaison au même instant que l'hôte (début du tour) : photo prise alors si la vérification est différée.
     const proto::StateSync mine = deferred ? b.dep_start : sync::snapshot(b.id, b.turn);
+    if (b.turn == 1) check_start_mech(mine, host);
     uint64_t h = sync::hash(mine, au);
     const uint64_t host_hash = sync::hash(host, au);
     if (h != host_hash) {
         // La simulation locale a divergé : log détaillé, puis resynchronisation depuis l'état de l'hôte.
         bump("raw_hash_diffs");
+        if (mech_differs(mine, host)) bump("raw_mech_diffs");   // écart sur une mécanique propre (roue, taches…, D30)
         const proto::StateSync now = deferred ? sync::snapshot(b.id, b.turn) : mine;
         const proto::StateSync target = deferred ? shift_host_state(host, mine, now) : host;
         const sync::RepairStats r = sync::repair(now, target);
@@ -1731,6 +1931,29 @@ proto::BattleRewards read_rewards(void* st_ptr, RC::Unreal::UStruct* st)
     return r;
 }
 
+// Client : butin de l'hôte écrit dans les récompenses d'ici (même nombre d'entrées : objet et quantité de chacune).
+// Un nombre d'entrées différent n'est pas réparable ici (tableau du jeu) : compté (rewards_loot_unrepaired).
+bool write_loot(void* st_ptr, RC::Unreal::UStruct* st, const std::vector<proto::LootEntry>& loot)
+{
+    using namespace RC::Unreal;
+    auto* ap = CastField<FArrayProperty>(ue::struct_member(st, STR("RolledLootEntries")));
+    if (!ap) return false;
+    auto* inner = CastField<FStructProperty>(ap->GetInner());
+    auto* arr = static_cast<FScriptArray*>(ap->ContainerPtrToValuePtr<void>(st_ptr));
+    if (!inner || !arr || arr->Num() != static_cast<int32>(loot.size())) return false;
+    UStruct* es = inner->GetStruct();
+    FProperty* id = ue::struct_member(es, STR("ItemID"));
+    FProperty* qty = ue::struct_member(es, STR("Quantity"));
+    if (!id || !qty) return false;
+    auto* data = static_cast<uint8_t*>(arr->GetData());
+    for (size_t i = 0; i < loot.size(); ++i) {
+        void* e = data + i * inner->GetSize();
+        *static_cast<FName*>(id->ContainerPtrToValuePtr<void>(e)) = FName(ue::from_utf8(loot[i].item).c_str(), FNAME_Add);
+        *static_cast<int32_t*>(qty->ContainerPtrToValuePtr<void>(e)) = loot[i].quantity;
+    }
+    return true;
+}
+
 void finalize_battle(const char* why)
 {
     auto& b = s.battle;
@@ -1747,6 +1970,7 @@ void finalize_battle(const char* why)
     b.finalized = true;
     bump("battles_finalized");
     b.active = false;
+    s.setup.open = false;   // combat fini avant son tour 1 : jamais de fenêtre de mise en place en exploration (D30)
     set_local_input(true, "battle end");
     ui::clear_status("turn");
     if (b.hold) { b.hold = false; explore::hold_pause("battle_start", false); }
@@ -2075,9 +2299,18 @@ void subscribe()
         n.world_enemy = ue::short_name(ctx.Context);
         n.engage = static_cast<uint8_t>(ue::read_param_int(ctx, f, STR("EngagementType")).value_or(0));
         n.party = game::party_names();
+        host_setup_open(true);   // graine du combat dès l'avis : le pion suiveur du client peut engager avant le BattleStart (D30)
+        n.rng_seed = s.setup.seed;
         broadcast(n);
         bump("battle_notices_sent");
         log().write("coop_battle_notice", JsonObj().add("enemy", n.world_enemy).add("engage", static_cast<int>(n.engage)));
+    });
+
+    // Lancement d'un combat, quel que soit le chemin (ennemi de la carte, game action, dialogue) : fenêtre des tirages
+    // de la mise en place (D30), avant le BeginPlay des héros (roue de Monoco) et l'équipement de début de combat.
+    bus.pre(fn(game::path::BattleMgr, L"StartBattleNEW"), [](HookCtx&, UFunction*) {
+        if (s.role == Role::Host) host_setup_open(false);
+        else if (s.role == Role::Client) client_setup_open();
     });
 
     // Client : le personnage qui joue est celui de l'hôte, pas celui que le jeu local a calculé. L'ordre dépend de
@@ -2598,7 +2831,9 @@ void subscribe()
             // Threads d'animation, chargement… : jamais un tirage de gameplay, et aucun accès au jeu permis ici.
             if (!on_game_thread()) { bump("off_thread_draws"); return; }
             trace_random(ctx, fname);
-            if (!s.battle.active || s.battle.turn == 0 || !ctx.RESULT_DECL) return;
+            if (!ctx.RESULT_DECL) return;
+            // Avant le tour 1 : mise en place du combat (D30).
+            if (!s.battle.active || s.battle.turn == 0) { offturn_draw(ctx, f, kind, fname); return; }
             const std::string stream = gameplay_stream(ctx, fname);
             if (!stream.empty() && draw_allowed(stream)) replace_draw(ctx, f, kind, stream);
             else if (!stream.empty()) log().write("coop_draw_natural", JsonObj().add("stream", stream).add("value", natural_value(ctx, kind)), s.battle.turn);
@@ -2681,6 +2916,8 @@ void subscribe()
                 if (b.host_rewards) {
                     if (auto* p = ue::struct_member(sp->GetStruct(), STR("ExperienceGained"))) *static_cast<int32_t*>(p->ContainerPtrToValuePtr<void>(addr)) = b.host_rewards->xp;
                     if (auto* p = ue::struct_member(sp->GetStruct(), STR("GoldAcquired"))) *static_cast<int32_t*>(p->ContainerPtrToValuePtr<void>(addr)) = b.host_rewards->gold;
+                    if (write_loot(addr, sp->GetStruct(), b.host_rewards->loot)) bump("rewards_loot_rewritten");
+                    else bump("rewards_loot_unrepaired");
                 }
             }
         }
@@ -3121,13 +3358,15 @@ void read_settings()
     for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages",
                           "session_ended", "players_left", "heroes_taken_over", "peer_timeouts", "sessions_rejected", "battle_ready_timeouts", "turn_timer_expired",
                           "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
-                          "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions"})
+                          "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions",
+                          "setup_draws_replaced", "setup_draws_natural", "start_mech_diffs", "raw_mech_diffs"})
         s.counters[c] = 0;
 
     s.game_build = read_build_id();
     s.gameplay_mods = read_gameplay_mods();
     s.session_id = GetTickCount();
     if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
+    s.setup_draws = arg(L"e33setupdraws") != L"0";
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
     if (const std::wstring p = arg(L"e33perturbend"); !p.empty()) s.perturb_end_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
