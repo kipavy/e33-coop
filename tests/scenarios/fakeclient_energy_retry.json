@@ -1,0 +1,13 @@
+{
+  "player_name": "FakeClient",
+  "game_build": 23765773,
+  "mod_version": "current",
+  "gameplay_mods": [],
+  "session": true,
+  "actions": [
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
+  ],
+  "defense": ["fail"],
+  "expect": { "battle_starts": ">=2", "defeat_reserve_no": "2", "defeat_retries": "1", "defeat_abandons": "1" }
+}

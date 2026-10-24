@@ -1,0 +1,24 @@
+{
+  "name": "p3_defeat_choice_old_client",
+  "description": "Avant D31 (-e33defeatsync=0), même rejeu que p3_defeat_choice_client : la fenêtre de choix reste ouverte chez le client (il peut choisir seul), rien ne suit la réponse de l'hôte. Le test regarde 15 s puis s'arrête (aucun clic).",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Lune"],
+  "setup": { "Lune": { "hp": 1, "shield": 0 } },
+  "timeout_s": 600,
+  "max_turns": 30,
+  "shots_every_s": 6,
+  "actions": [
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
+  ],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "battle", "timeout": 400 },
+    { "do": "defeat", "choice": "watch", "watch_s": 15, "timeout": 120 },
+    { "do": "end" }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33defeatsync=0"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_defeat_choice_host.jsonl", "--timeout", "600"] },
+  "expect": { "defeat_modals_seen": ">=1", "defeat_modal_open_ms_max": ">=10000", "defeat_follows_done": "0", "hero_deaths": ">=1" }
+}

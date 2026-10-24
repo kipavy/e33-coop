@@ -1,0 +1,24 @@
+{
+  "name": "p3_defeat_retry_host",
+  "description": "Défaite, choix de l'hôte (D31), combat contre un ennemi de la carte (« rejouable » ?) : équipe réduite à Lune (1 PV, jouée par le faux client). Défaite -> réserve refusée -> « Réessayer » (le jeu recharge la dernière partie et relance le combat) -> nouvelle défaite -> réserve refusée -> « Abandonner ». Exploratoire : vérifie que la fenêtre « Réessayer / Abandonner » existe pour ce combat et ce que fait chaque réponse (coop_defeat_trace, save_trace). Produit l'enregistrement rejoué par p3_defeat_retry_client.",
+  "save": "e33coop-test/TEST_B",
+  "timeout_s": 900,
+  "max_turns": 30,
+  "shots_every_s": 6,
+  "setup": { "Lune": { "hp": 1, "shield": 0 } },
+  "defense": ["fail"],
+  "explore": [
+    { "do": "wait", "s": 3 },
+    { "do": "set_party", "party": ["Lune"] },
+    { "do": "wait", "s": 3 },
+    { "do": "world_battle", "players": 1 },
+    { "do": "defeat", "reserve": "no", "choice": "retry", "after_s": 3, "timeout": 120 },
+    { "do": "battle", "timeout": 400 },
+    { "do": "defeat", "reserve": "no", "choice": "abandon", "after_s": 3, "timeout": 120 },
+    { "do": "wait_world", "s": 5, "timeout": 240 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Lune:1", "-e33seed=1865"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_energy_retry.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": { "defeat_screens": "2", "defeat_reserve_no_chosen": "2", "defeat_retries_chosen": "1", "defeat_abandons_chosen": "1", "defeat_choices_published": "4", "hero_deaths": ">=2" }
+}

@@ -1,11 +1,11 @@
 {
   "name": "p3_defeat_choice_client",
-  "description": "Défaite, choix de l'hôte (D31), côté client (Lune) face au faux hôte qui rejoue p3_defeat_choice_host : l'hôte choisit « Réessayer » (le client ne peut pas choisir, sa fenêtre de choix est refermée ; il relance le combat avec l'hôte), puis « Abandonner » (pas d'abandon ici : le client demande l'instantané de l'hôte et le charge, sans écran noir).",
+  "description": "Défaite, choix de l'hôte (D31), côté client (Lune) face au faux hôte qui rejoue p3_defeat_choice_host : la fenêtre « équipe de réserve » est refermée ici dès qu'elle s'ouvre (statut « l'hôte choisit »), puis la réponse de l'hôte (non) est donnée ici ; le jeu abandonne seul comme chez l'hôte et revient à l'exploration (pas d'écran noir).",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
   "party": ["Lune"],
   "setup": { "Lune": { "hp": 1, "shield": 0 } },
-  "timeout_s": 900,
+  "timeout_s": 600,
   "max_turns": 30,
   "shots_every_s": 6,
   "actions": [
@@ -15,13 +15,10 @@
   "defense": ["fail"],
   "explore": [
     { "do": "battle", "timeout": 400 },
-    { "do": "defeat", "choice": "follow", "timeout": 200 },
-    { "do": "battle", "timeout": 400 },
-    { "do": "defeat", "choice": "follow", "timeout": 200 },
-    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "defeat", "choice": "follow", "timeout": 120 },
     { "do": "wait_world", "s": 5, "timeout": 120 }
   ],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
-  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_defeat_choice_host.jsonl", "--snapshot", "{repo}/.tools/testsaves/p3_defeat_choice_snapshot.sav", "--timeout", "900"] },
-  "expect": { "defeat_choices_received": "2", "defeat_choices_applied": "2", "defeat_local_choices": "0", "defeat_modal_open_ms_max": "<=500", "hero_deaths": ">=2", "joins_completed": ">=1" }
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_defeat_choice_host.jsonl", "--timeout", "600"] },
+  "expect": { "defeat_choices_received": "2", "defeat_follows_done": "1", "defeat_local_choices": "0", "defeat_prompts_hidden": ">=1", "defeat_modal_open_ms_max": "<=500", "defeat_resyncs_requested": "0", "hero_deaths": ">=1", "ui:defeat_host_choosing": ">=1" }
 }

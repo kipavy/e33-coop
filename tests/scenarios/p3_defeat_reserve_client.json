@@ -1,0 +1,25 @@
+{
+  "name": "p3_defeat_reserve_client",
+  "description": "Défaite, choix de l'hôte (D31), côté client (Lune) face au faux hôte qui rejoue p3_defeat_reserve_host : la fenêtre « équipe de réserve » est refermée ici dès qu'elle s'ouvre (statut « l'hôte choisit »), puis la réponse de l'hôte (oui) est donnée ici : le combat continue avec l'équipe de réserve, suivi comme d'habitude jusqu'à la victoire.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Lune"],
+  "setup": { "Lune": { "hp": 1, "shield": 0 } },
+  "timeout_s": 600,
+  "max_turns": 30,
+  "shots_every_s": 6,
+  "actions": [
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
+  ],
+  "defense": ["fail"],
+  "explore": [
+    { "do": "battle", "timeout": 400 },
+    { "do": "defeat", "choice": "follow", "timeout": 120 },
+    { "do": "battle", "timeout": 300 },
+    { "do": "wait", "s": 3 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_defeat_reserve_host.jsonl", "--timeout", "600"] },
+  "expect": { "defeat_choices_received": "1", "defeat_follows_done": "1", "defeat_local_choices": "0", "defeat_prompts_hidden": ">=1", "defeat_modal_open_ms_max": "<=500", "hero_deaths": ">=1", "ui:defeat_host_choosing": ">=1" }
+}

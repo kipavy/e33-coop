@@ -300,7 +300,7 @@ struct State {
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     // Défaite (D31) : seul l'hôte choisit sur l'écran de défaite (« Réessayer » / « Abandonner »), les clients suivent.
     bool defeat_sync = true;                               // -e33defeatsync=0 : ancien comportement (chacun choisit chez lui)
-    bool defeat_abandon_mirror = false;                    // -e33defeatabandon=mirror : le client abandonne aussi chez lui (essai)
+    bool defeat_abandon_resync = false;                    // -e33defeatabandon=resync : abandon de l'hôte suivi par un instantané (pas d'abandon ici)
     struct Defeat {
         bool armed = false;                                // défaite vue ici (StartBattleEndFlow, résultat 2)
         uint32_t battle = 0;                               // n° (mod) du combat perdu
@@ -310,6 +310,8 @@ struct State {
         int host_choice[2] = {-1, -1};
         double host_choice_at[2] = {-1, -1};
         bool applied[2] = {false, false};                  // client : choix de l'hôte appliqué ici
+        bool responded[2] = {false, false};                // réponse arrivée au gestionnaire de combat ici (quelle qu'en soit la source)
+        bool rescue_sent = false;                          // client : instantané demandé (encore en combat 20 s après l'abandon)
         int prompt_kind = -1;                              // client : dernière fenêtre de choix vue ici (en attente du choix)
         double prompt_at = -1;
         UObject* prompt_modal = nullptr;
@@ -2370,10 +2372,12 @@ void apply_host_party(const proto::BattleStart& bs)
 // Écran de défaite du jeu (WBP_jRPG_GameOverScreen) : d'abord « Envoyer l'équipe de réserve ? » si elle existe, puis
 // « Réessayer » / « Abandonner ». Seul l'hôte répond (DefeatChoice). Client : chaque fenêtre de choix est refermée dès
 // qu'elle s'ouvre (statut « l'hôte choisit »), puis la réponse de l'hôte est donnée ici :
-//   - équipe de réserve (oui / non) et réessayer : même réponse donnée à l'écran d'ici (le jeu continue ou relance le
-//     combat ; le mod le suit comme un combat engagé ici avant le BattleStart de l'hôte) ;
-//   - abandonner : pas d'abandon ici (il rechargerait la save du joueur, pas la partie de l'hôte : écran noir chez
-//     TOTOFFF le 2026-10-24) ; on demande l'instantané de l'hôte (ResyncRequest), chargé dès qu'il arrive.
+//   même réponse donnée à l'écran d'ici (le jeu continue avec la réserve, relance le combat ou revient à l'exploration ;
+//   le mod suit un combat qui reprend comme un combat engagé ici avant le BattleStart de l'hôte).
+// Vu en test (2026-10-24, combat lancé par une action de jeu, non « rejouable ») : réserve refusée -> le jeu répond seul
+// « abandonner » (OnRetryEncounterResponse(false), sans fenêtre) -> retour à l'exploration sur place, sans chargement.
+// Filet : encore en combat 20 s après l'abandon (écran noir chez TOTOFFF le 2026-10-24) -> instantané de l'hôte demandé.
+// -e33defeatabandon=resync : pas d'abandon ici, instantané demandé tout de suite.
 // Hôte muet 120 s après l'ouverture d'une fenêtre : le joueur d'ici choisit lui-même.
 constexpr double kDefeatHostSilentS = 120.0;
 
@@ -2435,14 +2439,19 @@ void defeat_apply(int k, UObject* screen, UObject* modal)
     auto& d = s.defeat;
     d.applied[k] = true;
     d.applied_at = s.now;
-    d.prompt_kind = -1;
-    d.prompt_modal = nullptr;
+    d.prompt_kind = -1;   // prompt_modal gardé : la même fenêtre (parfois encore « active ») n'est pas une nouvelle fenêtre
     bump("defeat_choices_applied");
     const bool yes = d.host_choice[k] == 1;
     const std::string host = player_name(0);
-    // Réserve refusée : la fenêtre « Réessayer / Abandonner » suit, l'attente continue.
-    if (k == 0 || yes) d.done_kind = k;
-    if (k == 1 || yes || s.defeat_abandon_mirror) {
+    // Réserve refusée : la fenêtre « Réessayer / Abandonner » (ou l'abandon automatique du jeu) suit, l'attente continue.
+    if (k == 0 || yes) { d.done_kind = k; bump("defeat_follows_done"); }
+    // Le jeu d'ici a déjà répondu (abandon automatique après la réserve refusée) : rien à redonner.
+    if (d.responded[k]) {
+        if (k == 0) ui::set_status("defeat", yes ? "defeat_host_retry" : "defeat_host_abandon", {host});
+        log().write("coop_defeat_applied", JsonObj().add("battle", d.battle).add("prompt", k).add("yes", yes).add("how", "already").add("ok", true));
+        return;
+    }
+    if (k == 1 || yes || !s.defeat_abandon_resync) {
         const int resp = yes ? game::RespConfirm : game::RespCancel;
         bool ok = false;
         const char* how = "none";
@@ -2486,6 +2495,15 @@ void defeat_tick()
     if (d.done_kind >= 0) {
         d.next_poll = s.now + 0.5;
         const bool abandon = d.done_kind == 0 && d.host_choice[0] == 0;
+        // Filet : toujours en combat 20 s après l'abandon -> partie de l'hôte par un instantané (point sûr de l'hôte, D27).
+        if (abandon && !d.rescue_sent && s.now - d.applied_at > 20.0 && game::in_battle()) {
+            d.rescue_sent = true;
+            d.applied_at = s.now;   // nouvelle attente (chargement de l'instantané)
+            publish(proto::ResyncRequest{"still in battle after the host gave up"});
+            bump("defeat_resyncs_requested");
+            log().write("coop_defeat_rescue", JsonObj().add("battle", d.battle));
+            return;
+        }
         const bool done = s.now - d.applied_at > 120.0 ||
                           (!abandon && s.battle.active && s.battle.id != d.battle) ||
                           (abandon && s.now - d.applied_at > 5.0 && game::controller() && !game::in_battle());
@@ -2513,15 +2531,28 @@ void defeat_tick()
     const int k = d.prompt_kind;
     // Réponse de l'hôte connue pour la fenêtre ouverte ici : donnée tout de suite.
     if (k >= 0 && !d.local_allowed && d.host_choice[k] >= 0 && !d.applied[k]) { defeat_apply(k, screen, modal); return; }
-    // Sans fenêtre vue ici 15 s après la réponse de l'hôte (écran pas encore là, autre déroulé) : réponse donnée à l'écran.
-    for (int j = 0; j < 2 && k < 0 && screen && !d.local_allowed; ++j)
-        if (d.host_choice[j] >= 0 && !d.applied[j] && s.now - d.host_choice_at[j] > 15.0 && (j == 1 || !d.applied[1] || d.host_choice[1] == 0)) {
+    // Le jeu d'ici a déjà répondu à une fenêtre dont l'hôte a donné la réponse (abandon automatique) : suivi noté.
+    for (int j = 1; j >= 0; --j)
+        if (d.responded[j] && d.host_choice[j] >= 0 && !d.applied[j]) { defeat_apply(j, screen, nullptr); return; }
+    // Sans fenêtre vue ici 15 s après la réponse de l'hôte (écran pas encore là, autre déroulé) : réponse donnée à
+    // l'écran, réserve d'abord.
+    for (int j = 1; j >= 0 && k < 0 && screen && !d.local_allowed; --j)
+        if (d.host_choice[j] >= 0 && !d.applied[j] && s.now - d.host_choice_at[j] > 15.0 && (j == 1 || d.host_choice[1] != 1)) {
             log().write("coop_defeat_no_prompt_apply", JsonObj().add("prompt", j));
             defeat_apply(j, screen, nullptr);
             return;
         }
-    // Abandon de l'hôte sans écran de défaite ici (combat local pas perdu) : instantané demandé quand même.
-    if (!screen && !d.applied[0] && d.host_choice[0] == 0 && s.now - d.host_choice_at[0] > 30.0) { defeat_apply(0, nullptr, nullptr); return; }
+    // Abandon de l'hôte sans écran de défaite ici (combat local pas perdu) : instantané de l'hôte demandé.
+    if (!screen && !d.armed && !d.applied[0] && d.host_choice[0] == 0 && s.now - d.host_choice_at[0] > 30.0) {
+        d.applied[0] = true;
+        d.applied_at = s.now;
+        d.done_kind = 0;
+        d.rescue_sent = true;
+        publish(proto::ResyncRequest{"host gave up a battle not lost here"});
+        bump("defeat_resyncs_requested");
+        log().write("coop_defeat_rescue", JsonObj().add("battle", d.battle).add("why", "no defeat here"));
+        return;
+    }
     if (modal && visible && !d.local_allowed) defeat_hide(modal);
     // Hôte muet : le joueur d'ici choisit (« Réessayer / Abandonner » rouverte ; réserve : refusée ici, la suivante s'ouvre).
     if (!d.local_allowed && k >= 0 && d.host_choice[k] < 0 && s.now - d.prompt_at > kDefeatHostSilentS && screen) {
@@ -3338,10 +3369,8 @@ void subscribe()
                 return;
             }
             if (s.role != Role::Client || !s.defeat_sync) return;
-            if (!d.applying && !d.local_allowed) {
-                bump("defeat_local_choices");
-                log().write("coop_defeat_local_choice", JsonObj().add("prompt", k).add("yes", yes).add("host_choice", d.host_choice[k]));
-            }
+            d.responded[k] = true;
+            d.next_poll = 0;
             if (p && d.host_choice[k] >= 0 && yes != d.host_choice[k] && !d.local_allowed) {
                 *p = static_cast<uint8_t>(d.host_choice[k]);
                 bump("defeat_choices_rewritten");
@@ -3349,6 +3378,14 @@ void subscribe()
             }
         });
     }
+    // Client : clic du joueur d'ici dans une fenêtre de l'écran de défaite (pas le mod, pas le repli « hôte muet ») : fuite.
+    bus.pre(L"/Game/UI/Widgets/InGame_Menu/Modal/WBP_ModalPopup.WBP_ModalPopup_C:NotifyUserResponse", [](HookCtx& ctx, UFunction*) {
+        auto& d = s.defeat;
+        if (s.role != Role::Client || !s.defeat_sync || !d.armed || d.applying || d.local_allowed || game::mod_call_depth() > 0) return;
+        if (ue::get_object(ctx.Context, STR("ParentActivatableWidget")) != game::defeat_screen()) return;
+        bump("defeat_local_choices");
+        log().write("coop_defeat_local_choice", JsonObj().add("prompt", d.prompt_kind).add("modal", ue::short_name(ctx.Context)));
+    });
     // « Réessayer / Abandonner » ouverte : la prochaine fenêtre de choix est celle-là (client : refermée à l'image suivante).
     bus.post(std::wstring(game::kGameOverScreenClass) + L":PromptBattleRetry", [](HookCtx&, UFunction*) {
         s.defeat.retry_prompted = true;
@@ -3822,7 +3859,7 @@ void read_settings()
     if (const std::wstring seed = arg(L"e33seed"); !seed.empty()) s.fixed_seed = std::wcstoull(seed.c_str(), nullptr, 0);
     s.setup_draws = arg(L"e33setupdraws") != L"0";
     s.defeat_sync = arg(L"e33defeatsync") != L"0";
-    s.defeat_abandon_mirror = arg(L"e33defeatabandon") == L"mirror";
+    s.defeat_abandon_resync = arg(L"e33defeatabandon") == L"resync";
     if (const std::wstring d = arg(L"e33actiondelay"); !d.empty()) s.action_delay_s = std::wcstod(d.c_str(), nullptr);
     if (const std::wstring p = arg(L"e33perturb"); !p.empty()) s.perturb_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));
     if (const std::wstring p = arg(L"e33perturbend"); !p.empty()) s.perturb_end_turn = static_cast<uint32_t>(std::wcstoul(p.c_str(), nullptr, 10));

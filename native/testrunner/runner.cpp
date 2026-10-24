@@ -159,6 +159,7 @@ struct State {
     std::vector<std::string> errors;
     // Étape "defeat" (D31) : écran de défaite, fenêtre de choix ouverte ici
     double defeat_seen = -1, defeat_open_since = -1, defeat_next = 0;
+    UObject* defeat_answered = nullptr;   // fenêtre déjà répondue (elle peut rester « active » un moment)
     int defeat_base = 0;
     // Entrées d'ici injectées pendant les tours des héros des autres joueurs
     struct Spam {
@@ -1215,9 +1216,11 @@ void run_explore_step(float dt)
             if (!game::trigger_battle(g.sc.encounter, g.sc.party, err)) { fail("trigger: " + err); return; }
             g.triggered = true;
         }
-        if (what == "world_battle" && first) {
+        if (what == "world_battle" && !g.triggered) {
+            if (coop::connected_players() < st["players"].as_int(0)) return;   // "players" : clients connectés avant d'engager
             UObject* e = game::find_world_enemy(st["enemy"].as_string(""));
             if (!game::start_world_battle(e, ue::from_utf8(st["encounter"].as_string("")), static_cast<int>(st["engage"].as_int(0)), err)) { fail("world_battle: " + err); return; }
+            g.triggered = true;
         }
         // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
     } else if (what == "defeat") {
@@ -1226,7 +1229,7 @@ void run_explore_step(float dt)
         // applique le choix de l'hôte), watch (observe "watch_s" s après l'apparition de l'écran). Mesures : écran vu
         // (defeat_screens), fenêtre de choix visible ici (defeat_modals_seen) et sa plus longue ouverture (defeat_modal_open_ms_max).
         const std::string choice = st["choice"].as_string("follow");
-        if (first) { g.defeat_base = coop::counter("defeat_choices_applied"); g.defeat_seen = -1; g.defeat_open_since = -1; g.defeat_next = 0; }
+        if (first) { g.defeat_base = coop::counter("defeat_follows_done"); g.defeat_seen = -1; g.defeat_open_since = -1; g.defeat_next = 0; g.defeat_answered = nullptr; }
         if (g.step_t < g.defeat_next) return;
         g.defeat_next = g.step_t + 0.25;   // FindAllOf : pas à chaque image
         UObject* screen = game::defeat_screen();
@@ -1237,6 +1240,7 @@ void run_explore_step(float dt)
             ++g.metrics["defeat_screens"];
             log().write("tr_defeat_screen", JsonObj().add("choice", choice).add("t", g.step_t));
         }
+        if (modal && modal == g.defeat_answered) modal = nullptr;
         if (modal && vis) {
             if (g.defeat_open_since < 0) { g.defeat_open_since = g.step_t; ++g.metrics["defeat_modals_seen"]; log().write("tr_defeat_modal", JsonObj().add("t", g.step_t)); }
             int& mx = g.metrics["defeat_modal_open_ms_max"];
@@ -1250,6 +1254,7 @@ void run_explore_step(float dt)
                 ++g.metrics[yes ? "defeat_reserve_yes_chosen" : "defeat_reserve_no_chosen"];
                 log().write("tr_defeat_reserve", JsonObj().add("yes", yes).add("ok", ok));
                 if (!ok) { fail("defeat: NotifyUserResponse (reserve) failed"); return; }
+                g.defeat_answered = modal;
                 g.defeat_open_since = -1;
                 if (yes) next_step("reserve sent");
                 return;
@@ -1262,13 +1267,21 @@ void run_explore_step(float dt)
                 ++g.metrics[choice == "retry" ? "defeat_retries_chosen" : "defeat_abandons_chosen"];
                 log().write("tr_defeat_choice", JsonObj().add("choice", choice).add("response", resp).add("ok", ok));
                 if (!ok) { fail("defeat: NotifyUserResponse failed"); return; }
+                g.defeat_answered = modal;
                 next_step("chosen");
                 return;
             }
         } else {
             g.defeat_open_since = -1;
         }
-        if (choice == "follow" && coop::counter("defeat_choices_applied") > g.defeat_base) next_step("host choice applied");
+        // Combat quitté sans fenêtre « Réessayer / Abandonner » (le jeu abandonne seul : combat non « rejouable », réserve refusée).
+        if ((choice == "retry" || choice == "abandon") && g.defeat_seen >= 0 && g.step_t - g.defeat_seen > 3.0 && !game::in_battle() && game::explore_pawn()) {
+            ++g.metrics["defeat_auto_abandons"];
+            log().write("tr_defeat_auto_abandon", JsonObj().add("choice", choice));
+            next_step("left battle without retry prompt");
+            return;
+        }
+        if (choice == "follow" && coop::counter("defeat_follows_done") > g.defeat_base) next_step("host choice applied");
         else if (choice == "watch" && g.defeat_seen >= 0 && g.step_t - g.defeat_seen >= st["watch_s"].as_number(10)) next_step("watched");
     } else if (what == "set_party") {   // change l'équipe comme le menu d'équipe du jeu (après l'instantané : le client garde l'ancienne)
         std::vector<std::string> names;
