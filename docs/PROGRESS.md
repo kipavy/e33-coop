@@ -2,10 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## 2026-10-24, 22h45 — v0.6.26 : classes de buff chargées par chemin, D28 coupé par défaut
+## 2026-10-24, 22h45 — v0.6.26 : classes de buff chargées par chemin
 
 - 22:15 (0.6.24) : combat Cruler / Bruler, `coop_repair_error` « buff class not loaded: BP_LU_SimpleBreaker_C » (picto du Gustave de Killian, jamais chargé chez TOTOFFF qui ne le possède pas) à chaque tour -> dégâts de brise différents, PV des monstres qui divergent, monstre mort chez le client et pas chez l'hôte (Killian bloqué au tour de TOTOFFF). Corrigé : `StateSync.class_paths` (champ final facultatif, classes `BP_LU_*` / `BP_BattleBuff*`) ; le client charge une classe absente par `MakeSoftClassPath` -> `Conv_SoftClassPathToSoftClassRef` -> `LoadClassAsset_Blocking` (`coop_buff_class_loaded`).
-- Gels de 2 s dans les deux sens (tour 4 : hôte attend la défense du client 2016 ms ; tour 5 : client attend celle de l'hôte 2094 ms, après avoir retenu son tour ennemi 1,8 s jusqu'à l'état de l'hôte) : D28 (hôte qui retient le tour + client qui retient sur Reset) se renvoient la balle. D28 coupé par défaut (`-e33turnalign=1` pour l'essayer) ; retour aux gels ~1 s chez l'hôte seulement. À repenser.
+- Gels de 2 s dans les deux sens (tour 4 : hôte attend la défense du client 2016 ms ; tour 5 : client attend celle de l'hôte 2094 ms, après avoir retenu son tour ennemi 1,8 s jusqu'à l'état de l'hôte) : D28 (hôte qui retient le tour + client qui retient sur Reset) se renvoient la balle. D28 gardé actif à la demande de Killian (gels occasionnels, mieux qu'avant : un gel à chaque parade) ; il veut les éliminer totalement : à repenser avec les scénarios p8_turnlag_*.
 
 ## 2026-10-24, 22h30 — v0.6.25 : combat du marchand, sélection du marchand
 

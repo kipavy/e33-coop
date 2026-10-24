@@ -19,8 +19,6 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ### Corrections
 - Combat : les pictos et effets que l'autre joueur ne possède pas (ex. un picto du meneur) sont maintenant chargés et
   appliqués chez lui ; avant, les dégâts différaient et un monstre pouvait mourir chez l'un et pas chez l'autre.
-- Combat : plus de gels de 2 s quand un monstre attaque l'autre joueur (retour au comportement d'avant la 0.6.13 pour le
-  début des tours ennemis).
 
 ## [0.6.25] - 2026-10-24
 
