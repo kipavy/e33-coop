@@ -1683,6 +1683,11 @@ void gpe_process_event(RC::Unreal::UObject* ctx, RC::Unreal::UFunction* fn, void
     if (seen.insert(key).second) log().write("coop_pe_trace", JsonObj().add("fn", key).add("actor", ue::short_name(ctx)));
 }
 
+void gpe_pe_hook(RC::Unreal::Hook::TCallbackIterationData<void>&, RC::Unreal::UObject* ctx, RC::Unreal::UFunction* fn, void* parms)
+{
+    gpe_process_event(ctx, fn, parms);
+}
+
 constexpr double kSceneCauseWindow = 60.0;   // cause retenue si vue dans la minute qui précède la cinématique
 
 // Clé d'une scène : identifiant de cinématique, sinon nom de l'asset de séquence.
@@ -2613,7 +2618,7 @@ void subscribe()
             log().write("coop_interaction", JsonObj().add("actor", path).add("instant", instant));
         });
     }
-    RC::Unreal::Hook::RegisterProcessEventPreCallback([](auto&, RC::Unreal::UObject* ctx, RC::Unreal::UFunction* fn, void* parms) { gpe_process_event(ctx, fn, parms); });
+    RC::Unreal::Hook::RegisterProcessEventPreCallback(&gpe_pe_hook, {false, false, STR("E33Coop"), STR("ExploreGPE")});
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
         s.choice_pending = false;
         s.choice_hover_want = -1;
