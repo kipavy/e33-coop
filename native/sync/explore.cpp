@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -1445,6 +1446,46 @@ void movement_lock_tick()
     }
 }
 
+
+// Diagnostic (essai à deux PC du 2026-10-24, 16:08) : meneur client immobile malgré F8 et ses contextes de déplacement
+// rendus ; relancer le jeu a réglé le problème. Une touche de déplacement tenue (clavier) ou une entrée de mouvement
+// reçue par le pion, sans vitesse pendant 3 s : on relève tout ce qui peut bloquer (une fois par minute au plus).
+void pilot_stuck_tick()
+{
+    static double next = 0, since = -1, next_log = 0;
+    if (s.now < next) return;
+    next = s.now + 0.5;
+    UObject* pawn = game::explore_pawn();
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    if (!sharing() || !is_pilot() || !pawn || game::in_battle() || !world_ready() || pid != GetCurrentProcessId()) { since = -1; return; }
+    bool key = false;
+    for (int vk : {'W', 'A', 'S', 'D', 'Z', 'Q', VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT}) key = key || (GetAsyncKeyState(vk) & 0x8000) != 0;
+    double in[3] = {0, 0, 0}, vel[3] = {0, 0, 0};
+    if (ue::Call c(pawn, STR("GetLastMovementInputVector")); c && c.invoke() && c.param_size(STR("ReturnValue")) == 24)
+        std::memcpy(in, c.param_ptr(STR("ReturnValue")), sizeof in);
+    if (ue::Call c(pawn, STR("GetVelocity")); c && c.invoke() && c.param_size(STR("ReturnValue")) == 24)
+        std::memcpy(vel, c.param_ptr(STR("ReturnValue")), sizeof vel);
+    const bool wants = key || std::abs(in[0]) + std::abs(in[1]) > 0.1;
+    const bool moving = std::abs(vel[0]) + std::abs(vel[1]) + std::abs(vel[2]) > 10;
+    if (!wants || moving) { since = -1; return; }
+    if (since < 0) { since = s.now; return; }
+    if (s.now - since < 3.0 || s.now < next_log) return;
+    next_log = s.now + 60.0;
+    bump("pilot_stuck");
+    UObject* pc = game::controller();
+    game::MoveInfo ps;
+    game::move_info(pawn, ps);
+    bool ignored = false;
+    if (ue::Call c(pc, STR("IsMoveInputIgnored")); c && c.invoke()) ignored = c.out_bool(STR("ReturnValue"));
+    JsonObj o;
+    o.add("key", key).add("input_x", in[0]).add("input_y", in[1]).add("move", ps.move).add("custom", ps.custom).add("attached", ps.attached)
+     .add("move_ignored", ignored)
+     .add("dialogue", game::in_dialogue()).add("cinematic", game::playing_cinematic()).add("paused", game::pause_menu_visible())
+     .add("removed_contexts", static_cast<int64_t>(s.removed_locomotion.size()))
+     .add("w_contexts", game::active_contexts_with_key("W")).add("z_contexts", game::active_contexts_with_key("Z"));
+    log().write("coop_pilot_stuck", o);
+}
 // --- Barrière narrative et pause ------------------------------------------------------------------
 
 // Pause du jeu entier tenue par une ou plusieurs raisons. Le jeu peut l'enlever de lui-même (fin de cinématique :
@@ -1721,6 +1762,7 @@ void poll_tick()
     s.next_poll = s.now + kPollPeriod;
     if (!game::controller()) return;
     movement_lock_tick();
+    pilot_stuck_tick();
     // Narration locale
     if (s.intro && s.now - s.intro_since > kIntroMax) { s.intro = false; log().write("coop_intro_timeout", JsonObj()); }
     // Fin de l'intro : le signal du jeu (OnInitialCinematicCompleted) n'arrive pas (vu le 2026-10-21). Elle finit donc
