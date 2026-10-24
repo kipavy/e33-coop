@@ -3501,7 +3501,7 @@ void run_remote_action()
     if (s.now - b.command_time[key] < s.replay_lag_s) return;
     if (explore::remote_paused() || game::pause_menu_visible()) return;   // jeu en pause : l'action attend la reprise
     // Menus du propriétaire rejoués ici (miroir) : refermés d'abord, l'action part du même état qu'avant le miroir.
-    // Clé de l'action : fermeture dans la même image que l'exécution (D28).
+    // Clé de l'action : fermeture dans la même image que l'exécution (D29).
     if (!controls(spot) && !intent::mirror_release(s.now, std::to_string(it->second.action_type) + "|" + it->second.secondary)) return;
     const proto::ActionCommand cmd = it->second;
     b.executed.insert(key);

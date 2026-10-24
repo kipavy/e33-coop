@@ -392,7 +392,7 @@ par ce dialogue joué seul de chaque côté ; empreinte d'inventaire toujours di
 **Remise en cause si** : `coop_join_load_stuck` en vrai (chercher dans `coop_join_wait_world` la condition qui manque) ;
 ou un objet d'édition / DLC autre que tenues et coiffures qui différerait encore.
 
-## D28 — Miroir des menus : action exécutée dans la même image que la fermeture du ciblage (2026-10-24, bug vu par Killian)
+## D29 — Miroir des menus : action exécutée dans la même image que la fermeture du ciblage (2026-10-24, bug vu par Killian)
 
 **Constat** : quand un autre joueur lance une compétence, chez celui qui regarde, le menu s'ouvre et se ferme 2-3 fois très vite juste avant l'action. Journal de TOTOFFF (0.6.9) : à chaque action de l'hôte, `menu_mirror_release` appelle `OnCancelTargeting` 3 fois à 0,3 s d'intervalle (le ciblage d'une attaque reste levé après l'annulation), puis ramène la roue à sa page du début du tour, ~0,9 s au total, avant l'exécution qui rouvre l'action.
 

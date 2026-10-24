@@ -198,7 +198,7 @@ constexpr double kTurnGraceS = 1.2;        // début de tour : le jeu ouvre lui-
 
 bool g_mirror = true;                      // -e33menumirror=0 : ligne de texte seulement (comportement d'avant)
 bool g_guard = true;                       // -e33inputguard=0 : pas de coupure de la navigation ni des clics sur la roue
-bool g_slow_release = false;               // -e33mirrorrelease=old : menus rembobinés avant l'action (avant D28, scénarios « avant »)
+bool g_slow_release = false;               // -e33mirrorrelease=old : menus rembobinés avant l'action (avant D29, scénarios « avant »)
 
 // Objets de l'interface de combat, relus à chaque usage (le HUD est recréé à chaque combat).
 struct Hud {
@@ -361,7 +361,7 @@ struct Mirror {
     MenuPage page = MenuPage::None;
     bool targeting = false;
     std::vector<UObject*> targets;
-    // Mesure (D28) : état des menus (page, ciblage) relevé à chaque image pendant la fermeture, nombre de changements ;
+    // Mesure (D29) : état des menus (page, ciblage) relevé à chaque image pendant la fermeture, nombre de changements ;
     // instant de l'exécution ici et contrôle du ciblage 1 s après.
     int rel_state = -1, rel_flips = 0;
     double exec_at = -1;
@@ -1031,7 +1031,7 @@ bool release_impl(double now, const std::string& action_key)
     }
     g_mir.released_at = now;
     if (!g_mir.acted) return true;   // rien changé par le miroir depuis la dernière remise à zéro
-    // Action d'un autre joueur (D28, vu par Killian le 2026-10-24) : rembobiner la roue avant l'exécution (ciblage annulé
+    // Action d'un autre joueur (D29, vu par Killian le 2026-10-24) : rembobiner la roue avant l'exécution (ciblage annulé
     // jusqu'à 3 fois, retour aux actions, 0,3 s entre chaque) faisait ouvrir et fermer les menus 2-3 fois juste avant
     // l'action. Le ciblage est refermé dans la même image que l'exécution (SelectAction / SelectSecondaryAction /
     // RequestActionExecution) : rien n'est affiché entre les deux, et la roue reste sur la page du propriétaire.
@@ -1080,7 +1080,7 @@ bool release_impl(double now, const std::string& action_key)
 
 } // namespace
 
-// Mesure (D28) : première fin de la fermeture pour ce tour = exécution de l'action ici. Changements des menus vus
+// Mesure (D29) : première fin de la fermeture pour ce tour = exécution de l'action ici. Changements des menus vus
 // entre le début de la fermeture et l'exécution (menu_release_flips), fermetures de plus de 0,1 s.
 bool mirror_release(double now, const std::string& action_key)
 {
