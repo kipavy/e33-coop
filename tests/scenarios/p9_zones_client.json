@@ -1,0 +1,18 @@
+{
+  "name": "p9_zones_client",
+  "description": "Changements de zone (2026-10-23) : le faux hôte rejoue la tranche zones_tour (p9_zones_host : 7 transitions, drapeau -> carte du monde, entrée de la carte du monde, sorties de zone, camp, retour sur la carte du monde), positions à 20/s, réseau simulé (empreintes d exploration retirées de la tranche : écart de casse de noms sans lien avec les transitions, voir PROGRESS). Le client doit suivre chaque transition par un seul chargement, sans resynchro de niveau ni d'instantané, reprendre le suivi tout de suite à l'arrivée (pas de téléportation, pas de pause), et ne jamais ralentir le jeu.",
+  "join": true,
+  "timeout_s": 900,
+  "shots_every_s": 5,
+  "explore": [
+    { "do": "wait", "until": "joins_completed", "is": ">=1", "timeout": 300 },
+    { "do": "wait", "until": "map_transitions", "is": ">=7", "timeout": 400 },
+    { "do": "wait", "s": 5 }
+  ],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33join=1"],
+  "fakepeer": { "start": "before_game", "stop_ok": true, "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/zones_tour.jsonl", "--snapshot", "{repo}/.tools/testsaves/p9_zones_v2_snapshot.sav", "--paced", "1", "--pilot-rate", "20", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "900"] },
+  "expect": { "snapshots_received": "1", "joins_completed": "1", "snapshot_hash_errors": "0", "join_errors": "0", "world_resyncs": "0", "level_resyncs": "0",
+              "map_transitions": ">=7", "map_transitions_unfinished": "0", "map_loads_extra": "0", "map_loads_missing": "0", "map_change_errors": "0",
+              "map_follow_delay_ms_max": "<=500", "map_after_pilot_ms_max": "any", "map_arrival_err_max": "<=1200", "map_catchup_ms_max": "<=2000",
+              "map_arrival_teleports": "<=1", "map_arrival_paused_ms_max": "0", "map_arrival_mod_slow": "<=2", "map_arrival_no_follow": "0" }
+}

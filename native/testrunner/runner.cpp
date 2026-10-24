@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -151,6 +152,9 @@ struct State {
     double pause_until = -1;
     double seq_since = -1;
     double next_skip = 0;
+    // Étape map_exit : point de passage choisi, appel direct de repli fait
+    UObject* exit_point = nullptr;
+    bool exit_called = false;
     int battles = 0;
     std::vector<std::string> errors;
     // Entrées d'ici injectées pendant les tours des héros des autres joueurs
@@ -973,6 +977,9 @@ void subscribe()
 //   {"do":"choose","index":1}              choix de dialogue (attend que la question soit posée)
 //   {"do":"wait_dialogue_end"}
 //   {"do":"change_map","level":"Level_Camp_Main","spawn":"<tag>"}
+//   {"do":"map_exit","match":"<morceau>","how":"walk|call","approach":500,"call_after":10}   vrai passage du jeu (MapTeleportPoint)
+//   {"do":"find_classes","needles":[..],"functions":[..]}   diagnostic : classes Blueprint chargées, instances, fonctions
+//   {"do":"call_fn","target":"gi|controller|pawn|camp_manager|<classe>","fn":"<nom>","optional":true}   appel sans paramètre
 //   {"do":"world_battle"}                  pilote : combat avec l'ennemi du monde le plus proche (actions du scénario)
 //   {"do":"battle"}                        attend un combat lancé par un autre joueur, puis le joue
 //   {"do":"wait_follow","max":250}        suiveur : à moins de max (u) du pilote pendant 2 s
@@ -1088,6 +1095,115 @@ void run_explore_step(float dt)
         if (!game::change_map(ue::from_utf8(st["level"].as_string()), ue::from_utf8(st["spawn"].as_string("")))) { fail("change_map failed"); return; }
         ++g.metrics["map_changes"];
         next_step("requested");
+    } else if (what == "map_exit") {
+        // Vrai passage du jeu (BP_jRPG_MapTeleportPoint_C : sortie de zone, entrée sur la carte du monde) : le pion est
+        // posé à "approach" u de la boîte de passage (du côté où il se trouve) puis marche dedans, comme un joueur. Le
+        // passage se fait par le jeu (chevauchement -> ProcessChangeMap). Repli : ProcessChangeMap appelé après "call_after" s.
+        // "match" : morceau du nom de la ligne de destination, du point d'apparition ou de l'acteur ; "how":"call" : appel direct.
+        if (first) {
+            g.exit_point = nullptr;
+            g.exit_called = false;
+            const auto pts = game::teleport_points();
+            std::string list = "[";
+            auto lower = [](std::string s) { for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); return s; };
+            const std::string want = lower(st["match"].as_string(""));
+            const game::TeleportPoint* pick = nullptr;
+            double me[3]{}, best = 1e18;
+            if (UObject* pawn = game::explore_pawn()) game::location(pawn, me);
+            for (const auto& t : pts) {
+                if (list.size() > 1) list += ",";
+                list += JsonObj().add("name", t.name).add("row", t.row).add("spawn", t.spawn).add("world_map", t.world_map)
+                            .add("x", t.box[0]).add("y", t.box[1]).add("z", t.box[2]).str();
+                const bool ok = want.empty() || lower(t.row).find(want) != std::string::npos || lower(t.spawn).find(want) != std::string::npos ||
+                                lower(t.name).find(want) != std::string::npos;
+                const double d = std::hypot(t.box[0] - me[0], t.box[1] - me[1]);
+                if (ok && d < best) { best = d; pick = &t; }
+            }
+            log().write("tr_teleport_points", JsonObj().add("count", static_cast<int64_t>(pts.size())).add("level", game::current_level()).raw("points", list + "]"));
+            if (!pick && st["fallback_level"].is_string()) {
+                // Aucun point de passage (ex. carte du monde) : changement de niveau direct.
+                log().write("tr_map_exit_fallback_level", JsonObj().add("level", st["fallback_level"].as_string("")).add("spawn", st["fallback_spawn"].as_string("")));
+                if (!game::change_map(ue::from_utf8(st["fallback_level"].as_string("")), ue::from_utf8(st["fallback_spawn"].as_string("")))) { fail("map_exit: fallback change_map failed"); return; }
+                ++g.metrics["map_exit_fallback_levels"];
+                g.exit_called = true;
+                return;
+            }
+            if (!pick) { fail("map_exit: no teleport point matching '" + st["match"].as_string("") + "'"); return; }
+            g.exit_point = pick->actor;
+            UObject* pawn = game::explore_pawn();
+            if (st["how"].as_string("walk") == "call" || !pawn) {
+                ue::Call c(g.exit_point, STR("ProcessChangeMap"));
+                if (!c || !c.invoke()) { fail("map_exit: ProcessChangeMap failed"); return; }
+                g.exit_called = true;
+            } else {
+                const double app = st["approach"].as_number(500);
+                double ux = me[0] - pick->box[0], uy = me[1] - pick->box[1];
+                const double n = std::hypot(ux, uy);
+                if (n > 1) { ux /= n; uy /= n; } else { ux = 1; uy = 0; }
+                const double pos[3] = {pick->box[0] + ux * app, pick->box[1] + uy * app, pick->box[2] + st["dz"].as_number(50)};
+                const double yaw = std::atan2(-uy, -ux) * 180.0 / 3.14159265358979;
+                game::teleport_pawn(pawn, pos, yaw);
+            }
+            log().write("tr_map_exit", JsonObj().add("point", pick->name).add("row", pick->row).add("spawn", pick->spawn).add("world_map", pick->world_map)
+                                          .add("how", g.exit_called ? "call" : "walk").add("distance", best));
+            return;
+        }
+        if (game::map_change_in_progress()) { ++g.metrics["map_exits"]; next_step("loading"); return; }
+        if (!g.exit_called && g.step_t >= st["call_after"].as_number(10)) {
+            ue::Call c(g.exit_point, STR("ProcessChangeMap"));
+            g.exit_called = c && c.invoke();
+            ++g.metrics["map_exit_fallbacks"];
+            log().write("tr_map_exit_fallback", JsonObj().add("ok", g.exit_called));
+            return;
+        }
+        if (!g.exit_called) {
+            // Marche vers la boîte (direction recalculée à chaque image).
+            UObject* pawn = game::explore_pawn();
+            double me[3]{}, box[3]{};
+            if (pawn && game::location(pawn, me)) {
+                for (const auto& t : game::teleport_points()) if (t.actor == g.exit_point) { box[0] = t.box[0]; box[1] = t.box[1]; break; }
+                const double dx = box[0] - me[0], dy = box[1] - me[1], d = std::hypot(dx, dy);
+                if (d > 1) game::move_pawn(pawn, dx / d, dy / d, 1.0);
+            }
+        }
+    } else if (what == "find_classes") {
+        // Diagnostic : classes Blueprint chargées (mots de "needles"), leurs instances et leurs fonctions (mots de "functions").
+        std::vector<std::string> needles, fns;
+        for (size_t i = 0; i < st["needles"].size(); ++i) needles.push_back(st["needles"][i].as_string(""));
+        for (size_t i = 0; i < st["functions"].size(); ++i) fns.push_back(st["functions"][i].as_string(""));
+        for (const std::string& cls : game::loaded_bp_classes(needles)) {
+            const auto inst = game::actor_instances(ue::from_utf8(cls));
+            std::string f = "[";
+            if (!inst.empty())
+                for (const auto& n : game::function_names(inst.front(), fns, 60)) { if (f.size() > 1) f += ","; f += "\"" + n + "\""; }
+            double p[3]{};
+            if (!inst.empty()) game::location(inst.front(), p);
+            log().write("tr_class", JsonObj().add("class", cls).add("instances", static_cast<int64_t>(inst.size()))
+                                      .add("first", inst.empty() ? std::string() : ue::short_name(inst.front())).add("x", p[0]).add("y", p[1]).add("z", p[2])
+                                      .raw("functions", f + "]"));
+        }
+        next_step("done");
+    } else if (what == "call_fn") {
+        // Appel sans paramètre d'une fonction du jeu : "target" = gi | controller | pawn | camp_manager | <classe> (1re instance).
+        const std::string tg = st["target"].as_string("controller");
+        UObject* o = nullptr;
+        if (tg == "gi") o = game::gi();
+        else if (tg == "controller") o = game::controller();
+        else if (tg == "pawn") o = game::explore_pawn();
+        else if (tg == "camp_manager") {
+            UObject* lib = ue::find_object(STR("/Game/jRPGTemplate/Blueprints/Basics/FL_jRPG_CustomFunctionLibrary.Default__FL_jRPG_CustomFunctionLibrary_C"));
+            ue::Call c(lib, STR("GetCampManager"));
+            UObject* ctx = game::explore_pawn() ? game::explore_pawn() : game::controller();
+            if (c && ctx) { c.set_object(STR("__WorldContext"), ctx); if (c.invoke()) o = c.out_object(STR("CampManager")); }
+        } else {
+            const auto inst = game::actor_instances(ue::from_utf8(tg));
+            if (!inst.empty()) o = inst.front();
+        }
+        ue::Call c(o, ue::from_utf8(st["fn"].as_string("")).c_str());
+        const bool ok = o && c && c.invoke();
+        log().write("tr_call_fn", JsonObj().add("target", tg).add("object", o ? ue::full_name(o) : std::string()).add("fn", st["fn"].as_string("")).add("ok", ok));
+        if (!ok && !st["optional"].as_bool(false)) { fail("call_fn " + tg + "." + st["fn"].as_string("") + " failed"); return; }
+        next_step(ok ? "done" : "skipped");
     } else if (what == "world_battle" || what == "battle" || what == "trigger") {
         // "trigger" : combat du scénario (encounter, party), une fois "players" joueurs dans la partie (phase 5).
         if (what == "trigger" && !g.triggered) {

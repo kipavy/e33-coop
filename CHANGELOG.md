@@ -17,6 +17,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ## [0.6.13] - 2026-10-24
 
 ### Corrections
+- Combat : les tours ennemis démarrent en même temps chez tous les joueurs ; plus de petits gels pendant les parades
+  de l'autre joueur (surtout sur les attaques de zone).
+- Changements de zone : quand le meneur change à nouveau de zone pendant que l'autre joueur charge encore la
+  précédente, celui-ci le rejoint directement (avant : il pouvait rester dans la mauvaise zone).
+- Changements de zone : le perso de l'autre joueur ne prend plus de lui-même une sortie de zone en suivant le meneur ;
+  il change de zone uniquement avec lui.
 - Combat : les ennemis qui tirent leur comportement au sort au début du combat (ex. le Portier) font les mêmes attaques
   chez tous les joueurs (l'un pouvait voir une attaque de zone, l'autre une attaque sur un seul héros).
 

@@ -168,6 +168,19 @@ std::vector<std::string> function_names(UObject* o, const std::vector<std::strin
 // Destination d'un changement de niveau en cours (GI : LevelDestinationAssetName, SpawnPointTag).
 bool map_destination(std::string& level, std::string& spawn_tag);
 bool change_map(const std::wstring& level, const std::wstring& spawn_tag);   // FL_jRPG_CustomFunctionLibrary_C:ChangeMapByAssetName
+// Points de passage du jeu entre niveaux (BP_jRPG_MapTeleportPoint_C : sorties de zone, entrées sur la carte du monde).
+struct TeleportPoint {
+    UObject* actor = nullptr;
+    std::string name, row, spawn;   // acteur, ligne de niveau de destination (DT_jRPG_Levels), point d'apparition visé
+    bool world_map = false;         // IsInWorldMapLevel
+    double pos[3]{}, box[3]{};      // acteur, boîte de passage (TeleportBox)
+};
+std::vector<TeleportPoint> teleport_points();
+// Boîtes de passage actives ou non (SetGenerateOverlapEvents) : le pion suiveur ne change pas de niveau de lui-même.
+int set_teleport_points_active(bool on);
+// Classes Blueprint chargées dont le nom contient l'un des mots (insensible à la casse) : diagnostic (parcours complet).
+std::vector<std::string> loaded_bp_classes(const std::vector<std::string>& needles);
+std::vector<UObject*> actor_instances(const std::wstring& cls);   // instances d'une classe, hors objet par défaut
 // Interaction avec un objet du monde (BPI_Interaction:OnInteractionRequested) par le pion d'ici.
 bool interact(UObject* target, bool instant);
 // Dialogues

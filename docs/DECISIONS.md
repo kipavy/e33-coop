@@ -375,6 +375,34 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 
 ---
 
+## D26 — Changements de niveau : le suiveur ne change de niveau que sur MapChange, MapChange gardé si besoin (2026-10-23, demande de Killian, précise D12 point 4)
+
+**Constat** (`p9_zones_*`, tranche réelle de 7 transitions sur `TEST_LATE` : drapeau -> carte du monde, entrée de la carte
+du monde, sorties de zone, camp) : le suivi d'une transition simple était déjà fluide (1 chargement, début 33 ms après la
+réception, aucune pause ni resynchro). Deux défauts : (1) un MapChange reçu pendant que le suiveur charge un autre niveau
+(hôte plus rapide qui repart aussitôt) : `ChangeMapByAssetName` en plein chargement est ignoré par le jeu, le suiveur
+restait dans la mauvaise zone (`p9_zones_rapid_client` avant : 2 chargements manquants, 4 transitions jamais finies) ;
+(2) MapChange perdu pendant la jonction, et position de l'ancien niveau reçue après le MapChange.
+
+**Décision** :
+1. Le suiveur applique un MapChange tout de suite si son monde est prêt ; sinon (chargement d'un autre niveau, combat pas
+   fini, jonction en cours) il garde le dernier et l'applique dès que le monde est prêt (`coop_map_change_deferred`).
+   Entre deux phases d'un chargement (`IsMapChangeInProgress` retombe un instant), un ChangeMap remplace le chargement
+   en cours : il est appliqué aussitôt (transition « remplacée », `map_transitions_superseded`). Le mod compte ses propres
+   ChangeMap comme début de chargement (une fin et un début peuvent tomber dans la même image).
+2. Il ne change de niveau que sur MapChange : les boîtes de passage (`BP_jRPG_MapTeleportPoint*`, sorties de zone et
+   entrées de la carte du monde) sont coupées chez lui (`SetGenerateOverlapEvents(false)`, reprises toutes les 10 s pour
+   les parties chargées ensuite), rendues quand il redevient pilote ou à la fin de session.
+3. Positions du pilote de l'ancien niveau ignorées après le MapChange (jusqu'à sa première position dans le nouveau, 30 s
+   au plus) ; retour par `level_resync` avec le point d'apparition du dernier MapChange vers ce niveau.
+4. Niveau du menu principal jamais publié ni suivi (le retour au menu est une fin de session).
+5. Mesures chez le suiveur (`coop_map_transition`, horloge murale) et critères des scénarios : 1 chargement par transition,
+   début < 500 ms après réception, arrivée < 3 s après le pilote, écart à la reprise < 300 u, rattrapage < 2 s, aucune
+   pause, 0 `level_resyncs`, 0 `world_resyncs`. `-e33zonefix=0` coupe 1 à 3 (mesure « avant »).
+
+**Remise en cause si** : un niveau dont l'arrivée dépend du passage du pion dans la boîte (aucun vu) ; ou
+`coop_map_change_deferred` fréquent en vrai (l'hôte devrait alors attendre le client avant de repartir).
+
 ## D27 — Instantané de resynchro : jamais à la fin d'un dialogue, client gardé dans la partie, chargement borné (2026-10-23, essai à deux PC)
 
 **Constat** (v0.6.6, Killian + TOTOFFF) : instantané envoyé dans la seconde de la fin du dialogue du client -> chargement
