@@ -14,5 +14,5 @@
   "defense": ["parry", "fail"],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
   "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_freeaim_host.jsonl", "--timeout", "600"] },
-  "expect": { "battle_end": "any", "actions_freeaim": ">=1", "free_aim_hits": ">=3" }
+  "expect": { "battle_end": "any", "actions_freeaim": ">=1", "free_aim_hits": ">=3", "free_aim_rt_alone": ">=1", "free_aim_rt_shared": "0" }
 }

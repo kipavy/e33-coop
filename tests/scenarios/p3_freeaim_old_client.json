@@ -1,0 +1,18 @@
+{
+  "name": "p3_freeaim_old_client",
+  "description": "Avant (ancien comportement, -e33locomotioninbattle=1) : pendant la visée libre du client, RT (tir) est aussi lié au sprint du contexte d'exploration rendu en combat (même priorité 1). Phase 3 : visée libre côté client. Le client joue Verso : il vise le Lancelier et tire 3 fois (vrais tirs du jeu), puis attaque ; il doit rester identique à l'hôte enregistré (mêmes impacts, mêmes dégâts).",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Lune"],
+  "timeout_s": 600,
+  "max_turns": 30,
+  "shots_every_s": 3,
+  "actions": [
+    { "hero": "Verso", "type": "freeaim", "shots": 3, "target": "enemy:0", "then": { "type": "attack" } },
+    { "hero": "Verso", "type": "attack" }
+  ],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33locomotioninbattle=1"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_freeaim_host.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "actions_freeaim": ">=1", "free_aim_hits": ">=3", "free_aim_rt_shared": ">=1" }
+}

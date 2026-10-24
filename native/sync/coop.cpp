@@ -4030,6 +4030,9 @@ void tick(double dt)
          .add("rt_top", game::top_context_for_key("Gamepad_RightTrigger")).add("rt", game::active_contexts_with_key("Gamepad_RightTrigger"))
          .add("rb", game::active_contexts_with_key("Gamepad_RightShoulder")).add("lmb_top", game::top_context_for_key("LeftMouseButton"))
          .add("input_type", game::common_input_type()).add("widgets", game::active_common_widgets());
+        // Tir (RT) lié aussi par un autre contexte actif (ex. sprint de l'exploration) : il peut ne jamais arriver.
+        const std::string rt = game::active_contexts_with_key("Gamepad_RightTrigger");
+        bump(rt.find(",") != std::string::npos ? "free_aim_rt_shared" : "free_aim_rt_alone");
         log().write("coop_free_aim_inputs", o, s.battle.turn);
     }
     // Visée libre d'un héros d'ici : point visé envoyé ~20 fois par seconde (non fiable, pour l'affichage chez les autres).
