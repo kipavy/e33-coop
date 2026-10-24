@@ -14,6 +14,15 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.29] - 2026-10-25
+
+### Corrections
+- Combat lancé par l'autre joueur quand il mène : le combat part aussitôt chez l'hôte aussi (même ordre des tours,
+  même état) ; avant, chacun lançait le sien, parfois à 17 s d'écart.
+- Marchand : l'autre joueur ne peut plus changer la sélection ni acheter pendant que le meneur achète ; l'or et le
+  stock affichés suivent chaque achat du meneur. Le message « Le meneur a acheté un article » est retiré.
+- Exploration : les tirs du meneur sur les objets du décor (sphères, cages, boutons) sont rejoués chez l'autre joueur.
+
 ## [0.6.28] - 2026-10-24
 
 ### Corrections
@@ -264,7 +273,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.28...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.29...HEAD
+[0.6.29]: https://github.com/kipavy/e33-coop/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/kipavy/e33-coop/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/kipavy/e33-coop/compare/v0.6.26...v0.6.27
 [0.6.26]: https://github.com/kipavy/e33-coop/compare/v0.6.25...v0.6.26

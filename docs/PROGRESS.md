@@ -2,6 +2,12 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-25, 00h40 — v0.6.29 : combat demandé par le client meneur (D34), tirs en exploration, marchand verrouillé (non testé)
+
+- D34 : client meneur dont le pion lance un combat -> `BattleStart` n° 0 à l'hôte, qui lance le même ennemi (`coop_battle_request`, `coop_battle_request_received`). Cas du 24/10 22:27 : 17 s d'écart entre les deux combats.
+- Tirs en exploration : `BP_FreeAimProjectile_Base.OnCollision` sur un objet qui a `FreeAimHit` (hors ennemis / pions) -> `WorldInteract` « freeaim:<chemin> », rejoué par `FreeAimHit(pion, centre, false)`. Diagnostic `coop_freeaim_world_hit` (40 premiers impacts : classe, hittable). `coop_pe_trace` n'avait montré aucune fonction de tir (seulement ticks, cages `BP_PaintCage_C`).
+- Marchand (0.6.28 en vrai, 00:18) : achat rejoué chez TOTOFFF (or 7429 -> 6929) mais fenêtre pas redessinée ; boutons réactivés par le jeu à chaque changement d'article -> TOTOFFF a acheté lui-même (6429, resynchro). Désormais boutons désactivés à chaque passage, seule la ligne du pilote focalisable (`SetIsFocusable`), achat rejoué par le gestionnaire du bouton Acheter (repli TryBuyItem + `UpdateContent`), or affiché remis (`WBP_GoldAmount.SetCurrentValue`), message d'achat retiré ; `coop_follower_merchant_spent` si le suiveur dépense encore.
+
 ## 2026-10-24, 23h10 — v0.6.28 : miroir du marchand (non testé)
 
 - Suiveur : sélection = `SetFocus` sur `WBP_BaseButton` de la ligne, sinon `WBP_Merchant_Panel.OnMerchantItemFocused(row)` direct, reposée si le suiveur bouge la sienne (`coop_follower_merchant_focus` : by_focus, panel_ok). Achat du pilote (hover 4) rejoué : `MerchantComponent.TryBuyItem(MerchantItemRowName de la ligne)` (`coop_follower_merchant_buy` : ok, qty_before, gold_before/after). Fenêtre absente 6 s après la 1re sélection du pilote (dialogue non rejoué) : `BP_DialogueSystemComponent.OpenMerchantWindow(marchand le plus proche)` (`coop_follower_merchant_open`). À vérifier en jeu ; si l'achat est compté deux fois (or), annuler le rejeu.
