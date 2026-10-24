@@ -3,6 +3,10 @@
 #include <malloc.h>
 
 #include <Helpers/String.hpp>
+#include <set>
+
+#include "../common/jsonlog.hpp"
+#include "log.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -53,6 +57,12 @@ FProperty* struct_member(UStruct* s, std::wstring_view name)
 double get_double(UObject* o, const wchar_t* name, double def)
 {
     auto* v = value_ptr<double>(o, name);
+    // Diagnostic (2026-10-24) : une propriété float lue ici donne une valeur fausse (RenderOpacity). Signalé une fois par nom ;
+    // lecture inchangée pour ne pas modifier les états comparés.
+    if (v) if (FProperty* p = prop(o, name); p && p->GetSize() != 8) {
+        static std::set<std::wstring> said;
+        if (said.insert(name).second) log().write("ue_get_double_size", JsonObj().add("prop", to_utf8(name)).add("size", static_cast<int64_t>(p->GetSize())));
+    }
     return v ? *v : def;
 }
 

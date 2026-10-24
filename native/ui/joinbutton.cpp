@@ -308,6 +308,18 @@ bool insert(UObject* menu)
 // On ne déréférence jamais un widget gardé d'un ancien menu : on compare seulement les pointeurs aux enfants vivants.
 UObject* g_version = nullptr;
 int g_version_errors = 0;
+
+// RenderOpacity est un float : ue::get_double le lisait comme un double (valeur quasi nulle, texte de version invisible
+// alors que « placed » était vrai, captures du 2026-10-24).
+float render_opacity(UObject* w, float def)
+{
+    FProperty* p = w ? ue::prop(w, STR("RenderOpacity")) : nullptr;
+    if (!p) return def;
+    const void* v = p->ContainerPtrToValuePtr<void>(w);
+    if (p->GetSize() == 4) return *static_cast<const float*>(v);
+    if (p->GetSize() == 8) return static_cast<float>(*static_cast<const double*>(v));
+    return def;
+}
 constexpr float kVersionGap = 12.f;
 
 void version_error(const char* what)
@@ -422,7 +434,7 @@ std::string widget_state(UObject* w)
     ue::Call v(w, STR("GetVisibility"));
     const int64_t vis = v && v.invoke() ? v.out_int(STR("ReturnValue"), -1) : -1;
     std::string s = ue::short_name(w) + " vis=" + std::to_string(vis) + " shown=" + (call_bool(w, STR("IsVisible")) ? "1" : "0") +
-                    " op=" + std::to_string(ue::get_double(w, STR("RenderOpacity"), -1.0));
+                    " op=" + std::to_string(render_opacity(w, -1.f));
     ue::Call ds(w, STR("GetDesiredSize"));
     double dx = 0, dy = 0;
     if (ds && ds.invoke() && vec2_out(ds, dx, dy)) s += " size=" + std::to_string(static_cast<int>(dx)) + "x" + std::to_string(static_cast<int>(dy));
@@ -507,7 +519,7 @@ void place_version(UObject* menu)
     // Invisible tant que la largeur du numéro est inconnue (sinon il le chevaucherait un instant).
     ue::Call op(w, STR("SetRenderOpacity"));
     if (auto* v = static_cast<float*>(op ? op.param_ptr(STR("InOpacity")) : nullptr)) {
-        *v = placed ? static_cast<float>(ue::get_double(build, STR("RenderOpacity"), 1.0)) : 0.f;
+        *v = placed ? render_opacity(build, 1.f) : 0.f;
         op.invoke();
     }
     if (fresh) {
