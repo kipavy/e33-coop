@@ -187,6 +187,7 @@ struct Battle {
     std::map<TurnSpotSeq, proto::Defense> defenses;
     std::map<int, uint16_t> hit_seq;                       // emplacement -> n° de coup reçu dans le tour
     std::map<UObject*, LocalHit> local_hits;               // composant de stats -> coup en cours (héros d'ici)
+    ULONGLONG wait_parry_at = 0;                           // appui de parade vu pendant une attente figée (GetTickCount64), D32
     std::map<UObject*, int> imposed_check;                 // composant de stats -> défense imposée (vérification du verdict)
     // Parade en duo : défense retenue ici pour chaque coup reçu par un héros pendant le tour (résultat du propriétaire)
     bool duo_parry = false;                                // réglage de l'hôte pour ce combat (BattleStart)
@@ -737,6 +738,39 @@ void advance_clock(double dt)
 // Valeur maximale d'un compteur (durées les plus longues : attentes, images).
 void bump_max(const char* name, int v) { int& c = s.counters[name]; c = std::max(c, v); }
 
+// Parade appuyée pendant une attente figée (D32, essai à deux PC du 2026-10-24, 18:27) : sur une attaque de zone, le
+// jeu règle le coup du héros de l'autre joueur (attente de son résultat, image figée ~60-150 ms) puis, dans la même
+// image, celui du héros d'ici. Un appui pendant l'attente n'est lu par le jeu qu'à l'image suivante : la parade du héros
+// d'ici était jugée ratée. On lit donc la touche de parade nous-mêmes pendant l'attente (E au clavier, RB à la manette),
+// et le coup du héros d'ici qui suit lance sa parade (même chemin que l'imposition d'un résultat).
+// -e33waitparry=0 : ancien comportement.
+bool wait_parry_enabled()
+{
+    static const bool v = arg(L"e33waitparry") != L"0";
+    return v;
+}
+
+bool parry_key_down()
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    if (pid != GetCurrentProcessId()) return false;
+    if (GetAsyncKeyState('E') & 0x8000) return true;
+    struct Pad { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; };
+    using GetState = DWORD(WINAPI*)(DWORD, Pad*);
+    static GetState get = [] {
+        HMODULE m = LoadLibraryW(L"xinput1_4.dll");
+        if (!m) m = LoadLibraryW(L"xinput9_1_0.dll");
+        return m ? reinterpret_cast<GetState>(GetProcAddress(m, "XInputGetState")) : nullptr;
+    }();
+    if (!get) return false;
+    for (DWORD i = 0; i < 4; ++i) {
+        Pad p{};
+        if (get(i, &p) == 0 && (p.buttons & 0x0200)) return true;   // XINPUT_GAMEPAD_RIGHT_SHOULDER (RB)
+    }
+    return false;
+}
+
 // Pompe le réseau en bloquant le game thread jusqu'à cond() ou expiration (utilisé dans les hooks). L'image est figée
 // pendant ce temps : chaque attente est mesurée (wait_max_ms), et journalisée avec son origine au-delà de 250 ms.
 template <class Cond>
@@ -745,7 +779,17 @@ bool wait_for(const char* site, Cond cond, double timeout_s)
     const ULONGLONG start = GetTickCount64();
     const double base = s.now;
     bool ok = true;
+    // Attente d'un résultat de défense : appui de parade d'ici relevé (front montant, voir parry_key_down).
+    const bool watch_parry = wait_parry_enabled() && std::strcmp(site, "defense") == 0;
+    bool parry_was_down = watch_parry && parry_key_down();
+    ULONGLONG next_poll = 0;
     while (!cond()) {
+        if (watch_parry && GetTickCount64() >= next_poll) {
+            next_poll = GetTickCount64() + 4;
+            const bool down = parry_key_down();
+            if (down && !parry_was_down) { s.battle.wait_parry_at = GetTickCount64(); bump("parry_presses_during_wait"); }
+            parry_was_down = down;
+        }
         const double elapsed = (GetTickCount64() - start) / 1000.0;
         if (elapsed > timeout_s || s.ended) { ok = false; break; }
         s.now = base + elapsed;
@@ -2077,6 +2121,14 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     const uint16_t hit = ++b.hit_seq[spot];
     if (controls(spot)) {
         b.local_hits[stats_comp] = {spot, hit, jumpable, false};
+        // Parade appuyée pendant une attente figée juste avant (attaque de zone) : lancée maintenant, avant le test du jeu.
+        if (b.wait_parry_at && !jumpable && GetTickCount64() - b.wait_parry_at <= 300) {
+            game::clear_defense_lock(hero);
+            const bool started = game::start_parry(hero);
+            bump(started ? "parries_from_wait" : "parries_from_wait_failed");
+            log().write("coop_parry_from_wait", JsonObj().add("spot", spot).add("hit", static_cast<int>(hit)).add("started", started)
+                                                   .add("ago_ms", static_cast<int64_t>(GetTickCount64() - b.wait_parry_at)), b.turn);
+        }
         return;
     }
     const uint8_t owner = owner_of_spot(spot);

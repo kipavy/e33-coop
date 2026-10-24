@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.17] - 2026-10-24
+
+### Corrections
+- Combat : sur une attaque de zone, la parade de chaque joueur compte même quand le jeu attend un instant la parade
+  de l'autre (elle pouvait être jugée ratée et faire perdre des PV).
+
 ## [0.6.16] - 2026-10-24
 
 ### Corrections
@@ -185,7 +191,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.16...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.17...HEAD
+[0.6.17]: https://github.com/kipavy/e33-coop/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/kipavy/e33-coop/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/kipavy/e33-coop/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/kipavy/e33-coop/compare/v0.6.13...v0.6.14

@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 18h30 — v0.6.17 : parade sur attaque de zone (D32)
+
+- 18:27 (0.6.16) : attaque de zone du Portier parée par les deux, Lune perd des PV chez TOTOFFF. Journaux : attente du résultat du héros de Killian (63 ms + à-coup 81 ms), coup de Lune réglé dans la même image, appui lu 17 ms après (`coop_stray_defense` puis `coop_defense_try`). Corrigé (D32) : touche de parade relevée pendant l'attente, parade lancée au coup suivant du héros d'ici. **Non testé** (Killian joue) : à vérifier en jeu (`coop_parry_from_wait`) ; un scénario devrait simuler un appui pendant l'attente (vraies entrées : accord de Killian).
+
 ## 2026-10-24, 17h — v0.6.16 : cible des compétences sur un allié ; bugs ouverts de la session
 
 - **Évêque (16:39:57)** : Gustave (hôte) lance `Powerful_Gustave` sur Lune ; `ActionCommand.targets` vide (le jeu passe une liste vide à `RequestActionExecution` pour un ciblage d'allié choisi à la main) -> cible automatique chez le client = Évêque. Buff sur l'Évêque chez lui, sur Lune chez l'hôte (`coop_repair_error` « buff class not loaded » à chaque tour), puis PV de l'Évêque et des héros qui divergent en cours de tour (Killian mort chez TOTOFFF, vivant à 5 PV chez lui). Corrigé : liste vide -> `TargetedCharacters` du gestionnaire de ciblage (`coop_action_targets_fallback`). Non testé (vrai chemin = vraies entrées), publié à la demande de Killian.
