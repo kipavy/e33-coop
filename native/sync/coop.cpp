@@ -278,6 +278,8 @@ struct State {
     bool input_enabled = true;
     int defense_try_logs = 0;                              // diagnostic : appuis de défense du propriétaire journalisés
     int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
+    int imc_logs = 0;                                      // diagnostic : contextes d'entrée au début des tours ennemis
+    int defense_path_logs = 0;                             // diagnostic : appuis de défense (contrôleur, gestionnaire)
     UObject* input_sub = nullptr;                          // EnhancedInputLocalPlayerSubsystem (pris au blocage)
     std::map<UObject*, int> removed_contexts;              // contextes d'entrée retirés pendant le blocage -> priorité
     std::map<std::string, int> counters;
@@ -1978,6 +1980,25 @@ void on_turn_start(UObject* actor)
             bump(bound ? "defense_input_bound" : "defense_input_bind_failed");
             log().write("coop_defense_input_bind", JsonObj().add("called", called).add("bound", bound), s.battle.turn);
         }
+        // Diagnostic (2026-10-24 : parade du client toujours sans effet) : contextes d'entrée de combat actifs au début
+        // de chaque tour ennemi, pour comparer avec l'hôte et le solo.
+        if (actor && !game::is_player(actor) && s.imc_logs < 40) {
+            ++s.imc_logs;
+            UObject* sub = game::input_subsystem();
+            std::string act;
+            for (const wchar_t* n : {L"IMC_BattleDefense", L"IMC_Battle_InputBlocker", L"IMC_Battle_PlayerTurn", L"IMC_Battle_MainWheel",
+                                     L"IMC_Battle_Targeting", L"IMC_Battle_QTE", L"IMC_Battle_FreeAim", L"IMC_Battle_PauseMenu"}) {
+                UObject* imc = ue::find_object((std::wstring(L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/") + n + L"." + n).c_str());
+                ue::Call has(sub, STR("HasMappingContext"));
+                if (!imc || !has) continue;
+                has.set_object(STR("MappingContext"), imc).invoke();
+                if (!has.out_bool(STR("ReturnValue"))) continue;
+                if (!act.empty()) act += ",";
+                act += ue::to_utf8(n) + ":" + std::to_string(has.out_int(STR("OutFoundPriority")));
+            }
+            log().write("coop_enemy_turn_inputs", JsonObj().add("contexts", act).add("bound", ctrl ? ue::get_bool(ctrl, STR("IsDefenseInputBound")) : false)
+                                                    .add("input_enabled", s.input_enabled), s.battle.turn);
+        }
     }
     if (s.role == Role::Host) host_turn_start(actor);
     else if (s.role == Role::Client && s.battle.active) client_turn_start(actor);
@@ -2359,6 +2380,23 @@ void subscribe()
         bump("free_aims_published");
         publish(fa_event(proto::FreeAimKind::Start, 0, {}));
     });
+    // Diagnostic (2026-10-24 : parade du client sans effet) : appui reçu par le contrôleur (action d'entrée), puis par
+    // le gestionnaire de combat, avant TryStartParry / TryStartDodge (journalisés plus haut).
+    for (const wchar_t* ev : {L"InpActEvt_IA_Battle_Defense_Parry_K2Node_EnhancedInputActionEvent_1",
+                              L"InpActEvt_IA_Battle_Defense_Dodge_K2Node_EnhancedInputActionEvent_0"}) {
+        const std::string name = ue::to_utf8(ev).substr(28, 5);   // « Parry » / « Dodge »
+        bus.pre(fn(game::path::CtrlWorld, ev), [name](HookCtx&, UFunction*) {
+            if (s.role == Role::Solo || !s.battle.active || ++s.defense_path_logs > 120) return;
+            log().write("coop_defense_input_event", JsonObj().add("action", name), s.battle.turn);
+        });
+    }
+    for (const wchar_t* f : {L"OnParryAction", L"OnDodgeAction"}) {
+        const std::string name = ue::to_utf8(f);
+        bus.pre(fn(game::path::BattleMgr, f), [name](HookCtx&, UFunction*) {
+            if (s.role == Role::Solo || !s.battle.active || ++s.defense_path_logs > 120) return;
+            log().write("coop_defense_bm_action", JsonObj().add("fn", name), s.battle.turn);
+        });
+    }
     // Diagnostic (2026-10-24 : TOTOFFF vise mais ne tire pas, à la manette) : bouton de tir vu par le héros.
     bus.pre(fn(game::path::BattleChar, L"InpActEvt_IA_Battle_FreeAim_Shoot_K2Node_EnhancedInputActionEvent_6"), [](HookCtx& ctx, UFunction*) {
         if (s.role == Role::Solo || !s.battle.active || ++s.shoot_input_logs > 60) return;
