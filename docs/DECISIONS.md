@@ -508,7 +508,15 @@ sont toujours pas synchronisés (journalisés, `unsynced_random_targeting`) ; `A
 **Remise en cause si** : `draw_mismatches` au tour 0 (ordre des tirages de mise en place différent d'une machine à
 l'autre) ; `start_mech_diffs` > 0 avec une graine connue ; `setup_draws_natural` > 0 chez l'hôte.
 
-## D31 — Écran de défaite : seul l'hôte choisit, les clients suivent (2026-10-24, bug vu en vrai, demande de Killian)
+## D32 — Parade appuyée pendant une attente figée (2026-10-24, essai à deux PC)
+
+**Constat** (18:27, attaque de zone du Portier, 0.6.16) : Killian et TOTOFFF parent tous les deux ; chez TOTOFFF, le jeu règle d'abord le coup du héros de Killian (attente bloquante de son résultat, 63 ms, plus un à-coup de 81 ms), puis, dans la même image, celui de Lune : son appui, fait pendant l'attente, n'est lu qu'à l'image suivante (17 ms trop tard) et passe d'abord par le héros de Killian (`coop_stray_defense`). Lune perd des PV alors qu'il a paré à temps.
+
+**Décision** : pendant une attente de résultat de défense (`wait_for` site `defense`), le mod relève lui-même la touche de parade (front montant : E au clavier, RB à la manette via XInput, jeu au premier plan). Le coup suivant d'un héros d'ici, dans les 300 ms, lance sa parade avant le test du jeu (`clear_defense_lock` + `start_parry`, comme l'imposition d'un résultat). Journal `coop_parry_from_wait`, compteurs `parry_presses_during_wait`, `parries_from_wait`. `-e33waitparry=0` : ancien comportement. Esquive et saut non couverts (cas non vu).
+
+**Remise en cause si** : touches de parade remappées (E / RB en dur) ; parade lancée sur un héros que le joueur ne voulait pas parer (appui pendant l'attente d'un coup visant seulement l'autre joueur, puis coup sur le sien dans les 300 ms).
+
+## D33 — Écran de défaite : seul l'hôte choisit, les clients suivent (2026-10-24, bug vu en vrai, demande de Killian)
 
 **Constat** (essai à deux PC, 0.6.14, combat « WM_Portier_Abbest_Volester », 16:49) : sur l'écran de défaite, Killian
 (hôte) a choisi « Réessayer » et TOTOFFF « Abandonner » : l'hôte a rechargé sa partie (`MapChange`), le client est resté

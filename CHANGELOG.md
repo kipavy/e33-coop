@@ -18,6 +18,27 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 - Écran de défaite : seul l'hôte choisit (équipe de réserve, « Réessayer » ou « Abandonner ») ; les autres joueurs voient
   « l'hôte choisit… » puis suivent son choix (avant : chacun choisissait, et un choix différent finissait sur un écran noir).
 
+## [0.6.19] - 2026-10-24
+
+### Corrections
+- Combat lancé par l'hôte pendant que l'autre joueur est dans un menu (équipe, pictos…) : son jeu ne se fige plus ; un
+  message lui demande de fermer le menu, puis il rejoint le combat.
+
+## [0.6.18] - 2026-10-24
+
+### Ajouts
+- Dialogues : l'autre joueur voit en surbrillance la réponse que le meneur survole avant de choisir.
+
+### Corrections
+- Exploration : les éléments du décor activés par le meneur (ex. le pont de la carte du monde) s'activent aussi chez
+  l'autre joueur, qui ne le voit plus marcher dans le vide.
+
+## [0.6.17] - 2026-10-24
+
+### Corrections
+- Combat : sur une attaque de zone, la parade de chaque joueur compte même quand le jeu attend un instant la parade
+  de l'autre (elle pouvait être jugée ratée et faire perdre des PV).
+
 ## [0.6.16] - 2026-10-24
 
 ### Corrections
@@ -189,7 +210,10 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.16...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.19...HEAD
+[0.6.19]: https://github.com/kipavy/e33-coop/compare/v0.6.18...v0.6.19
+[0.6.18]: https://github.com/kipavy/e33-coop/compare/v0.6.17...v0.6.18
+[0.6.17]: https://github.com/kipavy/e33-coop/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/kipavy/e33-coop/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/kipavy/e33-coop/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/kipavy/e33-coop/compare/v0.6.13...v0.6.14

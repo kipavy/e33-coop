@@ -1,6 +1,6 @@
 {
   "name": "p3_defeat_retry_host",
-  "description": "Défaite, choix de l'hôte (D31), combat contre un ennemi de la carte (« rejouable » ?) : équipe réduite à Lune (1 PV, jouée par le faux client). Défaite -> réserve refusée -> « Réessayer » (le jeu recharge la dernière partie et relance le combat) -> nouvelle défaite -> réserve refusée -> « Abandonner ». Exploratoire : vérifie que la fenêtre « Réessayer / Abandonner » existe pour ce combat et ce que fait chaque réponse (coop_defeat_trace, save_trace). Produit l'enregistrement rejoué par p3_defeat_retry_client.",
+  "description": "Défaite, choix de l'hôte (D33), combat contre un ennemi de la carte (« rejouable » ?) : équipe réduite à Lune (1 PV, jouée par le faux client). Défaite -> réserve refusée -> « Réessayer » (le jeu recharge la dernière partie et relance le combat) -> nouvelle défaite -> réserve refusée -> « Abandonner ». Exploratoire : vérifie que la fenêtre « Réessayer / Abandonner » existe pour ce combat et ce que fait chaque réponse (coop_defeat_trace, save_trace). Produit l'enregistrement rejoué par p3_defeat_retry_client.",
   "save": "e33coop-test/TEST_B",
   "timeout_s": 900,
   "max_turns": 30,

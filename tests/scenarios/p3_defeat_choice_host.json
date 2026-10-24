@@ -1,6 +1,6 @@
 {
   "name": "p3_defeat_choice_host",
-  "description": "Défaite, choix de l'hôte (D31). Comme p3_defeat_host (Lune seule à 1 PV, jouée par le faux client, tuée par le Lancelier), mais le test continue sur l'écran de défaite : l'hôte refuse l'équipe de réserve par la fenêtre du jeu ; ce combat (lancé par une action de jeu) n'est pas « rejouable » : le jeu abandonne seul (OnRetryEncounterResponse(false)) et revient à l'exploration. Les deux réponses sont publiées (DefeatChoice prompt 1 puis 0). Produit l'enregistrement rejoué par p3_defeat_choice_client.",
+  "description": "Défaite, choix de l'hôte (D33). Comme p3_defeat_host (Lune seule à 1 PV, jouée par le faux client, tuée par le Lancelier), mais le test continue sur l'écran de défaite : l'hôte refuse l'équipe de réserve par la fenêtre du jeu ; ce combat (lancé par une action de jeu) n'est pas « rejouable » : le jeu abandonne seul (OnRetryEncounterResponse(false)) et revient à l'exploration. Les deux réponses sont publiées (DefeatChoice prompt 1 puis 0). Produit l'enregistrement rejoué par p3_defeat_choice_client.",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
   "party": ["Lune"],

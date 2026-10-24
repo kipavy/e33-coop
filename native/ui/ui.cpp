@@ -30,6 +30,7 @@ constexpr Entry kTexts[] = {
     {"keys_client", "Coop : F8 prendre la main · F9 options", "Coop: F8 take control · F9 options"},
     {"your_turn", "À vous de jouer", "Your turn"},
     {"turn_timer", "Tour de {0} : {1} s", "{0}'s turn: {1} s"},
+    {"battle_close_menu", "Combat lancé : fermez le menu pour le rejoindre", "Battle started: close the menu to join it"},
     {"duo_parry", "Parade en duo ! +{1} PA ({0})", "Duo parry! +{1} AP ({0})"},
     {"turn_forced", "Temps écoulé : {0} attaque automatiquement", "Time is up: {0} attacks automatically"},
     // Aperçu de l'action que prépare un autre joueur pendant son tour ({1} : action, {2} : cibles)
@@ -46,7 +47,7 @@ constexpr Entry kTexts[] = {
     {"joining", "Connexion à la partie de l'hôte…", "Joining the host's game…"},
     {"loading_host_game", "Chargement de la partie de l'hôte…", "Loading the host's game…"},
     {"resyncing", "Resynchronisation avec l'hôte…", "Resynchronizing with the host…"},
-    // Défaite (D31) : seul l'hôte choisit « Réessayer » ou « Abandonner »
+    // Défaite (D33) : seul l'hôte choisit « Réessayer » ou « Abandonner »
     {"defeat_host_choosing", "Défaite : {0} choisit (réessayer ou abandonner)…", "Defeat: {0} is choosing (retry or give up)…"},
     {"defeat_host_retry", "{0} réessaie le combat", "{0} retries the battle"},
     {"defeat_host_reserve", "{0} envoie l'équipe de réserve", "{0} sends the reserve team"},

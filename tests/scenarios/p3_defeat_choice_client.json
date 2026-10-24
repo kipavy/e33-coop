@@ -1,6 +1,6 @@
 {
   "name": "p3_defeat_choice_client",
-  "description": "Défaite, choix de l'hôte (D31), côté client (Lune) face au faux hôte qui rejoue p3_defeat_choice_host : la fenêtre « équipe de réserve » est refermée ici dès qu'elle s'ouvre (statut « l'hôte choisit »), puis la réponse de l'hôte (non) est donnée ici ; le jeu abandonne seul comme chez l'hôte et revient à l'exploration (pas d'écran noir).",
+  "description": "Défaite, choix de l'hôte (D33), côté client (Lune) face au faux hôte qui rejoue p3_defeat_choice_host : la fenêtre « équipe de réserve » est refermée ici dès qu'elle s'ouvre (statut « l'hôte choisit »), puis la réponse de l'hôte (non) est donnée ici ; le jeu abandonne seul comme chez l'hôte et revient à l'exploration (pas d'écran noir).",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
   "party": ["Lune"],

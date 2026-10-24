@@ -19,6 +19,8 @@
 #include <map>
 #include <map>
 #include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <set>
 #include <string_view>
 #include <vector>
@@ -31,6 +33,10 @@
 #include "../hooks/reflect.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
+
+#include <Unreal/Hooks.hpp>
+#include <Unreal/UClass.hpp>
+#include <Unreal/UFunction.hpp>
 #include "../ui/ui.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -144,6 +150,8 @@ struct S {
     std::deque<proto::WorldInteract> interactions;
     std::deque<std::pair<proto::DialogueChoice, double>> choices;
     bool choice_pending = false;                  // question posée (StartChoice), pas encore répondue
+    int choice_hover_sent = -1, choice_hover_want = -1, choice_hover_shown = -1;   // choix survolé (pilote / voulu / affiché ici)
+    int choice_diag = 0;
     bool sequence_playing = false;                // OnSequenceStarted reçu, pas encore OnSequenceFinished
     // Narration (barrière) et pause
     double next_poll = 0;
@@ -1487,6 +1495,70 @@ void pilot_stuck_tick()
      .add("w_contexts", game::active_contexts_with_key("W")).add("z_contexts", game::active_contexts_with_key("Z"));
     log().write("coop_pilot_stuck", o);
 }
+
+// Choix de dialogue survolé par le pilote (demande de Killian, 2026-10-24) : le suiveur voit la même option en
+// surbrillance avant le choix. Options = WBP_Dialogue_ChoiceOption_C visibles, rangées par leur place dans leur parent.
+std::vector<UObject*> choice_options()
+{
+    std::vector<UObject*> all, out;
+    RC::Unreal::UObjectGlobals::FindAllOf(STR("WBP_Dialogue_ChoiceOption_C"), all);
+    std::vector<std::pair<int, UObject*>> v;
+    for (UObject* o : all) {
+        if (!o) continue;
+        ue::Call vis(o, STR("IsVisible"));
+        if (!vis || !vis.invoke() || !vis.out_bool(STR("ReturnValue"))) continue;
+        ue::Call par(o, STR("GetParent"));
+        UObject* parent = par && par.invoke() ? par.out_object(STR("ReturnValue")) : nullptr;
+        int idx = static_cast<int>(v.size()) + 100;
+        if (parent) { ue::Call ci(parent, STR("GetChildIndex")); if (ci) { ci.set_object(STR("Content"), o); if (ci.invoke()) idx = static_cast<int>(ci.out_int(STR("ReturnValue"), idx)); } }
+        v.emplace_back(idx, o);
+    }
+    std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.first < b.first; });
+    for (auto& [i, o] : v) out.push_back(o);
+    return out;
+}
+
+bool widget_flag(UObject* w, const wchar_t* fn)
+{
+    ue::Call c(w, fn);
+    return c && c.invoke() && c.out_bool(STR("ReturnValue"));
+}
+
+void choice_hover_tick()
+{
+    static double next = 0;
+    if (!s.choice_pending || !sharing() || s.now < next) return;
+    next = s.now + 0.1;
+    const auto opts = choice_options();
+    if (opts.empty()) return;
+    if (s.choice_diag++ == 0) {
+        std::string names;
+        for (UObject* o : opts) names += ue::short_name(o) + (widget_flag(o, STR("HasFocusedDescendants")) || widget_flag(o, STR("HasAnyUserFocus")) ? "(f)" : "") +
+                                         (widget_flag(o, STR("IsHovered")) ? "(h)" : "") + " ";
+        log().write("coop_choice_options", JsonObj().add("count", static_cast<int64_t>(opts.size())).add("options", names).add("pilot", is_pilot()));
+    }
+    if (is_pilot()) {
+        int idx = -1;
+        for (size_t i = 0; i < opts.size() && idx < 0; ++i)
+            if (widget_flag(opts[i], STR("HasAnyUserFocus")) || widget_flag(opts[i], STR("HasFocusedDescendants")) || widget_flag(opts[i], STR("IsHovered"))) idx = static_cast<int>(i);
+        if (idx >= 0 && idx != s.choice_hover_sent) {
+            s.choice_hover_sent = idx;
+            s.net.publish(proto::DialogueChoice{++s.seq, idx, 1}, true);
+            bump("choice_hovers_published");
+        }
+        return;
+    }
+    const int want = s.choice_hover_want;
+    if (want < 0 || want == s.choice_hover_shown || want >= static_cast<int>(opts.size())) return;
+    // Focus de l'interface sur l'option voulue : surbrillance du jeu. Les entrées de choix du suiveur sont coupées
+    // (contexte de choix retiré), il ne peut pas valider.
+    ue::Call c(opts[static_cast<size_t>(want)], STR("SetFocus"));
+    const bool ok = c && c.invoke();
+    s.choice_hover_shown = want;
+    bump(ok ? "choice_hovers_shown" : "choice_hover_errors");
+    if (s.choice_diag < 40) { ++s.choice_diag; log().write("coop_choice_hover", JsonObj().add("index", want).add("ok", ok)); }
+}
+
 // --- Barrière narrative et pause ------------------------------------------------------------------
 
 // Pause du jeu entier tenue par une ou plusieurs raisons. Le jeu peut l'enlever de lui-même (fin de cinématique :
@@ -1572,6 +1644,49 @@ struct SceneSync {
     int lag_max_ms = 0, end_late_max_ms = 0, barrier_wait_max_ms = 0;
 };
 SceneSync sc;
+DWORD g_explore_thread = 0;   // fil du jeu (relevé au tick d'exploration)
+
+// Crochet global de ProcessEvent (2026-10-24, pont de la carte du monde activé par Killian, pas chez TOTOFFF) :
+//  1. activation (OnInteractionRequested) d'un objet BP_GPE_* hors de kInteractables (pont…) : publiée et rejouée
+//     comme les autres interactions ;
+//  2. diagnostic : fonctions appelées en exploration sur les objets de tir / peinture / GPE (noms distincts, plafonnés),
+//     pour rejouer ensuite les tirs du pilote (sphères de peinture). Classe jugée intéressante une fois par UClass.
+void gpe_process_event(RC::Unreal::UObject* ctx, RC::Unreal::UFunction* fn, void* parms)
+{
+    using namespace RC::Unreal;
+    if (!ctx || !fn || GetCurrentThreadId() != g_explore_thread) return;
+    static std::unordered_map<UClass*, int> kind;   // 0 rien, 1 GPE à rejouer, 2 trace seulement
+    UClass* cls = ctx->GetClassPrivate();
+    auto it = kind.find(cls);
+    if (it == kind.end()) {
+        const std::string n = ue::short_name(cls);
+        int k = 0;
+        if (n.rfind("BP_GPE_", 0) == 0 && n != "BP_GPE_Rope_C") k = 1;
+        else if (n.find("Paint") != std::string::npos || n.find("FreeAim") != std::string::npos || n.find("Projectile") != std::string::npos ||
+                 n.find("Shoot") != std::string::npos || n.find("Target") != std::string::npos || n.find("GPE") != std::string::npos) k = 2;
+        it = kind.emplace(cls, k).first;
+    }
+    if (it->second == 0 || !s.active || !sharing()) return;
+    static const FName interact(STR("OnInteractionRequested"), FNAME_Find);
+    if (it->second == 1 && fn->GetNamePrivate() == interact && !s.replaying) {
+        const std::string path = object_path(ctx);
+        if (!is_pilot()) { bump("local_actions_on_follower"); log().write("coop_follower_interaction", JsonObj().add("actor", path)); return; }
+        s.net.publish(proto::WorldInteract{++s.seq, path, false}, true);
+        bump("interactions_published"); bump("gpe_interactions_published"); touch();
+        sc.interaction = path; sc.interaction_at = s.now;
+        log().write("coop_interaction", JsonObj().add("actor", path).add("instant", false).add("gpe", true));
+        return;
+    }
+    static std::unordered_set<std::string> seen;
+    if (seen.size() >= 300 || !is_pilot() || game::in_battle()) return;
+    const std::string key = ue::short_name(cls) + ":" + ue::to_utf8(fn->GetName());
+    if (seen.insert(key).second) log().write("coop_pe_trace", JsonObj().add("fn", key).add("actor", ue::short_name(ctx)));
+}
+
+void gpe_pe_hook(RC::Unreal::Hook::TCallbackIterationData<void>&, RC::Unreal::UObject* ctx, RC::Unreal::UFunction* fn, void* parms)
+{
+    gpe_process_event(ctx, fn, parms);
+}
 
 constexpr double kSceneCauseWindow = 60.0;   // cause retenue si vue dans la minute qui précède la cinématique
 
@@ -1762,8 +1877,10 @@ void poll_tick()
     if (s.now < s.next_poll) return;
     s.next_poll = s.now + kPollPeriod;
     if (!game::controller()) return;
+    g_explore_thread = GetCurrentThreadId();
     movement_lock_tick();
     pilot_stuck_tick();
+    choice_hover_tick();
     // Narration locale
     if (s.intro && s.now - s.intro_since > kIntroMax) { s.intro = false; log().write("coop_intro_timeout", JsonObj()); }
     // Fin de l'intro : le signal du jeu (OnInitialCinematicCompleted) n'arrive pas (vu le 2026-10-21). Elle finit donc
@@ -2383,6 +2500,7 @@ bool handle(uint8_t from, const proto::Message& m)
     }
     if (auto* dc = std::get_if<proto::DialogueChoice>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
+        if (dc->hover) { s.choice_hover_want = dc->index; return true; }   // survol seulement : surbrillance, pas de choix
         s.choices.emplace_back(*dc, s.now);
         touch();
         return true;
@@ -2500,8 +2618,10 @@ void subscribe()
             log().write("coop_interaction", JsonObj().add("actor", path).add("instant", instant));
         });
     }
+    RC::Unreal::Hook::RegisterProcessEventPreCallback(&gpe_pe_hook, {false, false, STR("E33Coop"), STR("ExploreGPE")});
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
         s.choice_pending = false;
+        s.choice_hover_want = -1;
         if (s.replaying || !s.active || !sharing()) return;
         const int index = static_cast<int>(ue::read_param_int(ctx, f, STR("ChoiceIndex")).value_or(-1));
         if (!is_pilot()) {
@@ -2517,6 +2637,8 @@ void subscribe()
     // Question de dialogue : CurrentChoices reste vide pendant la question (vu le 2026-10-20), on suit StartChoice.
     bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:StartChoice", [](HookCtx&, UFunction*) {
         s.choice_pending = true;
+        s.choice_hover_sent = s.choice_hover_shown = -1;   // le survol voulu reçu avant la question ici est gardé
+        s.choice_diag = 0;
         log().write("coop_choice_asked", JsonObj());
     });
     bus.post(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:OnSequenceStarted", [](HookCtx&, UFunction*) {

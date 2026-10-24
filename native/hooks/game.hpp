@@ -81,7 +81,7 @@ bool perform_action(int action_type, const std::wstring& secondary, const std::v
 // BM.StartBattleEndFlow au lieu de BM.ForceBattleEnd. Non vérifié en jeu (noms du dump). how : fonction et paramètre
 // utilisés, pour le journal. Ne pas appeler depuis un hook (tick seulement).
 bool force_battle_end(int result, bool direct_flow, std::string& how);
-// Écran de défaite (D31) : WBP_jRPG_GameOverScreen_C du gestionnaire de combat (nul hors défaite), et sa fenêtre
+// Écran de défaite (D33) : WBP_jRPG_GameOverScreen_C du gestionnaire de combat (nul hors défaite), et sa fenêtre
 // « Réessayer / Abandonner » (WBP_ModalPopup_C ouverte par PromptBattleRetry, ParentActivatableWidget = l'écran), nulle
 // si elle n'est pas ouverte. Parcourt les objets (FindAllOf) : pas à chaque image. visible : affichée (ni masquée ni réduite).
 UObject* defeat_screen();

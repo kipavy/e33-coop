@@ -157,7 +157,7 @@ struct State {
     bool exit_called = false;
     int battles = 0;
     std::vector<std::string> errors;
-    // Étape "defeat" (D31) : écran de défaite, fenêtre de choix ouverte ici
+    // Étape "defeat" (D33) : écran de défaite, fenêtre de choix ouverte ici
     double defeat_seen = -1, defeat_open_since = -1, defeat_next = 0;
     UObject* defeat_answered = nullptr;   // fenêtre déjà répondue (elle peut rester « active » un moment)
     int defeat_base = 0;
@@ -986,7 +986,7 @@ void subscribe()
 //   {"do":"call_fn","target":"gi|controller|pawn|camp_manager|<classe>","fn":"<nom>","optional":true}   appel sans paramètre
 //   {"do":"world_battle"}                  pilote : combat avec l'ennemi du monde le plus proche (actions du scénario)
 //   {"do":"battle"}                        attend un combat lancé par un autre joueur, puis le joue
-//   {"do":"defeat","choice":"retry|abandon|follow|watch"}   écran de défaite : choix par la fenêtre du jeu, ou suivi du choix de l'hôte (D31)
+//   {"do":"defeat","choice":"retry|abandon|follow|watch"}   écran de défaite : choix par la fenêtre du jeu, ou suivi du choix de l'hôte (D33)
 //   {"do":"wait_follow","max":250}        suiveur : à moins de max (u) du pilote pendant 2 s
 //   {"do":"zone_action","zone":"<nom>"}  action « au passage » d'une zone de déclenchement (cinématique, combat…)
 //   {"do":"skip_cinematic","after_s":5}   passe la cinématique en cours (après after_s s dans l'étape)
@@ -1224,7 +1224,7 @@ void run_explore_step(float dt)
         }
         // Le passage en combat se fait au premier début de tour (hook OnTurnStart).
     } else if (what == "defeat") {
-        // Écran de défaite (D31). "choice" : retry | abandon (réponse donnée par la fenêtre de choix du jeu, comme un clic,
+        // Écran de défaite (D33). "choice" : retry | abandon (réponse donnée par la fenêtre de choix du jeu, comme un clic,
         // "after_s" s après son ouverture ; "response" : valeur EModalUIResponse imposée), follow (client : attend que le mod
         // applique le choix de l'hôte), watch (observe "watch_s" s après l'apparition de l'écran). Mesures : écran vu
         // (defeat_screens), fenêtre de choix visible ici (defeat_modals_seen) et sa plus longue ouverture (defeat_modal_open_ms_max).

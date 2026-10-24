@@ -273,7 +273,7 @@ struct PilotRequest { uint8_t player = 0; };        // un joueur demande la main
 struct PilotChange { uint8_t pilot = 0; };          // hôte -> tous : nouveau pilote
 // Interaction du pilote avec un objet du monde (PNJ, coffre, porte…), rejouée par les autres instances.
 struct WorldInteract { uint32_t seq = 0; std::string actor; bool instant = false; };
-struct DialogueChoice { uint32_t seq = 0; int32_t index = 0; };
+struct DialogueChoice { uint32_t seq = 0; int32_t index = 0; uint8_t hover = 0; };   // hover : choix seulement survolé par le pilote (champ final facultatif, 2026-10-24)
 // Changement de niveau du pilote (niveau + point d'apparition).
 struct MapChange { uint32_t seq = 0; std::string level; std::string spawn_tag; };
 // Début / fin d'une cinématique ou d'un dialogue sur une instance (barrière : tout le monde attend tout le monde).
@@ -328,7 +328,7 @@ struct BuildChunk { uint32_t xfer = 0; uint32_t offset = 0; std::vector<uint8_t>
 // se resynchronise).
 struct EconomyPart { std::string key; int64_t delta = 0; };
 struct EconomyDelta { uint32_t seq = 0; uint8_t origin = 0; bool authoritative = false; bool rejected = false; std::vector<EconomyPart> parts; };
-// Défaite (D31) : seul l'hôte répond aux fenêtres de l'écran de défaite ; hôte -> clients, qui suivent sa réponse.
+// Défaite (D33) : seul l'hôte répond aux fenêtres de l'écran de défaite ; hôte -> clients, qui suivent sa réponse.
 // prompt : 0 « Réessayer / Abandonner » (yes = réessayer : chacun relance le combat ; non = abandon : l'hôte recharge sa
 // partie, le client attend son instantané), 1 « Envoyer l'équipe de réserve ? » (yes = oui : le combat continue avec elle).
 struct DefeatChoice { uint32_t battle_id = 0; uint8_t prompt = 0; uint8_t yes = 0; };

@@ -1,6 +1,6 @@
 {
   "name": "p3_defeat_choice_old_client",
-  "description": "Avant D31 (-e33defeatsync=0), même rejeu que p3_defeat_choice_client : la fenêtre de choix reste ouverte chez le client (il peut choisir seul), rien ne suit la réponse de l'hôte. Le test regarde 15 s puis s'arrête (aucun clic).",
+  "description": "Avant D33 (-e33defeatsync=0), même rejeu que p3_defeat_choice_client : la fenêtre de choix reste ouverte chez le client (il peut choisir seul), rien ne suit la réponse de l'hôte. Le test regarde 15 s puis s'arrête (aucun clic).",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
   "party": ["Lune"],

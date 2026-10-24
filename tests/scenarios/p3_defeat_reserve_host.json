@@ -1,6 +1,6 @@
 {
   "name": "p3_defeat_reserve_host",
-  "description": "Défaite, choix de l'hôte (D31) : comme p3_defeat_choice_host, mais l'hôte accepte d'envoyer l'équipe de réserve (Monoco, Sciel) : le combat continue avec elle (publié : DefeatChoice prompt 1). Produit l'enregistrement rejoué par p3_defeat_reserve_client.",
+  "description": "Défaite, choix de l'hôte (D33) : comme p3_defeat_choice_host, mais l'hôte accepte d'envoyer l'équipe de réserve (Monoco, Sciel) : le combat continue avec elle (publié : DefeatChoice prompt 1). Produit l'enregistrement rejoué par p3_defeat_reserve_client.",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
   "party": ["Lune"],

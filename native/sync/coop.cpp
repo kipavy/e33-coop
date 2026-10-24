@@ -187,6 +187,7 @@ struct Battle {
     std::map<TurnSpotSeq, proto::Defense> defenses;
     std::map<int, uint16_t> hit_seq;                       // emplacement -> n° de coup reçu dans le tour
     std::map<UObject*, LocalHit> local_hits;               // composant de stats -> coup en cours (héros d'ici)
+    ULONGLONG wait_parry_at = 0;                           // appui de parade vu pendant une attente figée (GetTickCount64), D32
     std::map<UObject*, int> imposed_check;                 // composant de stats -> défense imposée (vérification du verdict)
     // Parade en duo : défense retenue ici pour chaque coup reçu par un héros pendant le tour (résultat du propriétaire)
     bool duo_parry = false;                                // réglage de l'hôte pour ce combat (BattleStart)
@@ -298,7 +299,7 @@ struct State {
     bool turn_align = true;                                // hôte : démarrage synchronisé des tours ennemis (-e33turnalign=0 : coupé, D28)
     double barrier_battle_since = -1;                      // diagnostic : barrière tenue pendant un combat engagé (depuis)
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
-    // Défaite (D31) : seul l'hôte choisit sur l'écran de défaite (« Réessayer » / « Abandonner »), les clients suivent.
+    // Défaite (D33) : seul l'hôte choisit sur l'écran de défaite (« Réessayer » / « Abandonner »), les clients suivent.
     bool defeat_sync = true;                               // -e33defeatsync=0 : ancien comportement (chacun choisit chez lui)
     bool defeat_abandon_resync = false;                    // -e33defeatabandon=resync : abandon de l'hôte suivi par un instantané (pas d'abandon ici)
     struct Defeat {
@@ -328,6 +329,7 @@ struct State {
     int defense_try_logs = 0;                              // diagnostic : appuis de défense du propriétaire journalisés
     int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
     int fa_part_logs = 0;   // journal coop_free_aim_part (plafonné)
+    bool menu_wait_logged = false;   // combat de l'hôte en attente : menu du jeu ouvert ici
     double fa_diag_at = -1;                                // diagnostic : contextes 0,5 s après le début d'une visée libre d'ici
     bool enemy_turn = false;                               // tour en cours : un ennemi (tous les rôles)
     int imc_logs = 0;                                      // diagnostic : contextes d'entrée au début des tours ennemis
@@ -764,6 +766,39 @@ void advance_clock(double dt)
 // Valeur maximale d'un compteur (durées les plus longues : attentes, images).
 void bump_max(const char* name, int v) { int& c = s.counters[name]; c = std::max(c, v); }
 
+// Parade appuyée pendant une attente figée (D32, essai à deux PC du 2026-10-24, 18:27) : sur une attaque de zone, le
+// jeu règle le coup du héros de l'autre joueur (attente de son résultat, image figée ~60-150 ms) puis, dans la même
+// image, celui du héros d'ici. Un appui pendant l'attente n'est lu par le jeu qu'à l'image suivante : la parade du héros
+// d'ici était jugée ratée. On lit donc la touche de parade nous-mêmes pendant l'attente (E au clavier, RB à la manette),
+// et le coup du héros d'ici qui suit lance sa parade (même chemin que l'imposition d'un résultat).
+// -e33waitparry=0 : ancien comportement.
+bool wait_parry_enabled()
+{
+    static const bool v = arg(L"e33waitparry") != L"0";
+    return v;
+}
+
+bool parry_key_down()
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    if (pid != GetCurrentProcessId()) return false;
+    if (GetAsyncKeyState('E') & 0x8000) return true;
+    struct Pad { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; };
+    using GetState = DWORD(WINAPI*)(DWORD, Pad*);
+    static GetState get = [] {
+        HMODULE m = LoadLibraryW(L"xinput1_4.dll");
+        if (!m) m = LoadLibraryW(L"xinput9_1_0.dll");
+        return m ? reinterpret_cast<GetState>(GetProcAddress(m, "XInputGetState")) : nullptr;
+    }();
+    if (!get) return false;
+    for (DWORD i = 0; i < 4; ++i) {
+        Pad p{};
+        if (get(i, &p) == 0 && (p.buttons & 0x0200)) return true;   // XINPUT_GAMEPAD_RIGHT_SHOULDER (RB)
+    }
+    return false;
+}
+
 // Pompe le réseau en bloquant le game thread jusqu'à cond() ou expiration (utilisé dans les hooks). L'image est figée
 // pendant ce temps : chaque attente est mesurée (wait_max_ms), et journalisée avec son origine au-delà de 250 ms.
 template <class Cond>
@@ -772,7 +807,17 @@ bool wait_for(const char* site, Cond cond, double timeout_s)
     const ULONGLONG start = GetTickCount64();
     const double base = s.now;
     bool ok = true;
+    // Attente d'un résultat de défense : appui de parade d'ici relevé (front montant, voir parry_key_down).
+    const bool watch_parry = wait_parry_enabled() && std::strcmp(site, "defense") == 0;
+    bool parry_was_down = watch_parry && parry_key_down();
+    ULONGLONG next_poll = 0;
     while (!cond()) {
+        if (watch_parry && GetTickCount64() >= next_poll) {
+            next_poll = GetTickCount64() + 4;
+            const bool down = parry_key_down();
+            if (down && !parry_was_down) { s.battle.wait_parry_at = GetTickCount64(); bump("parry_presses_during_wait"); }
+            parry_was_down = down;
+        }
         const double elapsed = (GetTickCount64() - start) / 1000.0;
         if (elapsed > timeout_s || s.ended) { ok = false; break; }
         s.now = base + elapsed;
@@ -2106,6 +2151,14 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     const uint16_t hit = ++b.hit_seq[spot];
     if (controls(spot)) {
         b.local_hits[stats_comp] = {spot, hit, jumpable, false};
+        // Parade appuyée pendant une attente figée juste avant (attaque de zone) : lancée maintenant, avant le test du jeu.
+        if (b.wait_parry_at && !jumpable && GetTickCount64() - b.wait_parry_at <= 300) {
+            game::clear_defense_lock(hero);
+            const bool started = game::start_parry(hero);
+            bump(started ? "parries_from_wait" : "parries_from_wait_failed");
+            log().write("coop_parry_from_wait", JsonObj().add("spot", spot).add("hit", static_cast<int>(hit)).add("started", started)
+                                                   .add("ago_ms", static_cast<int64_t>(GetTickCount64() - b.wait_parry_at)), b.turn);
+        }
         return;
     }
     const uint8_t owner = owner_of_spot(spot);
@@ -2368,7 +2421,7 @@ void apply_host_party(const proto::BattleStart& bs)
     log().write("coop_party_applied", JsonObj().add("local", mine).add("host", host).add("ok", same).add("err", err));
 }
 
-// --- Défaite (D31) -------------------------------------------------------------------------------
+// --- Défaite (D33) -------------------------------------------------------------------------------
 // Écran de défaite du jeu (WBP_jRPG_GameOverScreen) : d'abord « Envoyer l'équipe de réserve ? » si elle existe, puis
 // « Réessayer » / « Abandonner ». Seul l'hôte répond (DefeatChoice). Client : chaque fenêtre de choix est refermée dès
 // qu'elle s'ouvre (statut « l'hôte choisit »), puis la réponse de l'hôte est donnée ici :
@@ -3349,7 +3402,7 @@ void subscribe()
     });
 
 
-    // Défaite (D31). Réponse donnée à une fenêtre de l'écran de défaite (k = 0 « Réessayer / Abandonner », 1 équipe de
+    // Défaite (D33). Réponse donnée à une fenêtre de l'écran de défaite (k = 0 « Réessayer / Abandonner », 1 équipe de
     // réserve ; tous les chemins : fenêtre, mod) : l'hôte la publie ; chez un client, une réponse qui ne vient pas du mod
     // est une fuite (comptée), remplacée par celle de l'hôte si elle est connue.
     for (int k = 0; k < 2; ++k) {
@@ -4038,6 +4091,16 @@ void start_pending_battle()
     // (écran d'avertissement), ces appels ont figé le jeu entier (4 runs clients sur ~20, 2026-10-19).
     if (!game::world_pawn()) { s.world_ready_s = 0; return; }
     const bool ready = game::controller() && !game::map_change_in_progress() && !game::main_menu();
+    // Menu du jeu ouvert ici (équipe, pictos, pause : jeu en pause) : lancer le combat dedans a figé le jeu de TOTOFFF
+    // (2026-10-24, Lune déformée dans l'écran des pictos). On attend sa fermeture, avec un message.
+    const bool in_menu = game::pause_menu_visible();   // pas IsGamePaused : la barrière narrative met aussi le jeu en pause
+    if (in_menu) {
+        ui::set_status("battle_menu", "battle_close_menu");
+        if (!s.menu_wait_logged) { s.menu_wait_logged = true; bump("battle_starts_waiting_menu"); log().write("coop_battle_wait_menu", JsonObj()); }
+        s.world_ready_s = 0;
+        return;
+    }
+    if (s.menu_wait_logged) { s.menu_wait_logged = false; ui::clear_status("battle_menu"); }
     s.world_ready_s = ready ? s.world_ready_s + kStep : 0;
     if (s.world_ready_s < 5.0) return;
     const proto::BattleStart bs = *s.pending_start;
