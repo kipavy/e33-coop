@@ -7,6 +7,7 @@
 - **Vu en vrai** : attaque de zone du Portier chez l'hôte, un seul héros visé chez TOTOFFF (15:36, journaux `runs/remote/20261024-153711-fetch-logs-79708` + hôte `logs/20261024-152909`). Le Portier tire un `RandomBool` à son `OnBattleStart` (mise en place) ; l'ennemi n'est pas encore dans le cache (rempli au tour 1) -> tirage laissé au jeu de chaque côté (D30 ne couvrait pas les ennemis). Signes : `coop_draw_count_diff` (GetRandomAliveHero chez le client, coup de plus chez l'hôte), défense du client imposée après 3 s chez l'hôte.
 - **Corrigé** : pendant la mise en place, tout tirage d'un `BP_jRPG_Enemy_Battle_Base_C` suit la graine (flux par classe, sans emplacement), compteur `setup_enemy_draws`. Scénario `p9_portier_host` écrit, **non lancé** (Killian : publier sans test, il teste en jouant) ; à faire : le lancer, puis un rejeu client `p9_portier_client` depuis son enregistrement.
 - Parade du client à la manette : confirmée en vrai par Killian et TOTOFFF.
+- **Fusionnés à la demande de Killian (publier sans batterie, il teste en jouant)** : `fix/turn-sync` (D28, côté hôte vert, côté client jamais fini) et `fix/zone-transitions` (D26, seuils de ses nouveaux scénarios assouplis, non validés par Killian).
 
 ## 2026-10-24 après-midi — version du mod au menu enfin visible (branche `fix/menu-version`)
 
