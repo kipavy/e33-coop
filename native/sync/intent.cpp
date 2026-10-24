@@ -198,6 +198,7 @@ constexpr double kTurnGraceS = 1.2;        // début de tour : le jeu ouvre lui-
 
 bool g_mirror = true;                      // -e33menumirror=0 : ligne de texte seulement (comportement d'avant)
 bool g_guard = true;                       // -e33inputguard=0 : pas de coupure de la navigation ni des clics sur la roue
+bool g_slow_release = false;               // -e33mirrorrelease=old : menus rembobinés avant l'action (avant D28, scénarios « avant »)
 
 // Objets de l'interface de combat, relus à chaque usage (le HUD est recréé à chaque combat).
 struct Hud {
@@ -360,6 +361,11 @@ struct Mirror {
     MenuPage page = MenuPage::None;
     bool targeting = false;
     std::vector<UObject*> targets;
+    // Mesure (D28) : état des menus (page, ciblage) relevé à chaque image pendant la fermeture, nombre de changements ;
+    // instant de l'exécution ici et contrôle du ciblage 1 s après.
+    int rel_state = -1, rel_flips = 0;
+    double exec_at = -1;
+    bool exec_checked = false;
 };
 Mirror g_mir;
 
@@ -792,6 +798,17 @@ void mirror_tick(double now)
     const bool known = g_net.action_known && g_net.action_known(b.turn, spot);
     const Hud h = hud();
     track_changes(now, h, known || g_mir.released);
+    if (g_mir.release_t0 >= 0 && g_mir.exec_at < 0 && h.wheels) {
+        const int st = static_cast<int>(active_page(h)) * 2 + (h.tm && selection_targeting(h) ? 1 : 0);
+        if (g_mir.rel_state >= 0 && st != g_mir.rel_state) ++g_mir.rel_flips;
+        g_mir.rel_state = st;
+    }
+    if (g_mir.exec_at >= 0 && !g_mir.exec_checked && now - g_mir.exec_at >= 1.0) {
+        g_mir.exec_checked = true;
+        const bool tgt = h.tm && targeting_on(h) && !pretargeting(h);
+        if (tgt) bump("menu_targeting_after_action");
+        log().write("menu_mirror_after_action", JsonObj().add("targeting", tgt).add("page", static_cast<int>(h.wheels ? active_page(h) : MenuPage::None)), g_mir.turn);
+    }
     if (!g_mirror || !g_mir.have) return;
     if (g_mir.released) {
         // Visée libre rejouée puis quittée sans action : les menus du propriétaire reprennent.
@@ -991,12 +1008,16 @@ void init(const Net& net)
     // Activé par défaut depuis 0.6.1 : garde des entrées complète (p7_menumirror_host vert, 0 fuite, 2026-10-22).
     g_mirror = cmdline::arg(L"e33menumirror") != L"0";
     g_guard = cmdline::arg(L"e33inputguard") != L"0";
-    log().write("intent_init", JsonObj().add("aim_cam", g_aim_cam).add("menu_mirror", g_mirror).add("input_guard", g_guard));
+    g_slow_release = cmdline::arg(L"e33mirrorrelease") == L"old";
+    log().write("intent_init", JsonObj().add("aim_cam", g_aim_cam).add("menu_mirror", g_mirror).add("input_guard", g_guard)
+                                   .add("slow_release", g_slow_release));
 }
 
 bool mirror_enabled() { return g_mirror; }
 
-bool mirror_release(double now)
+namespace {
+
+bool release_impl(double now, const std::string& action_key)
 {
     const int spot = remote_turn_spot();
     const BattleRef b = battle();
@@ -1010,6 +1031,20 @@ bool mirror_release(double now)
     }
     g_mir.released_at = now;
     if (!g_mir.acted) return true;   // rien changé par le miroir depuis la dernière remise à zéro
+    // Action d'un autre joueur (D28, vu par Killian le 2026-10-24) : rembobiner la roue avant l'exécution (ciblage annulé
+    // jusqu'à 3 fois, retour aux actions, 0,3 s entre chaque) faisait ouvrir et fermer les menus 2-3 fois juste avant
+    // l'action. Le ciblage est refermé dans la même image que l'exécution (SelectAction / SelectSecondaryAction /
+    // RequestActionExecution) : rien n'est affiché entre les deux, et la roue reste sur la page du propriétaire.
+    if (!action_key.empty() && !g_slow_release) {
+        const Hud h = hud();
+        clear_hover(now);
+        if (h.tm && selection_targeting(h)) mod_call(now, h.bm, STR("OnCancelTargeting"), "release_cancel_same_frame");
+        g_mir.acted = false;
+        g_mir.selected.clear();
+        bump("menu_mirror_releases");
+        log().write("menu_mirror_released", JsonObj().add("waited_s", now - g_mir.release_t0).add("same_frame", true).add("action", action_key), g_mir.turn);
+        return true;
+    }
     if (now - g_mir.release_t0 > 1.5) {
         bump("menu_mirror_release_timeouts");
         log().write("menu_mirror_release_timeout", JsonObj(), g_mir.turn);
@@ -1041,6 +1076,24 @@ bool mirror_release(double now)
     bump("menu_mirror_releases");
     log().write("menu_mirror_released", JsonObj().add("waited_s", now - g_mir.release_t0), g_mir.turn);
     return true;
+}
+
+} // namespace
+
+// Mesure (D28) : première fin de la fermeture pour ce tour = exécution de l'action ici. Changements des menus vus
+// entre le début de la fermeture et l'exécution (menu_release_flips), fermetures de plus de 0,1 s.
+bool mirror_release(double now, const std::string& action_key)
+{
+    const bool done = release_impl(now, action_key);
+    if (done && g_mir.release_t0 >= 0 && g_mir.exec_at < 0) {
+        g_mir.exec_at = now;
+        const double waited = now - g_mir.release_t0;
+        if (g_mir.rel_flips > 0) bump("menu_release_flips", g_mir.rel_flips);
+        if (waited > 0.1) bump("menu_release_slow");
+        bump("menu_release_execs");
+        log().write("menu_mirror_exec", JsonObj().add("waited_s", waited).add("flips", g_mir.rel_flips).add("action", action_key), g_mir.turn);
+    }
+    return done;
 }
 
 void reload_options() { g_aim_cam = cmdline::arg(L"e33aimcam") != L"0"; }
