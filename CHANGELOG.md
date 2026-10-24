@@ -14,6 +14,13 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.10] - 2026-10-24
+
+### Corrections
+- Combat : à la manette, la parade (RB) et le tir en visée libre (RT) de l'autre joueur marchent de nouveau. Ces
+  boutons restaient pris par les commandes de déplacement de l'exploration, rendues par erreur au début du combat
+  (l'esquive et le clavier n'étaient pas touchés).
+
 ## [0.6.9] - 2026-10-24
 
 ### Corrections
