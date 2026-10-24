@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 23h10 — v0.6.28 : miroir du marchand (non testé)
+
+- Suiveur : sélection = `SetFocus` sur `WBP_BaseButton` de la ligne, sinon `WBP_Merchant_Panel.OnMerchantItemFocused(row)` direct, reposée si le suiveur bouge la sienne (`coop_follower_merchant_focus` : by_focus, panel_ok). Achat du pilote (hover 4) rejoué : `MerchantComponent.TryBuyItem(MerchantItemRowName de la ligne)` (`coop_follower_merchant_buy` : ok, qty_before, gold_before/after). Fenêtre absente 6 s après la 1re sélection du pilote (dialogue non rejoué) : `BP_DialogueSystemComponent.OpenMerchantWindow(marchand le plus proche)` (`coop_follower_merchant_open`). À vérifier en jeu ; si l'achat est compté deux fois (or), annuler le rejeu.
+
 ## 2026-10-24, 22h55 — v0.6.27 : équipe du combat remise dans l'ordre d'exploration
 
 - 22:48 (0.6.26), combat Bruler / Luster : Maelle contrôlée par TOTOFFF chez lui, ordre des tours différent. Cause : 0.6.25 envoyait `BattleStart.party` dans l'ordre des emplacements (Lune, Maelle, Frey) dès que ce n'était pas un préfixe de l'équipe ; or le jeu ne place pas les héros dans l'ordre de l'équipe (équipe Frey, Lune, Maelle -> emplacements Lune, Maelle, Frey), donc le client, équipe réordonnée, avait Maelle à l'emplacement 0 (resynchro au tour 1, désync). Correctif : l'équipe des héros en combat n'est envoyée que s'il y en a moins que dans l'équipe (duel du marchand).

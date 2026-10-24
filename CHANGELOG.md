@@ -14,6 +14,13 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.28] - 2026-10-24
+
+### Corrections
+- Marchand : l'autre joueur voit l'article sélectionné par le meneur, et chaque achat du meneur est fait chez lui aussi
+  (or et stock à jour). Si sa fenêtre du marchand ne s'est pas ouverte (ex. après le combat du marchand), elle
+  s'ouvre seule.
+
 ## [0.6.27] - 2026-10-24
 
 ### Corrections
@@ -257,7 +264,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.27...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.28...HEAD
+[0.6.28]: https://github.com/kipavy/e33-coop/compare/v0.6.27...v0.6.28
 [0.6.27]: https://github.com/kipavy/e33-coop/compare/v0.6.26...v0.6.27
 [0.6.26]: https://github.com/kipavy/e33-coop/compare/v0.6.25...v0.6.26
 [0.6.25]: https://github.com/kipavy/e33-coop/compare/v0.6.24...v0.6.25
