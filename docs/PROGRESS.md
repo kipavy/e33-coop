@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 19h — v0.6.18 : survol des choix de dialogue
+
+- Demande de Killian : le suiveur ne voyait pas le pilote naviguer dans les choix. `DialogueChoice.hover` (champ final facultatif) : le pilote envoie l'option focalisée / survolée (`WBP_Dialogue_ChoiceOption_C` visibles, rangées par `GetChildIndex`, 10 fois/s), le suiveur fait `SetFocus` sur la même. **Non testé** (Killian joue) : à vérifier en jeu ; diagnostics `coop_choice_options` (options vues, focus / survol) et `coop_choice_hover`.
+
 ## 2026-10-24, 18h30 — v0.6.17 : parade sur attaque de zone (D32)
 
 - 18:27 (0.6.16) : attaque de zone du Portier parée par les deux, Lune perd des PV chez TOTOFFF. Journaux : attente du résultat du héros de Killian (63 ms + à-coup 81 ms), coup de Lune réglé dans la même image, appui lu 17 ms après (`coop_stray_defense` puis `coop_defense_try`). Corrigé (D32) : touche de parade relevée pendant l'attente, parade lancée au coup suivant du héros d'ici. **Non testé** (Killian joue) : à vérifier en jeu (`coop_parry_from_wait`) ; un scénario devrait simuler un appui pendant l'attente (vraies entrées : accord de Killian).

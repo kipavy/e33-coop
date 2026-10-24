@@ -144,6 +144,8 @@ struct S {
     std::deque<proto::WorldInteract> interactions;
     std::deque<std::pair<proto::DialogueChoice, double>> choices;
     bool choice_pending = false;                  // question posée (StartChoice), pas encore répondue
+    int choice_hover_sent = -1, choice_hover_want = -1, choice_hover_shown = -1;   // choix survolé (pilote / voulu / affiché ici)
+    int choice_diag = 0;
     bool sequence_playing = false;                // OnSequenceStarted reçu, pas encore OnSequenceFinished
     // Narration (barrière) et pause
     double next_poll = 0;
@@ -1487,6 +1489,69 @@ void pilot_stuck_tick()
      .add("w_contexts", game::active_contexts_with_key("W")).add("z_contexts", game::active_contexts_with_key("Z"));
     log().write("coop_pilot_stuck", o);
 }
+
+// Choix de dialogue survolé par le pilote (demande de Killian, 2026-10-24) : le suiveur voit la même option en
+// surbrillance avant le choix. Options = WBP_Dialogue_ChoiceOption_C visibles, rangées par leur place dans leur parent.
+std::vector<UObject*> choice_options()
+{
+    std::vector<UObject*> all, out;
+    UObjectGlobals::FindAllOf(STR("WBP_Dialogue_ChoiceOption_C"), all);
+    std::vector<std::pair<int, UObject*>> v;
+    for (UObject* o : all) {
+        if (!o) continue;
+        ue::Call vis(o, STR("IsVisible"));
+        if (!vis || !vis.invoke() || !vis.out_bool(STR("ReturnValue"))) continue;
+        ue::Call par(o, STR("GetParent"));
+        UObject* parent = par && par.invoke() ? par.out_object(STR("ReturnValue")) : nullptr;
+        int idx = static_cast<int>(v.size()) + 100;
+        if (parent) { ue::Call ci(parent, STR("GetChildIndex")); if (ci) { ci.set_object(STR("Content"), o); if (ci.invoke()) idx = static_cast<int>(ci.out_int(STR("ReturnValue"), idx)); } }
+        v.emplace_back(idx, o);
+    }
+    std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.first < b.first; });
+    for (auto& [i, o] : v) out.push_back(o);
+    return out;
+}
+
+bool widget_flag(UObject* w, const wchar_t* fn)
+{
+    ue::Call c(w, fn);
+    return c && c.invoke() && c.out_bool(STR("ReturnValue"));
+}
+
+void choice_hover_tick()
+{
+    static double next = 0;
+    if (!s.choice_pending || !sharing() || s.now < next) return;
+    next = s.now + 0.1;
+    const auto opts = choice_options();
+    if (opts.empty()) return;
+    if (s.choice_diag++ == 0) {
+        std::string names;
+        for (UObject* o : opts) names += ue::short_name(o) + (widget_flag(o, STR("HasFocusedDescendants")) || widget_flag(o, STR("HasAnyUserFocus")) ? "(f)" : "") +
+                                         (widget_flag(o, STR("IsHovered")) ? "(h)" : "") + " ";
+        log().write("coop_choice_options", JsonObj().add("count", static_cast<int64_t>(opts.size())).add("options", names).add("pilot", is_pilot()));
+    }
+    if (is_pilot()) {
+        int idx = -1;
+        for (size_t i = 0; i < opts.size() && idx < 0; ++i)
+            if (widget_flag(opts[i], STR("HasAnyUserFocus")) || widget_flag(opts[i], STR("HasFocusedDescendants")) || widget_flag(opts[i], STR("IsHovered"))) idx = static_cast<int>(i);
+        if (idx >= 0 && idx != s.choice_hover_sent) {
+            s.choice_hover_sent = idx;
+            s.net.publish(proto::DialogueChoice{++s.seq, idx, 1}, true);
+            bump("choice_hovers_published");
+        }
+        return;
+    }
+    const int want = s.choice_hover_want;
+    if (want < 0 || want == s.choice_hover_shown || want >= static_cast<int>(opts.size())) return;
+    // Focus de l'interface sur l'option voulue : surbrillance du jeu. Les entrées de choix du suiveur sont coupées
+    // (contexte de choix retiré), il ne peut pas valider.
+    ue::Call c(opts[static_cast<size_t>(want)], STR("SetFocus"));
+    const bool ok = c && c.invoke();
+    s.choice_hover_shown = want;
+    bump(ok ? "choice_hovers_shown" : "choice_hover_errors");
+    if (s.choice_diag < 40) { ++s.choice_diag; log().write("coop_choice_hover", JsonObj().add("index", want).add("ok", ok)); }
+}
 // --- Barrière narrative et pause ------------------------------------------------------------------
 
 // Pause du jeu entier tenue par une ou plusieurs raisons. Le jeu peut l'enlever de lui-même (fin de cinématique :
@@ -1764,6 +1829,7 @@ void poll_tick()
     if (!game::controller()) return;
     movement_lock_tick();
     pilot_stuck_tick();
+    choice_hover_tick();
     // Narration locale
     if (s.intro && s.now - s.intro_since > kIntroMax) { s.intro = false; log().write("coop_intro_timeout", JsonObj()); }
     // Fin de l'intro : le signal du jeu (OnInitialCinematicCompleted) n'arrive pas (vu le 2026-10-21). Elle finit donc
@@ -2383,6 +2449,7 @@ bool handle(uint8_t from, const proto::Message& m)
     }
     if (auto* dc = std::get_if<proto::DialogueChoice>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
+        if (dc->hover) { s.choice_hover_want = dc->index; return true; }   // survol seulement : surbrillance, pas de choix
         s.choices.emplace_back(*dc, s.now);
         touch();
         return true;
@@ -2502,6 +2569,7 @@ void subscribe()
     }
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
         s.choice_pending = false;
+        s.choice_hover_want = -1;
         if (s.replaying || !s.active || !sharing()) return;
         const int index = static_cast<int>(ue::read_param_int(ctx, f, STR("ChoiceIndex")).value_or(-1));
         if (!is_pilot()) {
@@ -2517,6 +2585,8 @@ void subscribe()
     // Question de dialogue : CurrentChoices reste vide pendant la question (vu le 2026-10-20), on suit StartChoice.
     bus.post(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:StartChoice", [](HookCtx&, UFunction*) {
         s.choice_pending = true;
+        s.choice_hover_sent = s.choice_hover_shown = -1;   // le survol voulu reçu avant la question ici est gardé
+        s.choice_diag = 0;
         log().write("coop_choice_asked", JsonObj());
     });
     bus.post(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:OnSequenceStarted", [](HookCtx&, UFunction*) {

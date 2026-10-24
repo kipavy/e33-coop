@@ -14,6 +14,11 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.18] - 2026-10-24
+
+### Ajouts
+- Dialogues : l'autre joueur voit en surbrillance la réponse que le meneur survole avant de choisir.
+
 ## [0.6.17] - 2026-10-24
 
 ### Corrections
@@ -191,7 +196,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.17...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.18...HEAD
+[0.6.18]: https://github.com/kipavy/e33-coop/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/kipavy/e33-coop/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/kipavy/e33-coop/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/kipavy/e33-coop/compare/v0.6.14...v0.6.15

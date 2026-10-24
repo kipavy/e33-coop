@@ -130,7 +130,7 @@ void encode_payload(const Message& m, wire::Writer& w)
         } else if constexpr (std::is_same_v<T, WorldInteract>) {
             w.u32(x.seq); w.str(x.actor); w.boolean(x.instant);
         } else if constexpr (std::is_same_v<T, DialogueChoice>) {
-            w.u32(x.seq); w.i32(x.index);
+            w.u32(x.seq); w.i32(x.index); w.u8(x.hover);
         } else if constexpr (std::is_same_v<T, MapChange>) {
             w.u32(x.seq); w.str(x.level); w.str(x.spawn_tag);
         } else if constexpr (std::is_same_v<T, NarrativeState>) {
@@ -322,7 +322,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
     case MsgType::PilotRequest: { PilotRequest x; x.player = r.u8(); if (x.player > 3) r.fail(); return finish(x); }
     case MsgType::PilotChange: { PilotChange x; x.pilot = r.u8(); if (x.pilot > 3) r.fail(); return finish(x); }
     case MsgType::WorldInteract: { WorldInteract x; x.seq = r.u32(); x.actor = r.str(kMaxStr); x.instant = r.boolean(); if (x.actor.empty()) r.fail(); return finish(x); }
-    case MsgType::DialogueChoice: { DialogueChoice x; x.seq = r.u32(); x.index = r.i32(); if (x.index < 0 || x.index > 16) r.fail(); return finish(x); }
+    case MsgType::DialogueChoice: { DialogueChoice x; x.seq = r.u32(); x.index = r.i32(); if (x.index < 0 || x.index > 16) r.fail(); if (r.ok() && !r.at_end()) x.hover = r.u8(); return finish(x); }
     case MsgType::MapChange: { MapChange x; x.seq = r.u32(); x.level = r.str(256); x.spawn_tag = r.str(256); if (x.level.empty()) r.fail(); return finish(x); }
     case MsgType::NarrativeState: {
         NarrativeState x; x.player = r.u8(); const uint8_t k = r.u8(); x.active = r.boolean(); x.seq = r.u32();
@@ -593,7 +593,7 @@ std::string to_json(const Message& m)
         } else if constexpr (std::is_same_v<T, PilotRequest>) { o.add("player", static_cast<int>(x.player)); }
         else if constexpr (std::is_same_v<T, PilotChange>) { o.add("pilot", static_cast<int>(x.pilot)); }
         else if constexpr (std::is_same_v<T, WorldInteract>) { o.add("seq", x.seq).add("actor", x.actor).add("instant", x.instant); }
-        else if constexpr (std::is_same_v<T, DialogueChoice>) { o.add("seq", x.seq).add("index", x.index); }
+        else if constexpr (std::is_same_v<T, DialogueChoice>) { o.add("seq", x.seq).add("index", x.index).add("hover", static_cast<int>(x.hover)); }
         else if constexpr (std::is_same_v<T, MapChange>) { o.add("seq", x.seq).add("level", x.level).add("spawn", x.spawn_tag); }
         else if constexpr (std::is_same_v<T, NarrativeState>) {
             o.add("player", static_cast<int>(x.player)).add("kind", static_cast<int>(x.kind)).add("active", x.active).add("seq", x.seq);
