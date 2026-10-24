@@ -2,6 +2,11 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 17h — v0.6.16 : cible des compétences sur un allié ; bugs ouverts de la session
+
+- **Évêque (16:39:57)** : Gustave (hôte) lance `Powerful_Gustave` sur Lune ; `ActionCommand.targets` vide (le jeu passe une liste vide à `RequestActionExecution` pour un ciblage d'allié choisi à la main) -> cible automatique chez le client = Évêque. Buff sur l'Évêque chez lui, sur Lune chez l'hôte (`coop_repair_error` « buff class not loaded » à chaque tour), puis PV de l'Évêque et des héros qui divergent en cours de tour (Killian mort chez TOTOFFF, vivant à 5 PV chez lui). Corrigé : liste vide -> `TargetedCharacters` du gestionnaire de ciblage (`coop_action_targets_fallback`). Non testé (vrai chemin = vraies entrées), publié à la demande de Killian.
+- **Ouverts** : (1) écran de défaite : chacun choisit (Killian « Réessayer », TOTOFFF « Abandonner » -> écran noir chez lui) ; il faut que seul l'hôte choisisse (`OnRetryEncounterResponse`, `RequestRestartCurrentEncounter`, `TriggerAbandonBattle`, GAME-INTERNALS §2.3) ; (2) mini-gel de ~1,1 s au début des tours ennemis après un tour de l'hôte contre l'Évêque (`coop_turn_aligned` waited_ms ~1067 : le client rejoue l'action de l'hôte avec décalage) ; (3) Lune 97 PV chez le client, 8 chez l'hôte au tour 2 du combat Portier / Abbest / Volester (16:49) : à regarder ; (4) réparation d'un buff dont la classe n'est pas chargée chez le client (`BP_BattleBuff_Powerful_125_C`) ; (5) meneur bloqué (diagnostic `coop_pilot_stuck`).
+
 ## 2026-10-24, 16h30 — v0.6.15 : point faible encore manqué en 0.6.14 ; meneur bloqué
 
 - 16:21:13 (0.6.14) : `coop_free_aim_part` sent vrai (Volester, `BP_FreeAimTargetPart_WeakPoint`), point rejoué recalé sur la zone (~17 u de décalage) mais `coop_free_aim_replay_miss` quand même : un point de la surface, visé depuis un départ un peu différent, frôle la boule. Corrigé : rejeu visé au centre de la zone (les dégâts ne dépendent que de la zone).

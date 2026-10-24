@@ -2579,6 +2579,16 @@ void subscribe()
             auto** data = static_cast<UObject**>(arr->GetData());
             for (int32_t i = 0; i < arr->Num(); ++i) ac.targets.push_back(sync::unit_of(data[i]));
         }
+        // Compétence sur un allié choisie à la main (ex. « Puissant » de Gustave sur Lune, essai du 2026-10-24) : le jeu
+        // passe une liste vide, les cibles sont dans le gestionnaire de ciblage. Sans elles, l'autre joueur prenait une
+        // cible automatique (le premier ennemi) : buff sur l'Évêque chez lui, sur Lune ici, puis combat qui diverge.
+        if (ac.targets.empty() && ac.action_type != game::ActSkip && ac.action_type != game::ActFlee) {
+            UObject* tm = ue::get_object(game::controller(), STR("AC_jRPG_TargetingManager"));
+            for (UObject* t : ue::get_object_array(tm, STR("TargetedCharacters"))) if (t) ac.targets.push_back(sync::unit_of(t));
+            bump(ac.targets.empty() ? "action_targets_empty" : "action_targets_from_targeting");
+            log().write("coop_action_targets_fallback", JsonObj().add("action", static_cast<int>(ac.action_type)).add("secondary", ac.secondary)
+                                                           .add("targets", static_cast<int64_t>(ac.targets.size())), s.battle.turn);
+        }
         bump("actions_published");
         publish(ac);
     });
