@@ -325,7 +325,7 @@ Les décisions imposées par le brief (`BRIEF.md`) ne sont pas répétées ici, 
 3. **Joueur bloqué** (tour forcé, ou délai de défense dépassé sur un tour qu'il n'a pas commencé) : ses défenses et QTE ne sont plus attendus (échec imposé, l'état de l'hôte fait foi, D11) jusqu'à son prochain signe de tour.
 4. **Client** : les attentes bloquantes s'arrêtent au `BattleEnd` de l'hôte (aucun résultat ne viendra).
 5. **Mesure** : chaque attente bloquante est journalisée au-delà de 250 ms avec son origine (`coop_wait_long`).
-6. Essai `-e33turnalign=1` (désactivé) : tours ennemis retenus chez l'hôte (dépendance de début de tour, jeu animé) jusqu'au `StateHash` des clients qui ont un héros vivant, 4 s au plus : l'hôte n'est plus en avance (~1 s après les tours de ses héros, rejoués avec décalage chez le client), donc ne fige plus son image en attendant leurs parades ; le client attend celles de l'hôte un aller-retour.
+6. Essai `-e33turnalign=1` (désactivé ; remplacé par D28, actif par défaut) : tours ennemis retenus chez l'hôte (dépendance de début de tour, jeu animé) jusqu'au `StateHash` des clients qui ont un héros vivant, 4 s au plus : l'hôte n'est plus en avance (~1 s après les tours de ses héros, rejoués avec décalage chez le client), donc ne fige plus son image en attendant leurs parades ; le client attend celles de l'hôte un aller-retour.
 
 **Remise en cause si** : `turn_stuck_forced` ou `battle_ready_idle_timeouts` apparaît dans une partie normale à deux PC (faux positif) ; ou `coop_wait_long` site `defense` fréquent au-delà de 300 ms (activer `-e33turnalign`).
 
@@ -391,6 +391,42 @@ par ce dialogue joué seul de chaque côté ; empreinte d'inventaire toujours di
 
 **Remise en cause si** : `coop_join_load_stuck` en vrai (chercher dans `coop_join_wait_world` la condition qui manque) ;
 ou un objet d'édition / DLC autre que tenues et coiffures qui différerait encore.
+
+## D28 — Démarrage synchronisé des tours ennemis (2026-10-24, décision de Killian, précise D22.6)
+
+**Constat** (essai à deux PC, v0.6.9) : mini-gels de ~1 s chez l'hôte à chaque coup reçu par un héros du client
+(01:41:36, 01:41:53 ; 3 s à 00:54:09) : le client commence le tour ennemi ~1 s après l'hôte (il rejoue les actions
+des héros de l'hôte avec décalage), l'hôte frappe donc avant lui et fige son image (`defense_point`) jusqu'au résultat
+du client. Gênant surtout sur une attaque de groupe (le gel tombe dans la fenêtre de parade de l'autre joueur). Sens
+inverse possible : après un tour d'un héros du client, le client commençait le tour ennemi avant l'état de l'hôte et
+attendait de même les défenses des héros de l'hôte. L'essai `-e33turnalign=1` (D22.6) ne retenait en fait que certains
+tours : le jeu n'écoute les dépendances du début de tour (`TurnStartNotifyDependencies`) que si un « auditeur »
+(`BattleListeners` : effets, pictos…) s'y inscrit ; `ProcessNextTurnStartListener` remet le compteur à zéro (`Reset`)
+pour chaque auditeur, puis n'écoute que s'il y a une dépendance (tours 9 et 16 du Lancelier Alpha jamais écoutés).
+
+**Décision** (par défaut ; `-e33turnalign=0` coupe tout, hôte et client) :
+1. Hôte : au début de chaque tour ennemi, juste après le premier `Reset` du compteur (ou à `StartListenToDependencies`
+   si le jeu écoute déjà), le mod s'inscrit comme dépendance : le jeu attend en continuant d'animer, jusqu'à ce que chaque
+   client qui a un héros vivant ait commencé ce tour (son `StateHash`, ou tout autre signe de ce tour). Puis les deux jeux
+   jouent le tour ensemble : l'hôte n'attend plus qu'un aller simple les défenses du client.
+2. Bornes (D22) : 4 s de jeu au plus (pauses non comptées), une seule retenue par tour ; pas attendus : joueur bloqué
+   (`unresponsive`), parti, pas dans la partie (chargement, menu), sans héros vivant ; rien pendant un contre-attaque
+   (`HasActiveCounterAttack`), le démarrage coordonné ou la fin du combat. Aucune action automatique, même résultat (D11).
+3. Client : un tour ennemi commencé avant l'état de l'hôte (vérification différée, `-e33turndep`) est retenu de même
+   (inscription après le premier `Reset`) jusqu'à cet état (borne existante : 15 s). Tours des héros jamais retenus ici
+   (le menu du joueur n'est pas retardé).
+4. Journal : `coop_turn_align` (how = reset / listen, joueurs attendus), `coop_turn_aligned` (waited_ms, timeout,
+   listening = retenue effective), `coop_turn_dep` how=reset (client) ; compteurs `turn_aligns`, `turn_align_max_ms`,
+   `turn_align_timeouts`, `turn_align_not_listening`, `turn_deps_on_reset`, `defense_waits_long` (attentes de défense
+   > 250 ms, comme `coop_wait_long` site defense). Diagnostic `coop_turn_flow` (écoute, auditeurs, phase 2).
+5. Tests : le faux client `--turn-lag 1.0` commence chaque tour ennemi 1 s après l'hôte et ne résout un coup qu'au même
+   moment de son tour (`DefenseRequest.turn_ms`, champ facultatif ajouté) ; le faux hôte `--turn-lag 5.5` commence le
+   tour ennemi 5,5 s après l'action du client. Scénarios avant / après : `p8_turnlag_before_host` / `p8_turnlag_host`,
+   `p8_turnlag_before_client` / `p8_turnlag_client`.
+
+**Remise en cause si** : `turn_align_timeouts` ou `turn_align_not_listening` en partie réelle ; `coop_wait_long` site
+defense encore > 300 ms à deux PC ; ou une action ennemie jouée deux fois (deux `StartCharacterTurn_Phase2` pour un tour
+dans `coop_turn_flow`).
 
 ## D29 — Miroir des menus : action exécutée dans la même image que la fermeture du ciblage (2026-10-24, bug vu par Killian)
 

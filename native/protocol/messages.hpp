@@ -122,6 +122,7 @@ struct DefenseRequest {                   // hôte -> propriétaire : un coup ar
     uint16_t hit = 0;                     // n° du coup reçu par ce héros dans le tour
     uint8_t jumpable = 0;
     uint16_t timeout_ms = 3000;
+    uint16_t turn_ms = 0xFFFF;            // facultatif : temps de jeu du tour chez l'hôte au moment du coup (0xFFFF : inconnu)
 };
 enum class Defense : uint8_t { Fail = 0, Parry = 1, Dodge = 2, PerfectDodge = 3, Jump = 4, GradientParry = 5 };
 // Défense résolue chez le propriétaire du héros. Propriétaire -> hôte, puis hôte -> autres instances.
