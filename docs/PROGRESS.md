@@ -2,6 +2,12 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24 après-midi — version du mod au menu enfin visible (branche `fix/menu-version`)
+
+- `ui_version placed` était vrai mais le texte invisible : son opacité était recopiée de `BuildText` par `ue::get_double`, qui lit `RenderOpacity` (float) comme un double -> ~0. Lecture selon la taille (`render_opacity`). Puis texte centré : `SetHorizontalAlignment(2)` = centre, la droite vaut 3.
+- Diagnostic `ui_version_diag` (8 lignes au plus : menus, `BuildText` vivants, chaîne des parents, visibilité, opacité) et `ue_get_double_size` (propriété non double lue par `get_double`, une fois par nom ; aucune dans un combat de test : PV, PA… sont bien des doubles).
+- **Preuve** : `menu_version_shot` (build 40090806561, run `20261024-134232`, capture `t059`) : « E33 Coop 0.6.10 » juste à gauche de 68322, sur l'écran « Appuyez sur une touche ».
+
 ## 2026-10-24 midi — v0.6.10 : parade et tir du client à la manette (branche `diag/defense-path`)
 
 - **Cause trouvée sans partie à deux** (journaux de TOTOFFF + diagnostics en scénario) : touches manette de la défense = RB parade, B esquive, A saut, RT contres ; tir de la visée libre = RT. Chez le client (suiveur en exploration), `movement_lock_tick` (explore.cpp) retire `IMC_Locomotion_Default_ALS` et le **rendait au début du combat** (plus « verrouillé » en combat), alors que le jeu retire ce contexte en combat. Il y lie RB = `HitInWorldAction` et RT = `SprintAction` en priorité 1, devant `IMC_BattleDefense` (0) et à égalité avec `IMC_Battle_FreeAim` (1) : RB et RT n'arrivaient pas, B et le clavier si. L'hôte (jamais suiveur) n'était pas touché.
