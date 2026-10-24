@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24 soir — écran de défaite : en pause (branche `fix/defeat-choice`)
+
+- Sous-agent arrêté à la demande de Killian (jeu repris). Fait : message `DefeatChoice` (choix de l'hôte publié), client qui masque sa fenêtre de choix et suit l'hôte, étape `defeat` du runner, diagnostics (commit 9d35255, build OK) ; scénario `p3_defeat_choice_client` écrit. **Rien testé** en jeu. À reprendre : expérience hôte + `p3_defeat_host`, puis les scénarios client (réessayer / abandonner).
+
 ## 2026-10-24, 17h — v0.6.16 : cible des compétences sur un allié ; bugs ouverts de la session
 
 - **Évêque (16:39:57)** : Gustave (hôte) lance `Powerful_Gustave` sur Lune ; `ActionCommand.targets` vide (le jeu passe une liste vide à `RequestActionExecution` pour un ciblage d'allié choisi à la main) -> cible automatique chez le client = Évêque. Buff sur l'Évêque chez lui, sur Lune chez l'hôte (`coop_repair_error` « buff class not loaded » à chaque tour), puis PV de l'Évêque et des héros qui divergent en cours de tour (Killian mort chez TOTOFFF, vivant à 5 PV chez lui). Corrigé : liste vide -> `TargetedCharacters` du gestionnaire de ciblage (`coop_action_targets_fallback`). Non testé (vrai chemin = vraies entrées), publié à la demande de Killian.
