@@ -507,3 +507,34 @@ sont toujours pas synchronisés (journalisés, `unsynced_random_targeting`) ; `A
 
 **Remise en cause si** : `draw_mismatches` au tour 0 (ordre des tirages de mise en place différent d'une machine à
 l'autre) ; `start_mech_diffs` > 0 avec une graine connue ; `setup_draws_natural` > 0 chez l'hôte.
+
+## D31 — Écran de défaite : seul l'hôte choisit, les clients suivent (2026-10-24, bug vu en vrai, demande de Killian)
+
+**Constat** (essai à deux PC, 0.6.14, combat « WM_Portier_Abbest_Volester », 16:49) : sur l'écran de défaite, Killian
+(hôte) a choisi « Réessayer » et TOTOFFF « Abandonner » : l'hôte a rechargé sa partie (`MapChange`), le client est resté
+sur un écran noir. Le mod ne gérait rien de cet écran. En test (TEST_B) : l'écran ouvre d'abord « Envoyer l'équipe de
+réserve ? » (`WBP_ModalPopup_C`, parent = `WBP_jRPG_GameOverScreen_C`, réponse 1 oui / 2 non) ; oui : le combat continue
+avec la réserve ; non : « Réessayer / Abandonner » (`PromptBattleRetry`) si le combat est « rejouable », sinon le jeu
+répond seul `OnRetryEncounterResponse(false)` et revient à l'exploration sur place, sans chargement. Réessayer
+(`RequestRestartCurrentEncounter`) recharge la dernière partie (`GetLastSavedGameData`) puis relance le combat.
+
+**Décision** :
+1. Seul l'hôte répond. Chaque réponse (`OnReserveTeamResponse`, `OnRetryEncounterResponse`) part aux clients :
+   `DefeatChoice {battle, prompt (0 réessayer/abandonner, 1 réserve), yes}` (nouveau message, n° 68).
+2. Client : toute fenêtre de choix de l'écran de défaite est refermée dès qu'elle s'ouvre (`DeactivateWidget`, réduite),
+   statut « Défaite : <hôte> choisit… ». La réponse de l'hôte est donnée ici par la même fenêtre (sinon par l'écran),
+   donc le jeu d'ici fait la même chose que celui de l'hôte (réserve, réessayer, abandon). Une réponse différente qui
+   atteint le gestionnaire de combat est remplacée par celle de l'hôte (`defeat_choices_rewritten`) ; un clic du joueur
+   d'ici est compté (`defeat_local_choices`, attendu 0).
+3. Filet abandon : encore en combat 20 s après l'abandon suivi (cas de l'écran noir) -> `ResyncRequest`, la partie de
+   l'hôte arrive par un instantané (D27). Hôte qui abandonne un combat que le client n'a pas perdu : idem après 30 s.
+4. Hôte muet 120 s après l'ouverture d'une fenêtre chez le client : le joueur d'ici choisit (« Réessayer / Abandonner »
+   rouverte ; réserve refusée ici). Hôte parti : fin de session habituelle (retour au menu).
+5. `-e33defeatsync=0` : ancien comportement (scénario « avant ») ; `-e33defeatabandon=resync` : abandon de l'hôte suivi
+   par un instantané, sans abandon local.
+
+**Limites** : « Réessayer » recharge chez chacun **sa** dernière partie (client : instantané de jonction) ; l'écart
+éventuel d'exploration est rattrapé par la comparaison d'état / la resynchro habituelle après le combat (non testé).
+
+**Remise en cause si** : `defeat_local_choices` > 0 ou `defeat_modal_open_ms_max` > 500 chez un client ;
+`coop_defeat_rescue` fréquent (l'abandon local ne revient pas à l'exploration) ; écart d'exploration après « Réessayer ».

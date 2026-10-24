@@ -14,6 +14,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Corrections
+- Écran de défaite : seul l'hôte choisit (équipe de réserve, « Réessayer » ou « Abandonner ») ; les autres joueurs voient
+  « l'hôte choisit… » puis suivent son choix (avant : chacun choisissait, et un choix différent finissait sur un écran noir).
+
 ## [0.6.16] - 2026-10-24
 
 ### Corrections
