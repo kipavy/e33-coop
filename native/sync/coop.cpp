@@ -1482,10 +1482,14 @@ void host_turn_start(UObject* actor)
         b.hold_since = s.now;
         broadcast(bs);
         // Tirages de la mise en place (tour 0), pour vérification chez les clients (comparés à leur tour 1).
+        // Par paquets de 32 (le protocole refuse les listes de plus de 64 ; une mise en place en fait ~100).
         if (setup_window() && !s.setup.draws.empty()) {
             proto::Draws d{b.id, 0, {}};
-            for (auto& [k, v] : s.setup.draws) d.draws.push_back({static_cast<uint32_t>(k >> 16), static_cast<uint16_t>(k & 0xFFFF), v});
-            broadcast(d);
+            for (auto& [k, v] : s.setup.draws) {
+                d.draws.push_back({static_cast<uint32_t>(k >> 16), static_cast<uint16_t>(k & 0xFFFF), v});
+                if (d.draws.size() == 32) { broadcast(d); d.draws.clear(); }
+            }
+            if (!d.draws.empty()) broadcast(d);
         }
         log().write("coop_battle_inventory", JsonObj().raw("inventory", game::battle_inventory_json()));
         // Diagnostic : composants de chaque héros (mécaniques propres : perfection, taches, masques… à couvrir par le hash).

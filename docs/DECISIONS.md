@@ -391,3 +391,39 @@ par ce dialogue joué seul de chaque côté ; empreinte d'inventaire toujours di
 
 **Remise en cause si** : `coop_join_load_stuck` en vrai (chercher dans `coop_join_wait_world` la condition qui manque) ;
 ou un objet d'édition / DLC autre que tenues et coiffures qui différerait encore.
+
+---
+
+## D30 — Tirages de la mise en place d'un combat : même graine dès le lancement (2026-10-24, demande de Killian, amende D10)
+
+**Constat** : D10 ne remplaçait les tirages de gameplay qu'à partir du tour 1. Or des tirages ont lieu **avant** : la
+position de départ de la roue de Monoco (`BP_UniqueMechanic_TransformMasks_Component_C`, `RandomIntegerInRange` dans
+son `ReceiveBeginPlay` -> `Starting_Position` = `CurrentMeter`), l'équipement de début de combat
+(`AC_jRPG_CharacterBattleStats_C:ActivateBuff` depuis `InitBattleGear`), les effets « au début du combat ». Avec la même
+graine 1865, la roue partait de 5 ou de 1 / 7 chez l'hôte, de 6 contre 5 chez un client ; l'écart n'était corrigé qu'au
+tour 1 par la réparation des champs (`raw_hash_diffs`), sans garantie que l'affichage de la roue suive. La graine,
+choisie au premier tour de l'hôte, n'existait pas encore à ce moment-là.
+
+**Décision** :
+1. **Graine choisie au lancement** : l'hôte la tire au pré-hook de `AC_jRPG_BattleManager_C:StartBattleNEW` (commun à
+   tous les lancements) ou, pour un combat de la carte, dès l'avis précoce (`BattleStart` n° 0, qui la porte désormais) ;
+   `host_turn_start` la reprend pour le `BattleStart` (repli : tirée là comme avant, `setup_windows_missing`).
+2. **Fenêtre de mise en place** : de `StartBattleNEW` au tour 1 (120 s au plus, fermée à la fin du combat). Un tirage de
+   gameplay (même classement que D10, sans le cache des ennemis) y vaut `f(graine, tour 0, flux, rang)`. Les composants
+   de mécanique propre (`*Mechanic*`, `StainHolder`) sont aussi des appelants de gameplay, dans les tours comme avant.
+3. **Client** : graine prise au lancement de son combat dans le `BattleStart` reçu (combat lancé par le mod) ou dans
+   l'avis précoce (pion suiveur qui engage avant) ; inconnue -> tirage laissé au jeu, compté (`setup_draws_natural`),
+   réparé au tour 1 comme avant. `setup_seed_mismatches` si le `BattleStart` porte une autre graine.
+4. **Vérification** : l'hôte publie les tirages de la mise en place (`Draws`, tour 0) juste après le `BattleStart` ; le
+   client les compare à son tour 1 (`draw_mismatches`), et compare la mécanique propre de chaque héros avant toute
+   réparation (`start_mech_diffs`, `coop_start_mech` avec la position de départ de la roue des deux côtés). Un hôte ou un
+   enregistrement d'avant D30 ne publie rien : pas de comparaison (`coop_setup_draws_unverified`).
+5. Hors fenêtre et hors combat (exploration) : aucun tirage touché. `-e33setupdraws=0` = ancien comportement.
+6. **Butin** : en cas d'écart de récompenses, le client écrit aussi objets et quantités de l'hôte (même nombre
+   d'entrées ; sinon `rewards_loot_unrepaired`).
+
+**Limites** : `GetRandomCharacterByBuffCritera` et l'attaque automatique forcée (`Array_Random` du gestionnaire) ne
+sont toujours pas synchronisés (journalisés, `unsynced_random_targeting`) ; `Array_Random` ne doit jamais être hooké.
+
+**Remise en cause si** : `draw_mismatches` au tour 0 (ordre des tirages de mise en place différent d'une machine à
+l'autre) ; `start_mech_diffs` > 0 avec une graine connue ; `setup_draws_natural` > 0 chez l'hôte.
