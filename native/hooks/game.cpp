@@ -1024,26 +1024,63 @@ bool battle_params(std::string& encounter, std::string& enemy_global_id, int& en
     return !encounter.empty() && encounter != "None";
 }
 
+// Ennemis rendus passifs par le mod (nom court), pour les rendre au jeu quand ce joueur redevient meneur.
+static std::vector<std::string> g_passive_capsules, g_passive_detection;
+
 int passive_world_enemies()
 {
     std::vector<UObject*> all;
     UObjectGlobals::FindAllOf(STR("BP_jRPG_Enemy_World_Base_Seamless_C"), all);
     int n = 0;
+    auto remember = [](std::vector<std::string>& v, const std::string& name) {
+        if (std::find(v.begin(), v.end(), name) == v.end()) v.push_back(name);
+    };
     for (UObject* e : all) {
         if (!e || e->GetName().rfind(STR("Default__"), 0) == 0) continue;
+        const std::string name = ue::short_name(e);
         // Pas de combat au contact : la capsule de rencontre ne génère plus de chevauchements (le jeu peut la remettre :
         // appelé régulièrement). StartBattle appelé directement (par le mod) marche toujours.
         if (UObject* cap = ue::get_object(e, STR("EncounterCapsuleRange"))) {
             ue::Call c(cap, STR("SetGenerateOverlapEvents"));
-            if (c) { c.set_bool(STR("bInGenerateOverlapEvents"), false).invoke(); ++n; }
+            if (c) { c.set_bool(STR("bInGenerateOverlapEvents"), false).invoke(); ++n; remember(g_passive_capsules, name); }
         }
         // Pas de poursuite ni de détection du pion (verrou posé une seule fois : tant que la détection reste coupée).
         if (ue::get_bool(e, STR("EnableDetection"))) {
             ue::set_bool(e, STR("EnableDetection"), false);
             ue::Call lock(e, STR("AddAggroLock"));
             if (lock) lock.set_fname(STR("LockName"), STR("E33Coop")).invoke();
+            remember(g_passive_detection, name);
         }
     }
+    return n;
+}
+
+int restore_world_enemies()
+{
+    if (g_passive_capsules.empty() && g_passive_detection.empty()) return 0;
+    std::vector<UObject*> all;
+    UObjectGlobals::FindAllOf(STR("BP_jRPG_Enemy_World_Base_Seamless_C"), all);
+    auto has = [](const std::vector<std::string>& v, const std::string& name) { return std::find(v.begin(), v.end(), name) != v.end(); };
+    int n = 0;
+    for (UObject* e : all) {
+        if (!e || e->GetName().rfind(STR("Default__"), 0) == 0) continue;
+        const std::string name = ue::short_name(e);
+        bool touched = false;
+        if (has(g_passive_capsules, name))
+            if (UObject* cap = ue::get_object(e, STR("EncounterCapsuleRange"))) {
+                ue::Call c(cap, STR("SetGenerateOverlapEvents"));
+                if (c) { c.set_bool(STR("bInGenerateOverlapEvents"), true).invoke(); touched = true; }
+            }
+        if (has(g_passive_detection, name)) {
+            ue::Call unlock(e, STR("RemoveAggroLock"));
+            if (unlock) unlock.set_fname(STR("LockName"), STR("E33Coop")).invoke();
+            ue::set_bool(e, STR("EnableDetection"), true);
+            touched = true;
+        }
+        if (touched) ++n;
+    }
+    g_passive_capsules.clear();
+    g_passive_detection.clear();
     return n;
 }
 

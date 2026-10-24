@@ -2040,6 +2040,11 @@ void end_session(const std::string& key, const std::string& detail)
     s.ended_at = s.now;
     bump("session_ended");
     set_local_input(true, "session end");
+    // Hôte : ennemis rendus passifs pendant que le client menait, rendus au jeu (la partie continue en solo).
+    if (s.role == Role::Host) {
+        const int n = game::restore_world_enemies();
+        if (n > 0) log().write("coop_world_enemies_restored", JsonObj().add("count", n).add("why", "session end"));
+    }
     explore::on_session_end();
     ui::clear_status("turn");
     ui::clear_status("wait");
@@ -4720,13 +4725,27 @@ void tick(double dt)
     // le pion suiveur et lançait le combat 3,5 s avant l'attaque surprise de l'hôte (« pris par surprise » chez le client).
     // Toutes les 3 s (FindAllOf parcourt tous les objets), seule tâche lourde de son image ; pion pris par le contrôleur
     // (avant : deux FindFirstOf de plus, pion du monde et menu principal, à chaque passage).
-    if (static double next_passive = 0; s.role == Role::Client && s.now >= next_passive && prof::claim_heavy("passive_enemies")) {
-        next_passive = s.now + 3.0;
-        prof::Scope p("passive_enemies");
-        if (game::explore_pawn() && !game::in_battle() && !game::map_change_in_progress()) {
-            const int n = game::passive_world_enemies();
-            static int last_n = -1;
-            if (n != last_n) { last_n = n; log().write("coop_world_enemies_passive", JsonObj().add("count", n)); }
+    // Quand le client mène (F8), c'est l'inverse : ses ennemis restent actifs (son pion engage, D34 demande le combat à
+    // l'hôte) et ceux de l'hôte deviennent passifs. Vu le 2026-10-25 : le pion suiveur de l'hôte touchait un monstre
+    // que le client n'avait pas touché -> combat imposé. Ennemis rendus au jeu dès que ce joueur redevient meneur.
+    {
+        const bool lead_here = explore::sharing() && explore::is_pilot();
+        const bool want_passive = s.role == Role::Client ? !lead_here : (explore::sharing() && !explore::is_pilot());
+        static bool was_passive = false;
+        if (!want_passive && was_passive && game::explore_pawn() && !game::map_change_in_progress()) {
+            was_passive = false;
+            const int n = game::restore_world_enemies();
+            log().write("coop_world_enemies_restored", JsonObj().add("count", n).add("pilot", explore::is_pilot()));
+        }
+        if (static double next_passive = 0; want_passive && s.now >= next_passive && prof::claim_heavy("passive_enemies")) {
+            next_passive = s.now + 3.0;
+            prof::Scope p("passive_enemies");
+            if (game::explore_pawn() && !game::in_battle() && !game::map_change_in_progress()) {
+                was_passive = true;
+                const int n = game::passive_world_enemies();
+                static int last_n = -1;
+                if (n != last_n) { last_n = n; log().write("coop_world_enemies_passive", JsonObj().add("count", n).add("pilot", explore::is_pilot())); }
+            }
         }
     }
     // Rappel des touches du mod tant que le menu pause est ouvert.
