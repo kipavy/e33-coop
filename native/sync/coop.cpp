@@ -1380,6 +1380,20 @@ void check_start_mech(const proto::StateSync& mine, const proto::StateSync& host
     }
 }
 
+// Mécanique propre (champs des composants *Mechanic* / StainHolder) différente pour au moins un héros.
+bool mech_differs(const proto::StateSync& mine, const proto::StateSync& host)
+{
+    for (const auto& h : host.units) {
+        for (const auto& m : mine.units) {
+            if (m.unit.kind != h.unit.kind || m.unit.spot != h.unit.spot) continue;
+            if (m.mech.size() != h.mech.size()) return true;
+            for (size_t i = 0; i < h.mech.size(); ++i)
+                if (m.mech[i].name != h.mech[i].name || m.mech[i].value != h.mech[i].value) return true;
+        }
+    }
+    return false;
+}
+
 // Tirage hors des tours d'un combat. Dans la fenêtre de mise en place, avec la graine : valeur dérivée (D30). Sinon,
 // tirage de gameplay laissé au jeu, compté (setup_draws_natural) : il peut différer d'une machine à l'autre.
 // Hors combat et hors fenêtre (exploration) : jamais touché ni compté.
@@ -1720,6 +1734,7 @@ void client_turn_finish(UObject* actor)
     if (h != host_hash) {
         // La simulation locale a divergé : log détaillé, puis resynchronisation depuis l'état de l'hôte.
         bump("raw_hash_diffs");
+        if (mech_differs(mine, host)) bump("raw_mech_diffs");   // écart sur une mécanique propre (roue, taches…, D30)
         const proto::StateSync now = deferred ? sync::snapshot(b.id, b.turn) : mine;
         const proto::StateSync target = deferred ? shift_host_state(host, mine, now) : host;
         const sync::RepairStats r = sync::repair(now, target);
@@ -3344,7 +3359,7 @@ void read_settings()
                           "session_ended", "players_left", "heroes_taken_over", "peer_timeouts", "sessions_rejected", "battle_ready_timeouts", "turn_timer_expired",
                           "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
                           "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions",
-                          "setup_draws_replaced", "setup_draws_natural", "start_mech_diffs"})
+                          "setup_draws_replaced", "setup_draws_natural", "start_mech_diffs", "raw_mech_diffs"})
         s.counters[c] = 0;
 
     s.game_build = read_build_id();

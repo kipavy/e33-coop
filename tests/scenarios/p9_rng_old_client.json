@@ -10,7 +10,7 @@
   "actions": [{ "type": "attack" }],
   "defense": ["fail"],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33setupdraws=0"],
-  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p9_rng_host.jsonl", "--timeout", "600"] },
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p9_rng_host.jsonl", "--paced", "1", "--timeout", "600"] },
   "expect": { "battle_end": "any", "remote_actions": ">=2", "rewards_checked": "any", "setup_draws_replaced": "0", "setup_draws_natural": ">=1",
-              "start_mech_diffs": "any", "raw_hash_diffs": "any", "repair_failures": "0" }
+              "start_mech_diffs": "any", "raw_mech_diffs": "any", "raw_hash_diffs": "any", "repair_failures": "0" }
 }

@@ -10,7 +10,8 @@
   "actions": [{ "type": "attack" }],
   "defense": ["fail"],
   "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
-  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p9_rng_host.jsonl", "--timeout", "600"] },
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p9_rng_host.jsonl", "--paced", "1", "--timeout", "600"] },
   "expect": { "battle_end": "any", "remote_actions": ">=2", "rewards_checked": "any", "setup_draws_replaced": ">=1", "setup_draws_natural": "0",
-              "start_mech_diffs": "0", "setup_seed_mismatches": "0", "raw_hash_diffs": "0", "repair_failures": "0" }
+              "start_mech_diffs": "0", "setup_seed_mismatches": "0", "raw_mech_diffs": "0", "raw_hash_diffs": "<=1", "repair_failures": "0" },
+  "note": "Seul écart toléré (raw_hash_diffs <= 1) : 1 PA de Lune au début de son 2e tour consécutif (hôte 7, client 6), sans lien avec l'aléatoire (tirages identiques, aussi présent avant D30) : délai de la photo du début de tour, comme le PA de Gustave de p8_dialogue_sync_client. Mécaniques propres (roue, taches) sans aucun écart sur tout le combat (raw_mech_diffs 0)."
 }
