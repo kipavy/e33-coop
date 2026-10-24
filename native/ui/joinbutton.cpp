@@ -418,7 +418,7 @@ bool position_version(UObject* panel, UObject* anchor, UObject* w)
     sp.v.erase(L"Size");
     apply_slot(slot, sp);
     ue::Call hz(slot, STR("SetHorizontalAlignment"));
-    if (hz) hz.set_int(STR("InHorizontalAlignment"), 2).invoke();   // HAlign_Right
+    if (hz) hz.set_int(STR("InHorizontalAlignment"), 3).invoke();   // HAlign_Right (0 Fill, 1 Left, 2 Center, 3 Right)
     return true;
 }
 
