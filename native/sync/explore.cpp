@@ -1098,6 +1098,25 @@ void replay_tick()
     if (!s.interactions.empty() && world_ready()) {
         const auto wi = s.interactions.front();
         s.interactions.pop_front();
+        // Tir du pilote sur un objet du monde : même coup ici (FreeAimHit avec notre pion, au centre de l'objet).
+        if (wi.actor.rfind("freeaim:", 0) == 0) {
+            const std::string path = wi.actor.substr(8);
+            UObject* target = ue::find_object(ue::from_utf8(path).c_str());
+            bool ok = false;
+            if (target) {
+                ue::Call c(target, STR("FreeAimHit"));
+                double loc[3]{};
+                game::location(target, loc);
+                if (c && c.param_size(STR("HitLocation")) == sizeof(loc)) {
+                    s.replaying = true;
+                    ok = c.set_object(STR("PlayerCharacterWorld"), game::world_pawn()).set_raw(STR("HitLocation"), loc).set_bool(STR("IsDisabled"), false).invoke();
+                    s.replaying = false;
+                }
+            }
+            bump(ok ? "freeaim_hits_replayed" : "freeaim_hit_errors"); touch();
+            log().write("coop_freeaim_world_replayed", JsonObj().add("actor", path).add("found", target != nullptr).add("ok", ok));
+            return;
+        }
         UObject* target = ue::find_object(ue::from_utf8(wi.actor).c_str());
         if (!target) {
             bump("interactions_missing");
@@ -2779,6 +2798,24 @@ void subscribe()
         s.net.publish(proto::DialogueChoice{++s.seq, std::max(0, s.merchant_sent), 4}, true);
         bump("merchant_buys_published");
         log().write("coop_merchant_buy", JsonObj().add("index", s.merchant_sent));
+    });
+    // Tirs du pilote en exploration (point 4 de la liste de Killian : sphères de peinture, cages, boutons) : le projectile
+    // qui touche un objet du monde cible du tir (interface BPI_FreeAimTarget_World : FreeAimHit) est publié en
+    // WorldInteract « freeaim: » ; le suiveur appelle FreeAimHit sur le même objet. Les combattants du monde (ennemis,
+    // pions) sont exclus : un tir sur un ennemi lance un combat, qui suit son propre chemin.
+    bus.post(L"/Game/Gameplay/WorldSkills/BP_FreeAimProjectile_Base.BP_FreeAimProjectile_Base_C:OnCollision", [](HookCtx& ctx, UFunction* f) {
+        if (!s.active || !sharing() || s.replaying || game::in_battle()) return;
+        UObject* target = ue::read_param_object(ctx, f, STR("OtherActor"));
+        static int logged = 0;
+        const bool hittable = target && ue::Call(target, STR("FreeAimHit")) && !ue::is_a(target, STR("BP_jRPG_Enemy_World_Base_Seamless_C")) &&
+                              !ue::is_a(target, STR("BP_jRPG_Character_World_C"));
+        if (logged < 40 && ++logged)
+            log().write("coop_freeaim_world_hit", JsonObj().add("target", target ? ue::short_name(target) : std::string("null"))
+                                                     .add("class", target ? ue::short_name(target->GetClassPrivate()) : std::string()).add("hittable", hittable).add("pilot", is_pilot()));
+        if (!hittable || !is_pilot()) return;
+        const std::string path = object_path(target);
+        s.net.publish(proto::WorldInteract{++s.seq, "freeaim:" + path, false}, true);
+        bump("freeaim_hits_published"); touch();
     });
     RC::Unreal::Hook::RegisterProcessEventPreCallback(&gpe_pe_hook, {false, false, STR("E33Coop"), STR("ExploreGPE")});
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
