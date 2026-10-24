@@ -81,6 +81,14 @@ bool perform_action(int action_type, const std::wstring& secondary, const std::v
 // BM.StartBattleEndFlow au lieu de BM.ForceBattleEnd. Non vérifié en jeu (noms du dump). how : fonction et paramètre
 // utilisés, pour le journal. Ne pas appeler depuis un hook (tick seulement).
 bool force_battle_end(int result, bool direct_flow, std::string& how);
+// Écran de défaite (D31) : WBP_jRPG_GameOverScreen_C du gestionnaire de combat (nul hors défaite), et sa fenêtre
+// « Réessayer / Abandonner » (WBP_ModalPopup_C ouverte par PromptBattleRetry, ParentActivatableWidget = l'écran), nulle
+// si elle n'est pas ouverte. Parcourt les objets (FindAllOf) : pas à chaque image. visible : affichée (ni masquée ni réduite).
+UObject* defeat_screen();
+UObject* defeat_modal(UObject* screen, bool* visible = nullptr);
+// Réponses de la fenêtre (EModalUIResponse, déduites des noms internes : à confirmer en jeu, coop_defeat_response).
+enum ModalResponse : int { RespConfirm = 1, RespCancel = 2 };
+inline constexpr const wchar_t* kGameOverScreenClass = L"/Game/UI/Widgets/HUD_Battle/SubWidget/WBP_jRPG_GameOverScreen.WBP_jRPG_GameOverScreen_C";
 // Combattant mis à mort (PV à 0, puis Stats.SetDead, comme le réglage « dead » du test runner) : ennemi mort chez
 // l'hôte seulement. false si les stats ou SetDead manquent.
 bool kill_unit(UObject* character);

@@ -225,7 +225,7 @@ bool validate_scenario(std::string_view text, std::string& sanitized, std::strin
     }
     // Étapes d'exploration : seulement celles du runner.
     static const char* steps[] = {"wait", "wait_world", "wait_join", "move", "interact", "choose", "wait_dialogue_end", "change_map", "world_battle",
-                                  "battle", "trigger", "set_party", "reassign", "economy", "build", "wait_follow", "zone_action", "skip_cinematic",
+                                  "battle", "trigger", "set_party", "reassign", "economy", "build", "wait_follow", "zone_action", "skip_cinematic", "defeat",
                                   "wait_key", "request_pilot", "end"};
     if (const auto& ex = v["explore"]; !ex.is_null()) {
         if (!ex.is_array()) { err = "explore doit être une liste"; return false; }

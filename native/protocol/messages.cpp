@@ -139,6 +139,8 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u8(x.player); w.u32(x.seq); w.str(x.scene); w.str(x.sequence); w.u8(static_cast<uint8_t>(x.cause)); w.str(x.cause_path);
             w.str(x.action); w.f64(x.x); w.f64(x.y); w.f64(x.z);
             w.u8(static_cast<uint8_t>(x.kind));   // champ final facultatif
+        } else if constexpr (std::is_same_v<T, DefeatChoice>) {
+            w.u32(x.battle_id); w.u8(x.retry);
         } else if constexpr (std::is_same_v<T, SceneSkip>) {
             w.u8(x.player); w.u32(x.seq); w.str(x.scene);
         } else if constexpr (std::is_same_v<T, BarrierRelease>) {
@@ -339,6 +341,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         if (c > static_cast<uint8_t>(SceneCause::Action) || x.player > 3) r.fail();
         x.cause = static_cast<SceneCause>(c); return finish(x);
     }
+    case MsgType::DefeatChoice: { DefeatChoice x; x.battle_id = r.u32(); x.retry = r.u8(); if (x.retry > 1) r.fail(); return finish(x); }
     case MsgType::SceneSkip: {
         SceneSkip x; x.player = r.u8(); x.seq = r.u32(); x.scene = r.str(kMaxStr);
         if (x.player > 3) r.fail();
@@ -457,6 +460,7 @@ const char* type_name(MsgType t)
     case MsgType::BarrierRelease: return "BarrierRelease";
     case MsgType::SceneStart: return "SceneStart";
     case MsgType::SceneSkip: return "SceneSkip";
+    case MsgType::DefeatChoice: return "DefeatChoice";
     case MsgType::PauseState: return "PauseState";
     case MsgType::Owners: return "Owners";
     case MsgType::BattleReady: return "BattleReady";
@@ -484,7 +488,8 @@ MsgType type_of(const Message& m)
                                         MsgType::MapChange, MsgType::NarrativeState, MsgType::BarrierRelease, MsgType::PauseState,
                                         MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
                                         MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta,
-                                        MsgType::IntentPreview, MsgType::AimView, MsgType::MenuState, MsgType::SceneStart, MsgType::SceneSkip};
+                                        MsgType::IntentPreview, MsgType::AimView, MsgType::MenuState, MsgType::SceneStart, MsgType::SceneSkip,
+                                        MsgType::DefeatChoice};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -604,6 +609,8 @@ std::string to_json(const Message& m)
                 .add("kind", static_cast<int>(x.kind));
         } else if constexpr (std::is_same_v<T, SceneSkip>) {
             o.add("player", static_cast<int>(x.player)).add("seq", x.seq).add("scene", x.scene);
+        } else if constexpr (std::is_same_v<T, DefeatChoice>) {
+            o.add("battle", x.battle_id).add("retry", static_cast<int>(x.retry));
         }
         else if constexpr (std::is_same_v<T, PauseState>) { o.add("player", static_cast<int>(x.player)).add("paused", x.paused).add("in_battle", x.in_battle); }
         else if constexpr (std::is_same_v<T, Owners>) {

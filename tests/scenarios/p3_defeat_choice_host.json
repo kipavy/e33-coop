@@ -1,0 +1,24 @@
+{
+  "name": "p3_defeat_choice_host",
+  "description": "Défaite, choix de l'hôte (D31). Comme p3_defeat_host (Lune seule à 1 PV, jouée par le faux client, tuée par le Lancelier), mais le test continue sur l'écran de défaite : l'hôte choisit « Réessayer » par la fenêtre du jeu (combat relancé, nouvelle défaite), puis « Abandonner » (partie rechargée). Chaque choix est publié (DefeatChoice) ; le faux client demande l'instantané après l'abandon. Produit l'enregistrement rejoué par p3_defeat_choice_client.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Lune"],
+  "setup": { "Lune": { "hp": 1, "shield": 0 } },
+  "timeout_s": 900,
+  "max_turns": 30,
+  "shots_every_s": 6,
+  "defense": ["fail"],
+  "explore": [
+    { "do": "trigger", "players": 1 },
+    { "do": "defeat", "choice": "retry", "after_s": 3, "timeout": 120 },
+    { "do": "battle", "timeout": 400 },
+    { "do": "defeat", "choice": "abandon", "after_s": 3, "timeout": 120 },
+    { "do": "wait_world", "s": 5, "timeout": 240 },
+    { "do": "wait", "until": "snapshots_sent", "is": ">=1", "timeout": 120 },
+    { "do": "wait", "s": 10 }
+  ],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Lune:1", "-e33seed=16250036901998647475"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_energy_session.json", "--save-out", "{run}/snapshot-received.sav", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "900"] },
+  "expect": { "defeat_screens": ">=2", "defeat_retries_chosen": "1", "defeat_abandons_chosen": "1", "defeat_choices_published": "2", "snapshots_sent": ">=1", "hero_deaths": ">=2" }
+}

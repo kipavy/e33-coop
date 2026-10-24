@@ -1066,6 +1066,28 @@ bool set_game_paused(bool paused)
 
 bool pause_menu_visible() { return ue::get_bool(controller(), STR("IsPauseMenuVisible")); }
 
+UObject* defeat_screen()
+{
+    UObject* bm = battle_manager();
+    return bm ? ue::get_object(bm, STR("GameOverScreenWidget")) : nullptr;
+}
+
+UObject* defeat_modal(UObject* screen, bool* visible)
+{
+    if (visible) *visible = false;
+    if (!screen) return nullptr;
+    std::vector<UObject*> all;
+    UObjectGlobals::FindAllOf(STR("WBP_ModalPopup_C"), all);
+    for (UObject* m : all) {
+        if (!m || ue::get_object(m, STR("ParentActivatableWidget")) != screen || !ue::get_bool(m, STR("bIsActive"))) continue;
+        // ESlateVisibility : 1 réduite (Collapsed), 2 masquée (Hidden)
+        const int64_t v = ue::get_int(m, STR("Visibility"), 0);
+        if (visible) *visible = v != 1 && v != 2;
+        return m;
+    }
+    return nullptr;
+}
+
 bool is_game_paused()
 {
     UObject* gps = ue::find_object(STR("/Script/Engine.Default__GameplayStatics"));

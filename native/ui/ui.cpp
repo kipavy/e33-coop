@@ -46,6 +46,11 @@ constexpr Entry kTexts[] = {
     {"joining", "Connexion à la partie de l'hôte…", "Joining the host's game…"},
     {"loading_host_game", "Chargement de la partie de l'hôte…", "Loading the host's game…"},
     {"resyncing", "Resynchronisation avec l'hôte…", "Resynchronizing with the host…"},
+    // Défaite (D31) : seul l'hôte choisit « Réessayer » ou « Abandonner »
+    {"defeat_host_choosing", "Défaite : {0} choisit (réessayer ou abandonner)…", "Defeat: {0} is choosing (retry or give up)…"},
+    {"defeat_host_retry", "{0} réessaie le combat", "{0} retries the battle"},
+    {"defeat_host_abandon", "{0} abandonne le combat : chargement de sa partie…", "{0} gave up the battle: loading their game…"},
+    {"defeat_host_silent", "{0} ne choisit pas : à vous de choisir", "{0} is not choosing: your call"},
     {"player_joined", "{0} a rejoint la partie", "{0} joined the game"},
     {"player_left", "{0} a quitté la partie : l'hôte reprend ses personnages", "{0} left the game: the host takes over their characters"},
     {"player_lost", "Connexion perdue avec {0} : l'hôte reprend ses personnages", "Lost connection to {0}: the host takes over their characters"},

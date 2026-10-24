@@ -291,7 +291,17 @@ void subscribe()
     // Chargement d'une autre save (menu du jeu) ou nouvelle partie : ce n'est plus la partie coop.
     bus.pre(std::wstring(kSaveMgr) + L"LoadGameFromSaveFile", [](HookCtx& ctx, UFunction* f) {
         const std::string slot = str_of(str_param(ctx, f, STR("SlotName")));
+        log().write("save_trace", JsonObj().add("fn", "LoadGameFromSaveFile").add("slot", slot));
         if (slot.rfind("e33coop", 0) != 0) reset_coop_game("load personal save");
+    });
+    // Diagnostic (D31) : chemin de chargement du jeu (abandon après une défaite : quelle save est rechargée ?).
+    for (const wchar_t* fn : {L"RequestLoadGame", L"ProcessLoadRequest", L"RetrieveSaveDataFromSlotName", L"LoadGameFromSaveData", L"PrepareToLoadSaveGame"}) {
+        bus.pre(std::wstring(kSaveMgr) + fn, [fn](HookCtx& ctx, UFunction* f) {
+            log().write("save_trace", JsonObj().add("fn", ue::to_utf8(fn)).add("slot", std::wstring(fn) == L"RetrieveSaveDataFromSlotName" ? str_of(str_param(ctx, f, STR("SlotName"))) : std::string()));
+        });
+    }
+    bus.pre(L"/Game/Gameplay/Save/BP_FL_SaveGameHelpers.BP_FL_SaveGameHelpers_C:ForceLoadLastSave", [](HookCtx&, UFunction*) {
+        log().write("save_trace", JsonObj().add("fn", "ForceLoadLastSave"));
     });
     bus.pre(std::wstring(kSaveMgr) + L"StartNewGame", [](HookCtx&, UFunction*) { reset_coop_game("new game"); });   // suivie : remarquée juste après
 }

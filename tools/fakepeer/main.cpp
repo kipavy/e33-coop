@@ -643,6 +643,10 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     ended = true;
                     ended_at = now_s();   // quelques secondes de plus pour les récompenses
                 }
+            } else if (auto* dc = std::get_if<proto::DefeatChoice>(&m)) {
+                // Défaite (D31) : comme le vrai client, rien à choisir ; abandon de l'hôte -> instantané demandé.
+                ++counts[dc->retry ? "defeat_retries" : "defeat_abandons"];
+                if (!dc->retry) { lp->send(proto::ResyncRequest{"host abandoned the battle"}); ++counts["resyncs_sent"]; }
             } else if (auto* o = std::get_if<proto::SaveOffer>(&m)) {
                 inbound = Inbound{o->xfer, o->size, 0, o->hash, o->level, std::vector<uint8_t>(o->size)};
                 ++counts["save_offers"];
