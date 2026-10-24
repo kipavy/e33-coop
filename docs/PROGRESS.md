@@ -2,6 +2,12 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 21h15 — v0.6.21 : réparation des buffs manquants
+
+- `coop_repair_error` « buff class not loaded: BP_BattleBuff_Powerful_125_C » à chaque tour contre l'Évêque alors que ce buff existait chez le client (sur l'Évêque) : `find_class_by_short_name` reposait sur `FindAllOf("BlueprintGeneratedClass")`, qui ne rend rien (constat du 2026-10-23 dans mount.cpp). Désormais : classe d'une instance vivante (`FindFirstOf`), sinon parcours de tous les objets. Non testé (`p3_resync_client` couvrirait une réparation de buffs).
+- PA de Lune (`p9_rng_client`, 6 contre 7 au début de son 2e tour consécutif) : le client a vraiment 1 PA de moins (après réparation, tours suivants identiques) ; actions et QTE identiques. Cause non trouvée, à tracer en jeu (gains de PA de Lune au tour 1 : `GainAP`, taches, Lumina AP+1TurnStart).
+- Mini-gel ~1 s contre l'Évêque : gardé. Le décalage de rejeu (`replay_lag_s` 1 s) est nécessaire : le résultat d'un QTE du propriétaire (appui jusqu'à ~0,6 s dans la fenêtre + réseau) doit arriver avant que la même fenêtre s'ouvre chez le client.
+
 ## 2026-10-24, 21h — v0.6.20 : écran de défaite (D33) publié sans test, journaux gardés à la mise à jour
 
 - Accord de Killian : publier les correctifs même non vérifiés, ils testent avec TOTOFFF ; si un correctif casse, publier aussitôt une version suivante qui l'annule (supprimer une release ne désinstalle rien).

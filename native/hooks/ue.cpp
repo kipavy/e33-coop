@@ -123,7 +123,22 @@ UClass* find_class_by_short_name(const std::string& short_name)
     UObjectGlobals::FindAllOf(STR("BlueprintGeneratedClass"), classes);
     for (UObject* o : classes)
         if (o && o->GetName() == w) return static_cast<UClass*>(o);
-    return nullptr;
+    // FindAllOf("BlueprintGeneratedClass") ne rend rien (vu le 2026-10-23, mount.cpp) : la réparation d'un buff manquant
+    // échouait toujours (« buff class not loaded », essai du 2026-10-24, alors que le buff existait sur l'Évêque).
+    // 1. Une instance vivante de la classe (rapide). 2. Parcours de tous les objets (rare : seulement en réparation).
+    if (UObject* inst = UObjectGlobals::FindFirstOf(w.c_str())) {
+        UClass* c = inst->GetClassPrivate();
+        if (c && c->GetName() == w) return c;
+    }
+    UClass* found = nullptr;
+    UObjectGlobals::ForEachUObject([&](UObject* o, int32, int32) {
+        if (o && o->GetName() == w && o->GetClassPrivate() && o->GetClassPrivate()->GetName() == STR("BlueprintGeneratedClass")) {
+            found = static_cast<UClass*>(o);
+            return LoopAction::Break;
+        }
+        return LoopAction::Continue;
+    });
+    return found;
 }
 
 bool is_a(UObject* o, const wchar_t* class_short_name)
