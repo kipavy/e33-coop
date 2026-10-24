@@ -422,6 +422,12 @@ choisie au premier tour de l'hôte, n'existait pas encore à ce moment-là.
 6. **Butin** : en cas d'écart de récompenses, le client écrit aussi objets et quantités de l'hôte (même nombre
    d'entrées ; sinon `rewards_loot_unrepaired`).
 
+**Constats (p9_rng_host, 2026-10-24)** : ~100 tirages de mise en place : roue de Monoco (1), `ActivateBuff` de
+l'équipement (~90) et `BP_LootSystemComponent_C:RollLootTableSection` (butin tiré dès le début du combat, désormais
+identique). Les taches de Lune ne sont pas tirées au hasard (aucun tirage d'un `StainHolder` dans les traces ;
+`StainQueue` créée par ElementalTrick, vidée par Mayhem). `raw_mech_diffs` compte les tours où une mécanique propre
+diffère avant correction.
+
 **Limites** : `GetRandomCharacterByBuffCritera` et l'attaque automatique forcée (`Array_Random` du gestionnaire) ne
 sont toujours pas synchronisés (journalisés, `unsynced_random_targeting`) ; `Array_Random` ne doit jamais être hooké.
 
