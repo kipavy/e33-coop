@@ -1945,7 +1945,7 @@ void align_tick()
     if (!listening) bump("turn_align_not_listening");
     ue::Call solve(turn_deps(), STR("SolveDependency"));
     if (solve) solve.set_object(STR("Dependency"), game::save_manager()).invoke();
-    b.play_since = s.now;   // le tour se joue à partir d'ici (DefenseRequest.turn_ms)
+    if (listening) b.play_since = s.now;   // tour vraiment retenu : il se joue à partir d'ici (DefenseRequest.turn_ms)
     const int ms = static_cast<int>((s.now - b.align_since) * 1000.0);
     bump_max("turn_align_max_ms", ms);
     if (!done) bump("turn_align_timeouts");
@@ -2168,6 +2168,26 @@ void subscribe()
 
     // Essai -e33turndep=1 : le jeu commence à attendre les dépendances du début de tour -> inscription du mod si l'état
     // de l'hôte pour ce tour n'est pas encore arrivé (résolue par le tick à son arrivée).
+    // Diagnostic D28 (hôte, en combat) : déroulé du début de tour (écoutes des dépendances, phases, auditeurs).
+    {
+        auto diag = [](const char* what) {
+            return [what](HookCtx& ctx, UFunction*) {
+                if (s.role != Role::Host || !s.battle.active || s.battle.ending) return;
+                UObject* deps = turn_deps();
+                log().write("coop_turn_flow", JsonObj().add("what", what).add("turn", s.battle.turn).add("self", ue::short_name(ctx.Context))
+                                                  .add("is_turn_deps", ctx.Context == deps)
+                                                  .add("listening", deps ? ue::get_bool(deps, STR("IsListening")) : false)
+                                                  .add("triggered", deps ? ue::get_bool(deps, STR("HasTriggered")) : false)
+                                                  .add("align_active", s.battle.align_active), s.battle.turn);
+            };
+        };
+        const wchar_t* dep = L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:";
+        for (const wchar_t* n : {L"StartListenToDependencies", L"Reset", L"ResetAllDependencies", L"CheckDependencies"})
+            bus.pre(std::wstring(dep) + n, diag(n == std::wstring(L"Reset") ? "dep_reset" : n == std::wstring(L"ResetAllDependencies") ? "dep_reset_all"
+                                              : n == std::wstring(L"CheckDependencies") ? "dep_check" : "dep_listen"));
+        bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn_Phase2"), diag("phase2"));
+        bus.pre(fn(game::path::BattleMgr, L"ProcessNextTurnStartListener"), diag("next_listener"));
+    }
     bus.pre(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:StartListenToDependencies", [](HookCtx& ctx, UFunction*) {
         // Hôte, démarrage synchronisé (D28) : tour ennemi retenu tant qu'un client qui a des héros ne l'a pas commencé chez lui.
         if (s.role == Role::Host) {
