@@ -324,7 +324,7 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
     case MsgType::PilotRequest: { PilotRequest x; x.player = r.u8(); if (x.player > 3) r.fail(); return finish(x); }
     case MsgType::PilotChange: { PilotChange x; x.pilot = r.u8(); if (x.pilot > 3) r.fail(); return finish(x); }
     case MsgType::WorldInteract: { WorldInteract x; x.seq = r.u32(); x.actor = r.str(kMaxStr); x.instant = r.boolean(); if (x.actor.empty()) r.fail(); return finish(x); }
-    case MsgType::DialogueChoice: { DialogueChoice x; x.seq = r.u32(); x.index = r.i32(); if (x.index < 0 || x.index > 16) r.fail(); if (r.ok() && !r.at_end()) x.hover = r.u8(); return finish(x); }
+    case MsgType::DialogueChoice: { DialogueChoice x; x.seq = r.u32(); x.index = r.i32(); if (x.index < 0 || x.index > 255) r.fail(); if (r.ok() && !r.at_end()) x.hover = r.u8(); return finish(x); }
     case MsgType::MapChange: { MapChange x; x.seq = r.u32(); x.level = r.str(256); x.spawn_tag = r.str(256); if (x.level.empty()) r.fail(); return finish(x); }
     case MsgType::NarrativeState: {
         NarrativeState x; x.player = r.u8(); const uint8_t k = r.u8(); x.active = r.boolean(); x.seq = r.u32();

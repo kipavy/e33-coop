@@ -17,8 +17,9 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ## [0.6.23] - 2026-10-24
 
 ### Corrections
-- Marchand : seul le meneur fait ses achats. Chez l'autre joueur, la fenêtre du marchand se referme aussitôt (message
-  « Le meneur est chez le marchand ») ; il ne peut plus acheter de son côté ni lancer le combat du marchand.
+- Marchand : l'autre joueur voit la fenêtre du marchand du meneur en même temps que lui (article sélectionné, achats
+  qui arrivent dans l'inventaire), sans pouvoir y toucher : plus d'achats séparés ni de combat du marchand lancé de son
+  côté. Sa fenêtre se ferme avec celle du meneur.
 
 ## [0.6.22] - 2026-10-24
 

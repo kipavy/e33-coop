@@ -152,6 +152,8 @@ struct S {
     bool choice_pending = false;                  // question posée (StartChoice), pas encore répondue
     int choice_hover_sent = -1, choice_hover_want = -1, choice_hover_shown = -1;   // choix survolé (pilote / voulu / affiché ici)
     int choice_diag = 0;
+    bool merchant_open = false, merchant_locked = false, merchant_close = false;   // fenêtre du marchand (pilote : ouverte ; suiveur : miroir posé, fermeture demandée)
+    int merchant_sent = -1, merchant_want = -1, merchant_shown = -1;
     bool sequence_playing = false;                // OnSequenceStarted reçu, pas encore OnSequenceFinished
     // Narration (barrière) et pause
     double next_poll = 0;
@@ -1525,34 +1527,80 @@ bool widget_flag(UObject* w, const wchar_t* fn)
 }
 
 
-// Marchand (essai à deux PC du 2026-10-24) : le choix « Acheter » du pilote est rejoué chez le suiveur, qui avait alors
-// sa propre fenêtre du marchand, entrées libres : achats séparés, et même un combat contre le marchand lancé chez lui
-// pendant que le pilote avait la main. Chez le suiveur, la fenêtre est refermée par son bouton « Partir » dès qu'elle
-// est ouverte ; les achats du pilote lui arrivent par la synchro de l'inventaire et de l'or (D13), un combat contre le
-// marchand lancé par le pilote par le chemin habituel (BattleStart).
-void merchant_follower_tick()
+// Marchand (essai à deux PC du 2026-10-24, demande de Killian) : le choix « Acheter » du pilote est rejoué chez le
+// suiveur, qui avait alors sa propre fenêtre du marchand, entrées libres (achats séparés, combat du marchand lancé chez
+// lui). Désormais la fenêtre du suiveur est un miroir : ses boutons (acheter, combattre, partir) sont désactivés, il voit
+// l'article sélectionné par le pilote (DialogueChoice.hover 2 = index de l'article), et elle se ferme quand le pilote
+// ferme la sienne (hover 3). Les achats du pilote lui arrivent par la synchro de l'inventaire et de l'or (D13).
+UObject* merchant_window()
 {
-    static double next = 0, seen_at = -1;
-    if (s.now < next) return;
-    next = s.now + 0.2;
-    if (!sharing() || is_pilot()) { seen_at = -1; return; }
     UObject* win = ue::get_object(ue::get_object(game::controller(), STR("BP_DialogueSystemComponent")), STR("MerchantWindow"));
-    bool active = false;
-    if (win) { ue::Call c(win, STR("IsActivated")); active = c && c.invoke() && c.out_bool(STR("ReturnValue")); }
-    if (!active) { seen_at = -1; return; }
-    if (seen_at < 0) { seen_at = s.now; return; }
-    if (s.now - seen_at < 0.4) return;   // fin de l'animation d'ouverture
-    seen_at = s.now + 5.0;               // pas de nouvel essai avant 5 s
-    UObject* leave = ue::get_object(win, STR("LeaveButton"));
-    bool ok = false;
-    {
-        ue::Call c(win, STR("BndEvt__WBP_Merchant_Panel_LeaveButton_K2Node_ComponentBoundEvent_5_CommonButtonBaseClicked__DelegateSignature"));
-        if (c && leave) ok = c.set_object(STR("Button"), leave).invoke();
+    if (!win) return nullptr;
+    ue::Call c(win, STR("IsActivated"));
+    return c && c.invoke() && c.out_bool(STR("ReturnValue")) ? win : nullptr;
+}
+
+std::vector<UObject*> merchant_entries(UObject* win)
+{
+    ue::Call c(ue::get_object(win, STR("DynamicEntryBox_Items")), STR("GetAllEntries"));
+    if (!c || !c.invoke()) return {};
+    return c.out_object_array(STR("ReturnValue"));
+}
+
+void merchant_tick()
+{
+    static double next = 0;
+    if (s.now < next || !sharing()) return;
+    next = s.now + 0.1;
+    UObject* win = merchant_window();
+    if (is_pilot()) {
+        if (!win) {
+            if (s.merchant_open) { s.merchant_open = false; s.net.publish(proto::DialogueChoice{++s.seq, 0, 3}, true); log().write("coop_merchant_closed", JsonObj()); }
+            return;
+        }
+        if (!s.merchant_open) { s.merchant_open = true; s.merchant_sent = -1; log().write("coop_merchant_opened", JsonObj()); }
+        UObject* focused = ue::get_object(win, STR("FocusedMerchantItem"));
+        const auto entries = merchant_entries(win);
+        int idx = -1;
+        for (size_t i = 0; i < entries.size(); ++i) if (entries[i] == focused) idx = static_cast<int>(i);
+        if (idx >= 0 && idx != s.merchant_sent && idx <= 255) {
+            s.merchant_sent = idx;
+            s.net.publish(proto::DialogueChoice{++s.seq, idx, 2}, true);
+            bump("merchant_focus_published");
+        }
+        return;
     }
-    if (!ok) { ue::Call d(win, STR("DeactivateWidget")); ok = d && d.invoke(); }
-    bump(ok ? "merchant_windows_closed" : "merchant_close_errors");
-    log().write("coop_follower_merchant_closed", JsonObj().add("ok", ok).add("leave_button", leave != nullptr));
-    ui::toast("pilot_at_merchant");
+    if (!win) { s.merchant_locked = false; s.merchant_shown = -1; return; }
+    if (!s.merchant_locked) {
+        s.merchant_locked = true;
+        s.merchant_close = false;
+        for (const wchar_t* b : {STR("BuyItemButton"), STR("FightMerchantButton"), STR("LeaveButton")}) {
+            ue::Call c(ue::get_object(win, b), STR("SetIsInteractionEnabled"));
+            if (c) c.set_bool(STR("bInIsInteractionEnabled"), false).invoke();
+        }
+        bump("merchant_mirrors");
+        log().write("coop_follower_merchant_mirror", JsonObj().add("entries", static_cast<int64_t>(merchant_entries(win).size())));
+        ui::toast("pilot_at_merchant");
+    }
+    if (s.merchant_close) {
+        s.merchant_close = false;
+        UObject* leave = ue::get_object(win, STR("LeaveButton"));
+        bool ok = false;
+        { ue::Call c(win, STR("BndEvt__WBP_Merchant_Panel_LeaveButton_K2Node_ComponentBoundEvent_5_CommonButtonBaseClicked__DelegateSignature"));
+          if (c && leave) ok = c.set_object(STR("Button"), leave).invoke(); }
+        if (!ok) { ue::Call d(win, STR("DeactivateWidget")); ok = d && d.invoke(); }
+        bump(ok ? "merchant_windows_closed" : "merchant_close_errors");
+        log().write("coop_follower_merchant_closed", JsonObj().add("ok", ok));
+        return;
+    }
+    if (s.merchant_want >= 0 && s.merchant_want != s.merchant_shown) {
+        const auto entries = merchant_entries(win);
+        if (s.merchant_want < static_cast<int>(entries.size())) {
+            ue::Call c(entries[static_cast<size_t>(s.merchant_want)], STR("SetFocus"));
+            if (c) c.invoke();
+            s.merchant_shown = s.merchant_want;
+        }
+    }
 }
 void choice_hover_tick()
 {
@@ -1911,7 +1959,7 @@ void poll_tick()
     movement_lock_tick();
     pilot_stuck_tick();
     choice_hover_tick();
-    merchant_follower_tick();
+    merchant_tick();
     // Narration locale
     if (s.intro && s.now - s.intro_since > kIntroMax) { s.intro = false; log().write("coop_intro_timeout", JsonObj()); }
     // Fin de l'intro : le signal du jeu (OnInitialCinematicCompleted) n'arrive pas (vu le 2026-10-21). Elle finit donc
@@ -2531,7 +2579,10 @@ bool handle(uint8_t from, const proto::Message& m)
     }
     if (auto* dc = std::get_if<proto::DialogueChoice>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
-        if (dc->hover) { s.choice_hover_want = dc->index; return true; }   // survol seulement : surbrillance, pas de choix
+        if (dc->hover == 1) { s.choice_hover_want = dc->index; return true; }   // survol seulement : surbrillance, pas de choix
+        if (dc->hover == 2) { s.merchant_want = dc->index; return true; }       // article du marchand sélectionné par le pilote
+        if (dc->hover == 3) { s.merchant_close = true; s.merchant_want = -1; return true; }   // le pilote a fermé la fenêtre
+        if (dc->hover) return true;
         s.choices.emplace_back(*dc, s.now);
         touch();
         return true;

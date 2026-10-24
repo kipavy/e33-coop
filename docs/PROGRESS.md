@@ -4,7 +4,7 @@
 
 ## 2026-10-24, 21h45 — v0.6.23 : fenêtre du marchand chez le suiveur
 
-- Vu par Killian : après le dialogue d'un marchand, TOTOFFF avait sa propre fenêtre du marchand (choix rejoué), entrées libres : achats séparés, combat du marchand lancé chez lui pendant que Killian avait la main. Corrigé : chez le suiveur, `BP_DialogueSystemComponent.MerchantWindow` activée -> bouton Partir (`BndEvt__…LeaveButton…CommonButtonBaseClicked`, repli `DeactivateWidget`) après 0,4 s, toast `pilot_at_merchant` ; journal `coop_follower_merchant_closed`. Achats du pilote : synchro inventaire / or existante. Non testé. Ouvert : le suiveur ne voit pas la fenêtre du pilote (pas de miroir).
+- Vu par Killian : après le dialogue d'un marchand, TOTOFFF avait sa propre fenêtre du marchand (choix rejoué), entrées libres : achats séparés, combat du marchand lancé chez lui pendant que Killian avait la main. Corrigé (miroir, demande de Killian) : chez le suiveur, `MerchantWindow` activée -> boutons acheter / combattre / partir `SetIsInteractionEnabled(false)`, article focalisé du pilote (`FocusedMerchantItem`, index dans `DynamicEntryBox_Items.GetAllEntries`) envoyé en `DialogueChoice.hover 2` et rejoué par `SetFocus`, fermeture du pilote = `hover 3` -> bouton Partir chez le suiveur. Journaux `coop_merchant_opened/closed`, `coop_follower_merchant_mirror/closed`. Non testé.
 
 ## 2026-10-24, 21h30 — v0.6.22 : menu du client (suite), journaux des sauvegardes de l'installateur
 

@@ -273,7 +273,7 @@ struct PilotRequest { uint8_t player = 0; };        // un joueur demande la main
 struct PilotChange { uint8_t pilot = 0; };          // hôte -> tous : nouveau pilote
 // Interaction du pilote avec un objet du monde (PNJ, coffre, porte…), rejouée par les autres instances.
 struct WorldInteract { uint32_t seq = 0; std::string actor; bool instant = false; };
-struct DialogueChoice { uint32_t seq = 0; int32_t index = 0; uint8_t hover = 0; };   // hover : choix seulement survolé par le pilote (champ final facultatif, 2026-10-24)
+struct DialogueChoice { uint32_t seq = 0; int32_t index = 0; uint8_t hover = 0; };   // hover (champ final facultatif) : 1 choix survolé, 2 article du marchand sélectionné (index), 3 fenêtre du marchand fermée
 // Changement de niveau du pilote (niveau + point d'apparition).
 struct MapChange { uint32_t seq = 0; std::string level; std::string spawn_tag; };
 // Début / fin d'une cinématique ou d'un dialogue sur une instance (barrière : tout le monde attend tout le monde).
