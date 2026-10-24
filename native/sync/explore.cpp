@@ -1830,6 +1830,7 @@ struct SceneSync {
     std::string zone, zone_action; double zone_at = -1;
     std::string interaction; double interaction_at = -1;
     std::string action; double action_at = -1;
+    std::string cine_action;                      // action de jeu qui a appelé TriggerCinematic (pile d'appels)
     UObject* zone_in_call = nullptr;              // zone dans TryExecuteGameActionOnOverlap (pré -> post)
     uint32_t seq = 0;
     // Dernière cinématique commencée ici
@@ -1949,6 +1950,10 @@ void on_local_scene(proto::NarrativeKind kind, const std::string& id, const std:
     auto recent = [](double at) { return at >= 0 && s.now - at < kSceneCauseWindow; };
     if (recent(sc.zone_at) && (!recent(sc.interaction_at) || sc.zone_at >= sc.interaction_at)) {
         m.cause = proto::SceneCause::Zone; m.cause_path = sc.zone; m.action = sc.zone_action;
+        // Action la plus récente exécutée depuis la zone (ex. cinématique dans une action conditionnelle) : le suiveur
+        // l'exécute si sa zone ne lance rien (conditions différentes, camp du 2026-10-25).
+        if (recent(sc.action_at) && sc.action_at >= sc.zone_at) m.action = sc.action;
+        if (kind == proto::NarrativeKind::Cinematic && !sc.cine_action.empty()) m.action = sc.cine_action;
     } else if (recent(sc.interaction_at)) {
         m.cause = proto::SceneCause::Interaction; m.cause_path = sc.interaction;
         if (recent(sc.action_at)) m.action = sc.action;
@@ -2022,8 +2027,25 @@ void scene_tick()
     if (s.local_narr || game::playing_cinematic() || game::in_dialogue()) return drop("already_narrative");
     if (!key.empty() && sc.local_scene == key && s.now - sc.local_scene_at < 120) return drop("already_started");
     // Même zone déjà exécutée ici (son action suit son cours, ex. dialogue après une cinématique) : pas de double lecture.
-    if (m.cause == proto::SceneCause::Zone && !m.cause_path.empty() && sc.zone == m.cause_path && s.now - sc.zone_at < 120)
-        return drop("zone_already_run");
+    // Sauf si rien n'a commencé ici depuis (2026-10-25, camp après le boss Goblu : action conditionnelle de la zone
+    // exécutée chez les deux, cinématique lancée seulement chez l'hôte, TOTOFFF resté au camp à attendre).
+    if (m.cause == proto::SceneCause::Zone && !m.cause_path.empty() && sc.zone == m.cause_path && s.now - sc.zone_at < 120) {
+        if (sc.local_scene_at >= sc.zone_at) return drop("zone_already_run");
+        if (s.now - sc.pending_at < 3.0) return;
+        UObject* action = m.action.empty() ? nullptr : ue::find_object(ue::from_utf8(m.action).c_str());
+        ue::Call ex(ue::get_object(game::controller(), STR("BP_GameActionExecutorComponent")), STR("ExecuteGameAction"));
+        bool ran = false;
+        if (action && ex) {
+            s.replaying = true;
+            ran = ex.set_object(STR("GameAction"), action).invoke();
+            s.replaying = false;
+        }
+        bump(ran ? "scene_zone_forced" : "scene_zone_force_errors");
+        log().write("coop_scene_zone_forced", JsonObj().add("scene", key).add("action", m.action).add("found", action != nullptr).add("ran", ran));
+        sc.acted_scene = key; sc.acted_at = s.now; sc.acted_method = 4; sc.acted_checked = false;
+        sc.pending.reset();
+        return;
+    }
     if (!world_ready()) { if (s.now - sc.pending_at > 15) drop("world_not_ready"); return; }
     const bool dlg = m.kind == proto::NarrativeKind::Dialogue;
     // Interaction : rejouée ici par WorldInteract, la scène doit suivre d'elle-même. Cinématique : repli après 3 s ;
@@ -2906,6 +2928,20 @@ void subscribe()
     bus.pre(L"/Game/Gameplay/CinematicSystem/BP_CinematicSystem.BP_CinematicSystem_C:TriggerCinematic", [](HookCtx& ctx, UFunction* f) {
         std::string id, seq;
         read_cinematic_params(ctx, f, id, seq);
+        // Action de jeu qui lance cette cinématique (pile d'appels) : le suiveur l'exécute si sa zone ne lance rien.
+        sc.cine_action.clear();
+        std::string frames;
+        RC::Unreal::FFrame* fr = ctx.TheStack.PreviousFrame();
+        for (int depth = 0; fr && depth < 8; ++depth) {
+            UObject* o = fr->Object();
+            const std::string cls = o ? ue::short_name(o->GetClassPrivate()) : std::string();
+            if (frames.size() < 400) frames += cls + ";";
+            if (sc.cine_action.empty() && o && cls.find("GameAction") != std::string::npos && cls.find("Component") == std::string::npos)
+                sc.cine_action = object_path(o);
+            RC::Unreal::FFrame* prev = fr->PreviousFrame();
+            fr = prev == fr ? nullptr : prev;
+        }
+        log().write("coop_cinematic_caller", JsonObj().add("action", sc.cine_action).add("frames", frames));
         on_local_scene(proto::NarrativeKind::Cinematic, id, seq);
     });
     // Dialogue (D24) : ActivateDialogue(Dialogue) du composant de dialogue, quelle que soit sa cause (PNJ, zone, action).
