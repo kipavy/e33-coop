@@ -1654,40 +1654,73 @@ void merchant_tick()
         return;
     }
     const auto entries = merchant_entries(win);
-    // Achat du pilote rejoué ici (même article, même prix) : or, inventaire et stock du marchand restent identiques
-    // (D13 : ressources communes). Avant (0.6.25), seul un message s'affichait et rien ne changeait chez le suiveur.
+    // Boutons du suiveur désactivés à chaque passage : le jeu les réactive à chaque changement d'article (0.6.28 :
+    // TOTOFFF a pu acheter lui-même pendant que Killian menait).
+    for (const wchar_t* b : {STR("BuyItemButton"), STR("FightMerchantButton"), STR("LeaveButton")}) {
+        ue::Call c(ue::get_object(win, b), STR("SetIsInteractionEnabled"));
+        if (c) c.set_bool(STR("bInIsInteractionEnabled"), false).invoke();
+    }
+    auto read_gold = [] { auto* g = ue::value_ptr<int32_t>(game::gi(), STR("Gold")); return g ? static_cast<int64_t>(*g) : int64_t(-1); };
+    static int64_t last_gold = -1;   // or vu au passage précédent (achat fait par le suiveur lui-même)
+    // Achat du pilote rejoué ici par le bouton Acheter du panneau (même chemin que chez le pilote : achat, or et stock
+    // affichés à jour), l'article du pilote étant sélectionné. Repli : TryBuyItem direct (0.6.28 : or changé, mais
+    // fenêtre pas redessinée). Or et inventaire communs (D13).
     if (s.merchant_buy >= 0 && s.merchant_buy < static_cast<int>(entries.size())) {
         UObject* row = entries[static_cast<size_t>(s.merchant_buy)];
         s.merchant_buy = -1;
-        using namespace RC::Unreal;
-        auto* sp = CastField<FStructProperty>(ue::prop(row, STR("MerchantItem")));
-        void* item = sp ? sp->ContainerPtrToValuePtr<void>(row) : nullptr;
-        FProperty* name_p = sp ? ue::struct_member(sp->GetStruct(), STR("MerchantItemRowName")) : nullptr;
-        FProperty* qty_p = sp ? ue::struct_member(sp->GetStruct(), STR("RemainingQuantity")) : nullptr;
-        const int qty_before = qty_p ? *static_cast<int32_t*>(qty_p->ContainerPtrToValuePtr<void>(item)) : -1;
-        auto read_gold = [] { auto* g = ue::value_ptr<int32_t>(game::gi(), STR("Gold")); return g ? static_cast<int64_t>(*g) : int64_t(-1); };
+        if (ue::get_object(win, STR("FocusedMerchantItem")) != row) { ue::Call p(win, STR("OnMerchantItemFocused")); if (p) p.set_object(STR("Widget"), row).invoke(); }
         const int64_t gold_before = read_gold();
+        std::string how = "button";
         bool ok = false;
-        ue::Call c(ue::get_object(win, STR("MerchantComponent")), STR("TryBuyItem"));
-        if (c && name_p && c.param_size(STR("MerchantItemRowName")) == static_cast<size_t>(name_p->GetSize()))
-            ok = c.set_raw(STR("MerchantItemRowName"), name_p->ContainerPtrToValuePtr<void>(item)).invoke();
+        s.replaying = true;
+        if (ue::get_object(win, STR("FocusedMerchantItem")) == row) {
+            ue::Call c(win, STR("BndEvt__WBP_Merchant_Panel_BuyItemButton_K2Node_ComponentBoundEvent_3_CommonButtonBaseClicked__DelegateSignature"));
+            UObject* buy = ue::get_object(win, STR("BuyItemButton"));
+            ok = c && buy && c.set_object(STR("Button"), buy).invoke() && read_gold() != gold_before;
+        }
+        if (!ok) {
+            how = "direct";
+            using namespace RC::Unreal;
+            auto* sp = CastField<FStructProperty>(ue::prop(row, STR("MerchantItem")));
+            void* item = sp ? sp->ContainerPtrToValuePtr<void>(row) : nullptr;
+            FProperty* name_p = sp ? ue::struct_member(sp->GetStruct(), STR("MerchantItemRowName")) : nullptr;
+            ue::Call c(ue::get_object(win, STR("MerchantComponent")), STR("TryBuyItem"));
+            if (c && name_p && c.param_size(STR("MerchantItemRowName")) == static_cast<size_t>(name_p->GetSize()))
+                ok = c.set_raw(STR("MerchantItemRowName"), name_p->ContainerPtrToValuePtr<void>(item)).invoke();
+            for (UObject* r : entries) { ue::Call u(r, STR("UpdateContent")); if (u) u.invoke(); }
+        }
+        s.replaying = false;
+        // Or affiché : valeur réelle (le panneau peut garder l'ancienne).
+        if (UObject* ga = ue::get_object(win, STR("WBP_GoldAmount"))) { ue::Call g(ga, STR("SetCurrentValue")); if (g) g.set_int(STR("Value"), read_gold()).invoke(); }
         bump(ok ? "merchant_buys_replayed" : "merchant_buy_errors");
-        log().write("coop_follower_merchant_buy", JsonObj().add("ok", ok).add("qty_before", qty_before).add("gold_before", gold_before).add("gold_after", read_gold()));
+        log().write("coop_follower_merchant_buy", JsonObj().add("ok", ok).add("how", how).add("gold_before", gold_before).add("gold_after", read_gold()));
         s.merchant_shown = -1;   // lignes peut-être reconstruites : sélection reposée
+        last_gold = read_gold();
+        return;
     }
-    // Sélection du pilote : focus sur le bouton de la ligne (surbrillance), puis panneau mis à jour (nom, stock, détails)
-    // s'il ne suit pas. Reposée si le suiveur déplace la sienne. 0.6.25 : SetFocus sur la ligne elle-même, sans effet.
+    // Achat fait par le suiveur lui-même malgré tout (or qui baisse sans achat du pilote) : signalé.
+    if (const int64_t g = read_gold(); last_gold >= 0 && g < last_gold && !s.replaying) {
+        bump("merchant_follower_spent");
+        log().write("coop_follower_merchant_spent", JsonObj().add("gold_before", last_gold).add("gold_after", g));
+    }
+    last_gold = read_gold();
+    // Sélection du pilote : seule sa ligne accepte le focus (le suiveur ne peut plus naviguer), focus sur son bouton
+    // (surbrillance), panneau mis à jour (nom, stock, détails) s'il ne suit pas.
     if (s.merchant_want >= 0 && s.merchant_want < static_cast<int>(entries.size())) {
         UObject* row = entries[static_cast<size_t>(s.merchant_want)];
         UObject* focused = ue::get_object(win, STR("FocusedMerchantItem"));
         if (s.merchant_want != s.merchant_shown || (focused && focused != row)) {
+            for (size_t i = 0; i < entries.size(); ++i) {
+                ue::Call fc(ue::get_object(entries[i], STR("WBP_BaseButton")), STR("SetIsFocusable"));
+                if (fc) fc.set_bool(STR("bInIsFocusable"), entries[i] == row).invoke();
+            }
             UObject* button = ue::get_object(row, STR("WBP_BaseButton"));
             { ue::Call c(button ? button : row, STR("SetFocus")); if (c) c.invoke(); }
             const bool by_focus = ue::get_object(win, STR("FocusedMerchantItem")) == row;
             if (!by_focus) { ue::Call p(win, STR("OnMerchantItemFocused")); if (p) p.set_object(STR("Widget"), row).invoke(); }
             static int logged = 0;
             if (logged++ < 20)
-                log().write("coop_follower_merchant_focus", JsonObj().add("idx", s.merchant_want).add("by_focus", by_focus)
+                log().write("coop_follower_merchant_focus", JsonObj().add("idx", s.merchant_want).add("by_focus", by_focus).add("snapback", s.merchant_want == s.merchant_shown)
                                                               .add("panel_ok", ue::get_object(win, STR("FocusedMerchantItem")) == row));
             s.merchant_shown = s.merchant_want;
         }
@@ -2673,7 +2706,7 @@ bool handle(uint8_t from, const proto::Message& m)
         if (dc->hover == 1) { s.choice_hover_want = dc->index; return true; }   // survol seulement : surbrillance, pas de choix
         if (dc->hover == 2) { s.merchant_want = dc->index; if (s.merchant_seen_at < 0) s.merchant_seen_at = s.now; return true; }   // article du marchand sélectionné par le pilote
         if (dc->hover == 3) { s.merchant_close = true; s.merchant_want = -1; s.merchant_buy = -1; s.merchant_seen_at = -1; s.merchant_open_tried = false; return true; }   // le pilote a fermé la fenêtre
-        if (dc->hover == 4) { ui::toast("pilot_bought"); bump("merchant_buys_seen"); s.merchant_buy = dc->index; return true; }   // achat du pilote, rejoué ici
+        if (dc->hover == 4) { bump("merchant_buys_seen"); s.merchant_buy = dc->index; return true; }   // achat du pilote, rejoué ici
         if (dc->hover) return true;
         s.choices.emplace_back(*dc, s.now);
         touch();
