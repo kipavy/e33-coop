@@ -17,6 +17,8 @@
 #include <Unreal/UFunction.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
+#include <Unreal/Property/FMapProperty.hpp>
+#include <Unreal/Core/Containers/Map.hpp>
 #include <Unreal/UAssetRegistry.hpp>
 #include <Unreal/UAssetRegistryHelpers.hpp>
 
@@ -1299,6 +1301,48 @@ bool make_characters_blob(const std::wstring& slot, std::vector<uint8_t>& bytes,
     return read_slot_file(slot, bytes, err);
 }
 
+namespace {
+// Équipement après LoadCharacterState (2026-10-25, arme de Lune changée par TOTOFFF, « Lunerim » toujours affiché chez
+// Killian) : l'état chargé porte EquippedItemsPerSlot (emplacement -> identifiant), mais l'objet réellement équipé
+// (EquipmentInstancePerSlot, ce que montrent les menus et le combat) n'est pas remplacé. Pour chaque emplacement,
+// l'instance de l'inventaire qui porte cet identifiant est mise dans l'emplacement si elle diffère.
+void fix_equipment(UObject* cd, const std::string& who, RC::Unreal::FProperty* state_prop, void* state)
+{
+    auto* sp = CastField<FStructProperty>(state_prop);
+    auto* mp = sp ? CastField<FMapProperty>(ue::struct_member(sp->GetStruct(), STR("EquippedItemsPerSlot"))) : nullptr;
+    if (!mp) { log().write("coop_build_equip", JsonObj().add("name", who).add("error", "EquippedItemsPerSlot not found")); return; }
+    std::map<std::string, UObject*> instances;
+    {
+        std::vector<std::pair<void*, void*>> pairs;
+        if (reflect::map_pairs(ue::get_object(gi(), STR("InventorySystem")), STR("ItemInstances"), pairs, nullptr, nullptr))
+            for (auto& [k, v] : pairs) instances[ue::to_utf8(static_cast<FName*>(k)->ToString())] = *static_cast<UObject**>(v);
+    }
+    auto* m = mp->ContainerPtrToValuePtr<FScriptMap>(state);
+    const FScriptMapLayout& layout = mp->GetMapLayout();
+    for (int32 i = 0; i < m->GetMaxIndex(); ++i) {
+        if (!m->IsValidIndex(i)) continue;
+        auto* pair = static_cast<uint8_t*>(m->GetData(i, layout));
+        void* slot = pair;
+        const std::string item = ue::to_utf8(reinterpret_cast<FName*>(pair + layout.ValueOffset)->ToString());
+        const int type = *static_cast<uint8_t*>(slot), index = *reinterpret_cast<int32_t*>(static_cast<uint8_t*>(slot) + 4);
+        ue::Call get(cd, STR("GetItemInstanceInSlot"));
+        if (!get || get.param_size(STR("Slot")) != 8) continue;
+        get.set_raw(STR("Slot"), slot).invoke();
+        UObject* cur = get.out_object(STR("ItemInstance"));
+        auto it = instances.find(item);
+        UObject* want = it == instances.end() ? nullptr : it->second;
+        if (item == "None" || item.empty() || want == cur) continue;
+        bool ok = false;
+        if (want) {
+            ue::Call rep(cd, STR("ReplaceItemInstanceInSlot"));
+            if (rep && rep.param_size(STR("Slot")) == 8) ok = rep.set_raw(STR("Slot"), slot).set_object(STR("Item"), want).invoke();
+        }
+        log().write("coop_build_equip", JsonObj().add("name", who).add("slot_type", type).add("slot", index).add("item", item)
+                                            .add("was", cur ? ue::short_name(cur) : std::string("null")).add("found", want != nullptr).add("ok", ok));
+    }
+}
+} // namespace
+
 bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>& bytes, const std::vector<std::string>& names,
                            std::vector<std::string>& applied, std::string& err)
 {
@@ -1323,6 +1367,7 @@ bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>&
         p->InitializeValue(dst);
         p->CopyCompleteValue(dst, v);
         c.invoke();
+        fix_equipment(cd, name, p, dst);
         p->DestroyValue(dst);
         ue::Call d(cd, STR("DispatchModificationsIfPossible"));
         if (d) d.set_string(STR("DebugReason"), STR("E33Coop build")).invoke();
