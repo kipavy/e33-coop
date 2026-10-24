@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.31] - 2026-10-25
+
+### Corrections
+- Cinématiques : une cinématique lancée par une zone chez le meneur (ex. au camp après le boss Goblu) se lance aussi
+  chez l'autre joueur même si sa zone ne l'a pas déclenchée ; avant, il restait bloqué à attendre.
+
 ## [0.6.30] - 2026-10-25
 
 ### Corrections
@@ -279,7 +285,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.30...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.31...HEAD
+[0.6.31]: https://github.com/kipavy/e33-coop/compare/v0.6.30...v0.6.31
 [0.6.30]: https://github.com/kipavy/e33-coop/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/kipavy/e33-coop/compare/v0.6.28...v0.6.29
 [0.6.28]: https://github.com/kipavy/e33-coop/compare/v0.6.27...v0.6.28

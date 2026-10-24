@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-25, 01h30 — v0.6.31 : cinématique de zone non lancée chez le suiveur (non testé)
+
+- 01:08 (0.6.28), camp après le boss Goblu : `MCS_GobluOutro` joué chez les deux ; puis zone d'entrée du camp (action conditionnelle `DA_GA_SQT_COND_RelationshipQuests`) exécutée chez les deux, `MCS_MaelleThePyro` lancée seulement chez l'hôte ; client : `coop_scene_sync_skip` « zone_already_run » -> resté à attendre. Désormais : zone déjà passée ici mais aucune scène commencée depuis -> après 3 s, exécution de l'action qui a appelé `TriggerCinematic` chez le pilote (remontée de la pile, `coop_cinematic_caller` : action, frames), envoyée dans `SceneStart.action` ; journal `coop_scene_zone_forced` (found, ran) puis `coop_scene_sync_result` method 4. Si l'action trouvée est encore conditionnelle, il faudra lancer la séquence elle-même.
+
 ## 2026-10-25, 00h50 — v0.6.30 : équipement des builds reçus (non testé)
 
 - 00:24 (0.6.28) : TOTOFFF change l'arme de Lune, Killian voit toujours « Lunerim » même en rouvrant l'inventaire. Build reçu et appliqué chez l'hôte (`coop_build_accepted`), mais empreinte toujours différente (`coop_build_hash_mismatch` à chaque application, Frey / Maelle aussi chez le client). `LoadCharacterState` reprend `EquippedItemsPerSlot` (emplacement -> identifiant) mais pas `EquipmentInstancePerSlot` (objet réellement équipé). Désormais, après chaque chargement : instance de `InventorySystem.ItemInstances` portant cet identifiant -> `ReplaceItemInstanceInSlot` (`coop_build_equip` : item, was, found, ok). Si found est faux, les clés de `ItemInstances` ne sont pas les identifiants : chercher par `ItemStaticData`.
