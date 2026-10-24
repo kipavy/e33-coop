@@ -1904,6 +1904,7 @@ void align_begin(uint32_t turn, const char* how)
 {
     auto& b = s.battle;
     if (s.role != Role::Host || !s.turn_align || !b.active || b.ending || b.hold || b.align_active || turn <= 1) return;
+    if (b.align_turn == turn) return;   // une seule retenue par tour (délai écoulé : on ne recommence pas)
     if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
     const std::vector<uint8_t> missing = align_missing(turn);
     if (missing.empty()) return;
@@ -2181,17 +2182,16 @@ void subscribe()
         bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn_Phase2"), diag("phase2"));
         bus.pre(fn(game::path::BattleMgr, L"ProcessNextTurnStartListener"), diag("next_listener"));
     }
-    // D28 : début de tour sans effet de début de tour (le jeu n'écoute alors pas les dépendances, tours 9 et 16 du
-    // Lancelier Alpha, 2026-10-24) : StartCharacterTurn_Phase2 vérifie lui-même que les dépendances du début de tour
-    // sont résolues. Inscription juste avant, compteur au repos seulement (inscrire sur un compteur qui a déjà conclu
-    // relançait la suite du tour une 2e fois, voir dep_solve).
-    bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn_Phase2"), [](HookCtx&, UFunction*) {
+    // D28 : le jeu ne retient le début de tour que si un « auditeur » (BattleListeners : effets, pictos…) s'inscrit
+    // comme dépendance : pour chacun, ProcessNextTurnStartListener remet le compteur à zéro (Reset), appelle son
+    // OnCharacterTurnStart, puis écoute s'il y a une dépendance (StartListenToDependencies). Sans auditeur inscrit
+    // (tours 9 et 16 du Lancelier Alpha, 2026-10-24), aucune écoute : une inscription faite plus tôt était effacée par
+    // Reset. Inscription juste après le premier Reset du tour ennemi : le jeu écoute alors et attend notre résolution.
+    bus.post(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:Reset", [](HookCtx& ctx, UFunction*) {
         auto& b = s.battle;
-        if (s.role != Role::Host || !s.turn_align || !b.active || b.ending || b.align_active) return;
-        if (!b.cur_enemy || b.ots_seq != b.sct_seq) return;
-        UObject* deps = turn_deps();
-        if (!deps || ue::get_bool(deps, STR("IsListening"))) return;
-        align_begin(b.turn, "phase2");
+        if (s.role != Role::Host || !s.turn_align || !b.active || b.ending || b.align_active || b.align_turn == b.turn) return;
+        if (!b.cur_enemy || b.ots_seq != b.sct_seq || ctx.Context != turn_deps()) return;
+        align_begin(b.turn, "reset");
     });
     bus.pre(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:StartListenToDependencies", [](HookCtx& ctx, UFunction*) {
         // Hôte, démarrage synchronisé (D28) : tour ennemi retenu tant qu'un client qui a des héros ne l'a pas commencé chez lui.
