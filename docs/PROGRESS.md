@@ -2,6 +2,12 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 21h — v0.6.20 : écran de défaite (D33) publié sans test, journaux gardés à la mise à jour
+
+- Accord de Killian : publier les correctifs même non vérifiés, ils testent avec TOTOFFF ; si un correctif casse, publier aussitôt une version suivante qui l'annule (supprimer une release ne désinstalle rien).
+- `fix/defeat-choice` (D33) fusionné tel quel : aucun scénario de défaite vert (ordre des runs dans la section D33 plus bas). À surveiller en jeu : `coop_defeat_trace`, `defeat_local_choices`.
+- Installateur : les journaux de l'ancienne version sont recopiés dans le nouveau dossier du mod (avant : seulement dans `Win6433coop-backup-*`, hors de portée de `fetch-logs`).
+
 ## 2026-10-24 soir — écran de défaite : seul l'hôte choisit (branche `fix/defeat-choice`, D33) — en pause, code prêt, à tester
 
 - **Constats en jeu (runs `20261024-180855` / `182041`, hôte + faux client, TEST_B)** : l'écran de défaite ouvre d'abord « Envoyer l'équipe de réserve ? » (fenêtre `WBP_ModalPopup_C`, `ParentActivatableWidget` = l'écran ; réponse 1 = oui, 2 = non) ; oui -> Monoco et Sciel entrent, le combat continue (victoire, compté par le mod comme un combat n° 2). Non -> combat lancé par une action de jeu (`trigger_battle`) non « rejouable » : **pas de fenêtre « Réessayer / Abandonner »**, le jeu répond seul `OnRetryEncounterResponse(false)` puis `ResumeExplorationOnBattleEnd` : retour à l'exploration sur place, **sans chargement** (aucun `save_trace`). `RequestRestartCurrentEncounter` (réessayer) recharge `GetLastSavedGameData` (dump) : d'où le `MapChange` de Killian après « Réessayer » le 24 à 16:50.

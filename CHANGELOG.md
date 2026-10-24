@@ -14,6 +14,8 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.20] - 2026-10-24
+
 ### Corrections
 - Écran de défaite : seul l'hôte choisit (équipe de réserve, « Réessayer » ou « Abandonner ») ; les autres joueurs voient
   « l'hôte choisit… » puis suivent son choix (avant : chacun choisissait, et un choix différent finissait sur un écran noir).
@@ -210,7 +212,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.19...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.20...HEAD
+[0.6.20]: https://github.com/kipavy/e33-coop/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/kipavy/e33-coop/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/kipavy/e33-coop/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/kipavy/e33-coop/compare/v0.6.16...v0.6.17

@@ -376,6 +376,13 @@ bool install_package(const fs::path& win64, const Package& pkg, Progress* pr, st
     if (!copy_tree(pkg.dir / L"game", win64, err)) { restore(); return false; }
     // 3. Options du joueur et test à distance (seulement dans le dossier du mod)
     const fs::path md = mod_dir(win64);
+    // Journaux de l'ancienne version recopiés (ils restent aussi dans la sauvegarde) : le test à distance (fetch-logs)
+    // ne lit que le dossier du mod, et une mise à jour juste après un bug les rendait inaccessibles (2026-10-24).
+    {
+        std::error_code e4;
+        const fs::path old_logs = bak / L"ue4ss" / L"Mods" / L"E33Coop" / L"logs";
+        if (fs::exists(old_logs, e4)) fs::copy(old_logs, md / L"logs", fs::copy_options::recursive | fs::copy_options::skip_existing, e4);
+    }
     if (!write_file(md / L"settings.ini", kept.settings.empty() ? release::default_settings_text() : kept.settings)) { err = "settings.ini"; restore(); return false; }
     if (!kept.remotetest.empty()) {
         write_file(md / L"remotetest.txt", kept.remotetest);
