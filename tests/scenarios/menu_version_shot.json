@@ -1,0 +1,15 @@
+{
+  "name": "menu_version_shot",
+  "description": "Écran titre gardé 25 s avant de charger la save, captures toutes les 2 s : la version du mod doit apparaître en petit en bas à droite, à côté du numéro du jeu (ui_version placed vrai). Puis combat solo court.",
+  "save": "e33coop-test/TEST_A",
+  "encounter": "L_LumiereCitizenFleuret_Male*1",
+  "title_hold_s": 25,
+  "shots_every_s": 2,
+  "timeout_s": 300,
+  "action_delay_s": 1.5,
+  "combo_auto_success": 10,
+  "max_turns": 20,
+  "actions": [ { "type": "attack", "target": 0 } ],
+  "defense": ["fail"],
+  "expect": { "battle_end": "any" }
+}
