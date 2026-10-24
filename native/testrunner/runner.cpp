@@ -93,7 +93,7 @@ struct Scenario {
     bool host_copy = false;               // hôte : "save" installée comme copie coop, puis hébergée comme avec F10 au menu (D15)
     bool new_game = false;                // hôte : nouvelle partie (une fois "wait_players" clients connectés) au lieu de charger "save"
     double join_timeout_s = 400;          // client : délai maximal pour recevoir et charger l'instantané
-    double title_hold_s = 3;              // écran titre : attente avant de charger la save (captures du menu)
+    double title_hold_s = 0;              // écran titre : attente (depuis son apparition) avant de charger la save (captures du menu)
     int pause_at_turn = 0;                // ouvre le menu pause au début de ce tour (3 s), puis le referme (phase 4)
     double pause_s = 3.0;                 // durée de ce menu pause (captures du panneau Coop)
     bool end_on_battle = false;           // exploration : le test se termine (vert) quand un combat commence
@@ -129,6 +129,7 @@ struct State {
     UObject* pending_actor = nullptr;
     int planned_turn = -1;                // dernier tour (g.turn) dont l'action d'un héros d'ici a été programmée
     double session_end_t = -1;
+    double menu_seen_t = -1;              // premier instant où le menu principal existe (title_hold_s compté à partir de là)
     bool triggered = false;               // étape "trigger" : combat déjà déclenché
     // QTE offensifs joués par de vrais appuis
     std::vector<std::string> combo_plan;
@@ -238,7 +239,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.new_game = v["new_game"].as_bool(false);
     s.host_copy = v["host_copy"].as_bool(false);
     s.join_timeout_s = v["join_timeout_s"].as_number(400);
-    s.title_hold_s = v["title_hold_s"].as_number(3);
+    s.title_hold_s = v["title_hold_s"].as_number(0);
     s.pause_at_turn = static_cast<int>(v["pause_at_turn"].as_int(0));
     s.pause_s = v["pause_s"].as_number(3.0);
     s.end_on_battle = v["end_on_battle"].as_bool(false);
@@ -1301,7 +1302,10 @@ void tick(float dt)
     std::string err;
     switch (g.phase) {
     case Phase::WaitMenu:
-        if (game::gi() && game::main_menu() && g.phase_t > g.sc.title_hold_s) set_phase(Phase::LoadSave);
+        if (game::gi() && game::main_menu()) {
+            if (g.menu_seen_t < 0) g.menu_seen_t = g.t;
+            if (g.phase_t > 3.0 && g.t - g.menu_seen_t >= g.sc.title_hold_s) set_phase(Phase::LoadSave);
+        }
         break;
     case Phase::LoadSave:
         if (g.sc.join) {   // client qui rejoint : le module coop charge l'instantané de l'hôte
