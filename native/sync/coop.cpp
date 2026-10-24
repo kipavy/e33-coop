@@ -281,6 +281,7 @@ struct State {
     UObject* early_turn_actor = nullptr;
     double early_turn_at = -1;
     double early_start_at = -1;
+    double battle_request_at = -1e9;   // client meneur : dernière demande de combat envoyée à l'hôte (D34)
     double world_ready_s = 0;
     double next_trigger_try = 0;
     double action_delay_s = 1.5;                           // délai minimal (depuis le début du tour) avant d'exécuter l'action d'un héros d'un autre joueur
@@ -1027,6 +1028,20 @@ void handle(Peer& p, proto::Message& m)
         if (auto* br = std::get_if<proto::BattleReady>(&m)) {
             if (br->battle_id == s.battle.id) s.battle.ready.insert(p.player_id);
             log().write("coop_battle_ready", JsonObj().add("player", static_cast<int>(p.player_id)).add("battle", br->battle_id));
+            return;
+        }
+        // Demande de combat du client meneur (BattleStart sans n°, D34) : le même ennemi est lancé ici ; l'avis précoce
+        // et le BattleStart partent ensuite comme pour un combat de l'hôte.
+        if (auto* rq = std::get_if<proto::BattleStart>(&m); rq && rq->battle_id == 0) {
+            std::string why, err;
+            if (p.player_id != explore::pilot()) why = "not_pilot";
+            else if (s.battle.active || game::in_battle()) why = "in_battle";
+            else if (!game::explore_pawn() || game::map_change_in_progress()) why = "not_ready";
+            else if (UObject* enemy = game::find_world_enemy(rq->world_enemy); !enemy) why = "enemy_not_found";
+            else if (!game::start_world_battle(enemy, L"", rq->engage, err)) why = "start_failed: " + err;
+            bump(why.empty() ? "battle_requests_started" : "battle_requests_refused");
+            log().write("coop_battle_request_received", JsonObj().add("player", static_cast<int>(p.player_id)).add("enemy", rq->world_enemy)
+                                                            .add("engage", static_cast<int>(rq->engage)).add("started", why.empty()).add("why", why));
             return;
         }
         if (builds::handle(p.player_id, m)) return;
@@ -2675,6 +2690,20 @@ void subscribe()
         if (!p) {
             bump("world_battle_without_host_start");
             log().write("coop_world_battle_early", JsonObj().add("enemy", ue::short_name(ctx.Context)));
+            // Client meneur (F8) : son pion a touché l'ennemi, l'hôte n'a rien lancé (son pion suiveur peut être loin :
+            // 17 s d'écart le 2026-10-24, chacun son combat). Demande à l'hôte de lancer ce combat (D34) :
+            // BattleStart sans n° = demande ; l'hôte lance le même ennemi, puis son BattleStart est appliqué ici
+            // comme quand notre pion engage en avance.
+            if (explore::is_pilot() && s.now - s.battle_request_at > 10.0) {
+                proto::BattleStart rq;
+                rq.world_enemy = ue::short_name(ctx.Context);
+                rq.engage = static_cast<uint8_t>(ue::read_param_int(ctx, f, STR("EngagementType")).value_or(0));
+                rq.party = game::party_names();
+                for (auto& peer : s.peers) send_to(peer, rq);
+                s.battle_request_at = s.now;
+                bump("battle_requests_sent");
+                log().write("coop_battle_request", JsonObj().add("enemy", rq.world_enemy).add("engage", static_cast<int>(rq.engage)));
+            }
             return;
         }
         const proto::BattleStart& bs = *p;

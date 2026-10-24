@@ -546,3 +546,25 @@ répond seul `OnRetryEncounterResponse(false)` et revient à l'exploration sur p
 
 **Remise en cause si** : `defeat_local_choices` > 0 ou `defeat_modal_open_ms_max` > 500 chez un client ;
 `coop_defeat_rescue` fréquent (l'abandon local ne revient pas à l'exploration) ; écart d'exploration après « Réessayer ».
+
+---
+
+## D34 — Combat lancé par le client meneur : l'hôte lance le même (2026-10-25, bug vu en vrai)
+
+**Constat** (24/10, 22:27, journaux des deux PC) : TOTOFFF meneur (F8) frappe un Cruler (`coop_world_battle_early`,
+engage 1) ; son jeu lance le combat seul. Le pion suiveur de l'hôte n'atteint l'ennemi que 17 s plus tard : l'hôte lance
+alors son propre combat (engage 0), que le client rejoint « déjà engagé ». Ordres des tours et états différents (désyncs).
+
+**Décision** : le client meneur dont le pion lance un combat sans BattleStart de l'hôte envoie aussitôt une **demande** :
+`BattleStart` avec `battle_id` 0 (ennemi du monde, engagement, équipe), sans nouveau message ni changement de protocole
+(versions du mod identiques imposées). L'hôte, s'il n'est pas en combat ni en chargement et que la demande vient du
+meneur, lance le même ennemi (`start_world_battle`, rencontre de l'ennemi, engagement du client). La suite est le chemin
+habituel : avis précoce, BattleStart, client « déjà engagé » qui reprend l'ordre et l'état de l'hôte. Écart attendu : un
+aller-retour réseau au lieu du temps de trajet du pion suiveur. Le combat local du client n'est pas empêché.
+
+**Journaux** : `coop_battle_request` (client), `coop_battle_request_received` (hôte : started, why). Compteurs
+`battle_requests_sent` / `_started` / `_refused`.
+
+**Remise en cause si** : `coop_battle_request_received` started faux (ennemi introuvable chez l'hôte, hôte en menu…),
+ou désyncs au tour 1 toujours présents après une demande (il faudrait alors empêcher le combat local du client et
+attendre le BattleStart de l'hôte).
