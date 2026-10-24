@@ -49,7 +49,9 @@ void tick(double now);                              // game thread : envoi des a
 
 // Miroir des menus : avant d'exécuter l'action (ou de rejouer la visée libre) d'un héros d'un autre joueur. Referme les
 // menus rejoués (un appel au jeu par image) ; true quand l'état est celui d'avant le miroir (ou après 1,5 s au plus).
-bool mirror_release(double now);
+// action_key ("type|compétence" de la commande, vide pour la visée libre) : action exécutée dans la même image que la
+// fermeture du ciblage, sans rembobiner la roue (aucune ouverture / fermeture visible avant l'action, D29).
+bool mirror_release(double now, const std::string& action_key = std::string());
 bool mirror_enabled();
 
 // Visée libre d'un héros d'ici : caméra envoyée (appelé à chaque image tant que la visée est ouverte).
