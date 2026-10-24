@@ -1,8 +1,9 @@
 {
   "name": "menu_version_shot",
-  "description": "Écran titre gardé 25 s avant de charger la save, captures toutes les 2 s : la version du mod doit apparaître en petit en bas à droite, à côté du numéro du jeu (ui_version placed vrai). Puis combat solo court.",
+  "description": "Écran titre gardé 25 s avant de charger la save, captures toutes les 2 s : la version du mod doit apparaître en petit en bas à droite, à côté du numéro du jeu (ui_version placed vrai). Rôle hôte sans joueur (en test sans rôle, le mod reste inactif). Puis combat court.",
   "save": "e33coop-test/TEST_A",
   "encounter": "L_LumiereCitizenFleuret_Male*1",
+  "launch_args": ["-e33role=host", "-e33port=7777"],
   "title_hold_s": 25,
   "shots_every_s": 2,
   "timeout_s": 300,
