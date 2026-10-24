@@ -1,0 +1,19 @@
+{
+  "name": "p8_turnlag_before_client",
+  "description": "AVANT, sens client (D28 coupé : -e33turnalign=0) : même combat que p8_turnlag_client (faux hôte en retard, --turn-lag 5.5). Le client joue le tour ennemi sans l'état de l'hôte, en avance, et fige son image en attendant les défenses des héros de l'hôte (defense_wait_max_ms, defense_waits_long). Vérifie que le problème est reproduit.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "setup": { "Maelle": { "dead": true }, "Verso": { "dead": true } },
+  "timeout_s": 700,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
+  ],
+  "defense": ["fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777", "-e33turnalign=0"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_party_host.jsonl", "--turn-lag", "5.5", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },
+  "expect": { "battle_end": "any", "remote_actions": ">=1", "defenses_imposed": ">=1", "turn_deps_on_reset": "0", "defense_wait_max_ms": ">=800", "defense_waits_long": ">=1" }
+}

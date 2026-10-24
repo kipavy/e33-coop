@@ -11,6 +11,8 @@
 //     Faux hôte face au vrai jeu client : rejoue les messages hôte->client d'un enregistrement, en attendant
 //     les messages du client aux mêmes endroits ; compare les hash d'état du client à ceux de l'hôte enregistré.
 //     --pilot-rate 20 : positions du pilote rejouées à 20/s (l'enregistrement n'en garde que 5/s), interpolées.
+//     --turn-lag 5.5 : chaque tour ennemi (TurnStart) envoyé au plus tôt 5,5 s après le dernier message attendu du
+//     client (son action) : hôte en retard sur le client, qui rejoue l'action du héros du client avec décalage.
 //
 //   Options communes : --net "lag=60,jitter=25,loss=0.01,spike=0.02:200,reorder=0" : réseau simulé sur les
 //     datagrammes envoyés (latence, gigue, pertes, pointes de latence), comme une liaison Steam réelle.
@@ -868,7 +870,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
     std::optional<proto::PilotState> up_a, up_b;
     double up_a_t = 0, up_b_t = 0, up_next = 0;
     uint32_t up_last_seq = 0;
-    int interpolated = 0, pilot_gapped = 0;
+    int interpolated = 0, pilot_gapped = 0, lagged_turns = 0;
     // Fin de l'enregistrement : "linger" reste en ligne jusqu'au départ du client (Bye de fin de test), "bye" / "vanish"
     // simulent le départ de l'hôte (message de fin, ou silence complet) end_after secondes plus tard (phase 5).
     auto running = [&] {
@@ -944,6 +946,12 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                 if (l.dir == "h2c") {
                     // Rythme enregistré (exploration) : chaque message part au même délai après le dernier point de synchro.
                     if (a.paced && now_s() - pace_now < l.t - pace_rec) break;
+                    // --turn-lag S : tour ennemi commencé ici au moins S s après le dernier message attendu du client (son
+                    // action), comme un vrai hôte qui rejoue l'action d'un héros du client avec retard (action_delay_s).
+                    if (auto* ts = std::get_if<proto::TurnStart>(&l.msg); ts && a.turn_lag > 0 && ts->kind == proto::ActorKind::Enemy && ts->turn > 1) {
+                        if (now_s() < pace_now + a.turn_lag) break;
+                        ++lagged_turns;
+                    }
                     if (auto* sh = std::get_if<proto::StateHash>(&l.msg)) host_hash[key(sh->battle_id, sh->turn)] = sh->hash;
                     if (auto* ps = std::get_if<proto::PilotState>(&l.msg)) {
                         // --pilot-gap a:b : positions retenues entre a et b (temps de l'enregistrement) : le suiveur reste en
@@ -1085,7 +1093,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
     log_netsim(log, sim);
     log.write("pilot_interpolated", JsonObj().add("count", interpolated).add("gapped", pilot_gapped));
     log.write("done", JsonObj().add("ok", ok).add("replayed", static_cast<int64_t>(cursor)).add("of", static_cast<int64_t>(lines.size())).add("hashes", hashes)
-                          .add("desyncs", desyncs).add("c2h_mismatches", mismatches).add("invalid", invalid));
+                          .add("desyncs", desyncs).add("c2h_mismatches", mismatches).add("invalid", invalid).add("lagged_turns", lagged_turns));
     return ok ? 0 : 1;
 }
 

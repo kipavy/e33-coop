@@ -2163,8 +2163,6 @@ void subscribe()
         log().write("coop_actor_forced", JsonObj().add("local", local ? game::char_class(local) : "").add("host", it->second.actor), next);
     });
 
-    // Essai -e33turndep=1 : le jeu commence à attendre les dépendances du début de tour -> inscription du mod si l'état
-    // de l'hôte pour ce tour n'est pas encore arrivé (résolue par le tick à son arrivée).
     // Diagnostic D28 (hôte, en combat) : déroulé du début de tour (écoutes des dépendances, phases, auditeurs).
     {
         auto diag = [](const char* what) {
@@ -2187,20 +2185,37 @@ void subscribe()
     // OnCharacterTurnStart, puis écoute s'il y a une dépendance (StartListenToDependencies). Sans auditeur inscrit
     // (tours 9 et 16 du Lancelier Alpha, 2026-10-24), aucune écoute : une inscription faite plus tôt était effacée par
     // Reset. Inscription juste après le premier Reset du tour ennemi : le jeu écoute alors et attend notre résolution.
+    // Client (même raison) : tour ennemi commencé ici avant l'état de l'hôte (vérification différée, -e33turndep) et que le jeu
+    // n'aurait pas retenu faute d'auditeur : il le retient maintenant jusqu'à l'état de l'hôte, jeu animé. Sinon le client
+    // jouait le tour en avance et figeait son image en attendant les défenses des héros de l'hôte (sens inverse de D28).
     bus.post(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:Reset", [](HookCtx& ctx, UFunction*) {
         auto& b = s.battle;
-        if (s.role != Role::Host || !s.turn_align || !b.active || b.ending || b.align_active || b.align_turn == b.turn) return;
-        if (!b.cur_enemy || b.ots_seq != b.sct_seq || ctx.Context != turn_deps()) return;
-        align_begin(b.turn, "reset");
+        if (!b.active || b.ending) return;
+        if (s.role == Role::Host) {
+            if (!s.turn_align || b.align_active || b.align_turn == b.turn || !b.cur_enemy || b.ots_seq != b.sct_seq) return;
+            if (ctx.Context != turn_deps()) return;
+            align_begin(b.turn, "reset");
+            return;
+        }
+        if (s.role != Role::Client || !s.turn_dep || !s.turn_align || b.strict || b.dep_active) return;
+        if (!b.dep_finish_pending || b.dep_turn != b.turn || b.host_sync.count(b.turn) || b.host_end >= 0) return;
+        if (!b.dep_actor || game::is_player(b.dep_actor)) return;   // tours ennemis seulement (menu d'un héros jamais retardé)
+        if (ctx.Context != turn_deps() || ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
+        ue::Call reg(ctx.Context, STR("Register Dependency"));
+        if (!reg) return;
+        reg.set_object(STR("Dependency"), game::save_manager()).invoke();
+        b.dep_active = true;
+        bump("turn_deps_registered");
+        bump("turn_deps_on_reset");
+        log().write("coop_turn_dep", JsonObj().add("turn", b.turn).add("after_turn_start", true).add("how", "reset"), b.turn);
     });
+    // Client (-e33turndep, par défaut) : le jeu commence à attendre les dépendances du début de tour -> inscription du mod
+    // si l'état de l'hôte pour ce tour n'est pas encore arrivé (résolue par le tick à son arrivée). Hôte : voir D28.
     bus.pre(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:StartListenToDependencies", [](HookCtx& ctx, UFunction*) {
         // Hôte, démarrage synchronisé (D28) : tour ennemi retenu tant qu'un client qui a des héros ne l'a pas commencé chez lui.
         if (s.role == Role::Host) {
             auto& b = s.battle;
             if (!s.turn_align || !b.active || b.ending || ctx.Context != turn_deps()) return;
-            // Diagnostic : chaque écoute du début de tour (ordre par rapport à StartCharacterTurn / OnTurnStart).
-            log().write("coop_turn_listen", JsonObj().add("turn", b.turn).add("sct", b.sct_seq).add("ots", b.ots_seq).add("cur_enemy", b.cur_enemy)
-                                                .add("next_enemy", b.next_enemy).add("hold", b.hold).add("align_active", b.align_active), b.turn);
             if (b.hold || b.align_active) return;
             if (ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack"))) return;
             const bool after = b.ots_seq == b.sct_seq;   // OnTurnStart de ce tour déjà passé ?
