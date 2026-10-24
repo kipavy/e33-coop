@@ -22,7 +22,7 @@ static std::vector<proto::Message> samples()
     bs.party = {"Verso", "Maelle", "Lune"};
     proto::ActionCommand ac; ac.battle_id = 7; ac.turn = 3; ac.actor_spot = 1; ac.action_type = 5; ac.secondary = "Combo1";
     ac.targets = {{proto::ActorKind::Enemy, 0}, {proto::ActorKind::Hero, 2}}; ac.combo = {3, 1, 0};
-    proto::DefenseRequest dq; dq.battle_id = 7; dq.turn = 4; dq.spot = 1; dq.hit = 2; dq.jumpable = 1;
+    proto::DefenseRequest dq; dq.battle_id = 7; dq.turn = 4; dq.spot = 1; dq.hit = 2; dq.jumpable = 1; dq.turn_ms = 1234;
     proto::DefenseResult dr; dr.battle_id = 7; dr.turn = 4; dr.spot = 1; dr.hit = 2; dr.result = proto::Defense::Parry;
     proto::StateSync ss; ss.battle_id = 7; ss.turn = 4; ss.gradient_charges = 2; ss.gradient_progress = 0.5;
     proto::UnitState us; us.unit = {proto::ActorKind::Hero, 2}; us.cls = "BP_Verso_Battle2_C"; us.hp = 13965; us.ap = 9; us.shield = 1; us.break_bar = 1234567890123ll;

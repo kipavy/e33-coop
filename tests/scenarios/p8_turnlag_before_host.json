@@ -1,0 +1,16 @@
+{
+  "name": "p8_turnlag_before_host",
+  "description": "AVANT le démarrage synchronisé des tours ennemis (D28), alignement coupé (-e33turnalign=0) : reproduit les mini-gels de l'essai à deux PC du 2026-10-24. Le faux client (Verso et Lune, réseau simulé) commence chaque tour ennemi 1 s après l'hôte (--turn-lag 1.0 : il rejoue avec retard les actions des héros de l'hôte, comme le vrai client) et ne résout un coup qu'au même moment de son propre tour. L'hôte frappe donc ses héros 1 s avant lui et fige son image ~1 s par coup (defense_wait_max_ms, defense_waits_long = coop_wait_long site defense). Vérifie que le problème est bien reproduit ; p8_turnlag_host est le même combat avec l'alignement (critère chiffré).",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "timeout_s": 700,
+  "wait_players": 1,
+  "max_turns": 60,
+  "shots_every_s": 6,
+  "actions": [{ "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "skip" }, { "type": "attack" }],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1,Lune:1", "-e33seed=8", "-e33turnalign=0"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_turnalign.json", "--turn-lag", "1.0", "--net", "lag=40,jitter=20,loss=0.005,spike=0.01:150", "--timeout", "700"] },
+  "expect": { "battle_end": "any", "defenses_imposed": ">=2", "defense_wait_max_ms": ">=800", "defense_waits_long": ">=2", "turn_aligns": "0", "remote_actions": ">=2" }
+}

@@ -3,6 +3,9 @@
 //   fakepeer client --connect 127.0.0.1:7777 [--script s.json] [--log f.jsonl] [--record r.jsonl] [--timeout 900]
 //     Faux client scripté face au vrai jeu hôte : se présente (Hello), joue les tours de ses héros
 //     (ActionCommand) et répond aux coups (DefenseResult) selon le script ; renvoie les hash d'état reçus.
+//     --turn-lag 1.0 : chaque tour ennemi commence ici (StateHash du tour renvoyé) 1 s après sa réception, comme un vrai
+//     client qui rejoue avec retard les actions des héros de l'hôte ; un coup n'est résolu qu'au même moment de ce tour
+//     ici (DefenseRequest.turn_ms après ce début), pas avant.
 //
 //   fakepeer host --port 7777 --replay r.jsonl [--log f.jsonl] [--timeout 900]
 //     Faux hôte face au vrai jeu client : rejoue les messages hôte->client d'un enregistrement, en attendant
@@ -91,6 +94,7 @@ struct Args {
     double pilot_rate = 0;     // hôte : positions du pilote rejouées à ce rythme (interpolées entre les lignes)
     double pilot_gap_from = 1e18, pilot_gap_to = 1e18;   // hôte : --pilot-gap a:b, positions retenues entre a et b
     std::string net;           // réseau simulé (voir NetSim)
+    double turn_lag = 0;       // client : --turn-lag S, tours ennemis commencés S secondes après l'hôte (voir run_client)
     std::string in, out;       // slice : enregistrement source, tranche écrite
     int xfer = 0;              // slice : n° de l'instantané de départ
     double to = 1e18;          // slice : fin de la tranche (temps de l'enregistrement)
@@ -303,6 +307,9 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     bool stuck = false;
     const double def_delay_s = script["defense_delay_ms"].as_number(0) / 1000.0;
     const int def_delay_every = std::max<int>(1, static_cast<int>(script["defense_delay_every"].as_int(1)));
+    // --turn-lag : tours ennemis (TurnStart reçu) et début de chacun ici (StateHash renvoyé turn_lag s après celui de l'hôte).
+    std::map<uint32_t, bool> enemy_turn;
+    std::map<uint32_t, double> my_turn_at;
 
     std::vector<std::string> defense;
     for (size_t i = 0; i < script["defense"].size(); ++i) defense.push_back(script["defense"][i].as_string("fail"));
@@ -420,6 +427,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ready_battle = bs->battle_id;
                 if (!bs->world_enemy.empty()) ++counts["world_battles"];
             } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
+                enemy_turn[ts->turn] = ts->kind == proto::ActorKind::Enemy;
                 bool my_hero_turn = false;
                 for (auto& o : owners) if (ts->kind == proto::ActorKind::Hero && o.spot == ts->index && o.player_id == my_id) my_hero_turn = true;
                 if (dc.is_object() && !disconnected && counts["disconnects"] == 0 && ts->turn >= static_cast<uint32_t>(dc["at_turn"].as_int(3)) &&
@@ -601,12 +609,32 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 dr.hit = dq->hit;
                 const int idx = defense_index++;
                 dr.result = defense_of(defense[static_cast<size_t>(idx) % defense.size()], dq->jumpable != 0);
-                if (def_delay_s > 0 && idx % def_delay_every == 0) { later.emplace_back(now_s() + def_delay_s, dr); ++counts["defenses_delayed"]; }
+                double at = now_s();
+                if (def_delay_s > 0 && idx % def_delay_every == 0) { at += def_delay_s; ++counts["defenses_delayed"]; }
+                // --turn-lag : le coup arrive ici au même moment de notre tour que chez l'hôte (turn_ms après le début de
+                // son tour), donc pas avant notre propre début de tour + turn_ms.
+                if (auto it = my_turn_at.find(dq->turn); a.turn_lag > 0 && it != my_turn_at.end()) {
+                    const double hit_here = it->second + (dq->turn_ms == 0xFFFF ? 0.0 : dq->turn_ms / 1000.0);
+                    if (hit_here > at) {
+                        log.write("defense_lag", JsonObj().add("turn", dq->turn).add("spot", static_cast<int>(dq->spot)).add("hit", static_cast<int>(dq->hit))
+                                                     .add("turn_ms", static_cast<int>(dq->turn_ms)).add("hold_ms", static_cast<int>((hit_here - at) * 1000.0)));
+                        at = hit_here;
+                        ++counts["defenses_lagged"];
+                    }
+                }
+                if (at > now_s()) later.emplace_back(at, dr);
                 else lp->send(dr);
             } else if (auto* sh = std::get_if<proto::StateHash>(&m)) {
                 // Le faux client n'a pas d'état propre : il renvoie le hash de l'hôte ("hash_echo": false : jamais, pour
                 // tester que ses menus et aperçus suffisent à prouver qu'il est dans son tour).
-                if (!stuck && hash_echo) lp->send(*sh);
+                if (!stuck && hash_echo) {
+                    // --turn-lag : tour ennemi commencé ici turn_lag s plus tard (le StateHash renvoyé = notre début de tour).
+                    if (a.turn_lag > 0 && enemy_turn[sh->turn] && !my_turn_at.count(sh->turn)) {
+                        my_turn_at[sh->turn] = now_s() + a.turn_lag;
+                        later.emplace_back(now_s() + a.turn_lag, *sh);
+                        ++counts["turns_lagged"];
+                    } else lp->send(*sh);
+                }
             } else if (std::get_if<proto::BattleEnd>(&m)) {
                 ++counts["battle_ends"];
                 if (!session) {
@@ -1165,6 +1193,7 @@ int main(int argc, char** argv)
         else if (k == "--resync-snapshot") a.resync_snapshot = v == "1";
         else if (k == "--pilot-rate") a.pilot_rate = std::atof(v.c_str());
         else if (k == "--net") a.net = v;
+        else if (k == "--turn-lag") a.turn_lag = std::atof(v.c_str());
         else if (k == "--pilot-gap") { const auto c = v.find(':'); a.pilot_gap_from = std::atof(v.c_str()); a.pilot_gap_to = c == std::string::npos ? 1e18 : std::atof(v.c_str() + c + 1); }
         else if (k == "--in") a.in = v;
         else if (k == "--out") a.out = v;
