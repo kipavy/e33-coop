@@ -3535,6 +3535,39 @@ void run_remote_action()
                                          .raw("targets", ts + "]").add("auto_target", auto_target), b.turn);
 }
 
+// Diagnostic (2026-10-24 : parade du client sans effet) : à chaque image en combat, apparition / disparition des
+// contextes de défense, de blocage et de visée libre, et du drapeau IsDefenseInputBound. Comparer hôte et client.
+static void defense_context_watch()
+{
+    static int logs = 0;
+    static int last[4] = {-2, -2, -2, -2};   // -1 absent, sinon priorité ; dernier : drapeau bound
+    if (!s.battle.active || logs > 400) { last[0] = last[1] = last[2] = last[3] = -2; return; }
+    UObject* sub = game::input_subsystem();
+    if (!sub) return;
+    static const wchar_t* names[] = {L"IMC_BattleDefense", L"IMC_Battle_InputBlocker", L"IMC_Battle_FreeAim"};
+    static UObject* imcs[3] = {};
+    for (int i = 0; i < 3; ++i) {
+        if (!imcs[i]) imcs[i] = ue::find_object((std::wstring(L"/Game/Gameplay/Inputs/InputMappingProfiles/Battle/") + names[i] + L"." + names[i]).c_str());
+        if (!imcs[i]) continue;
+        ue::Call has(sub, STR("HasMappingContext"));
+        if (!has) return;
+        has.set_object(STR("MappingContext"), imcs[i]).invoke();
+        const int now = has.out_bool(STR("ReturnValue")) ? static_cast<int>(has.out_int(STR("OutFoundPriority"))) : -1;
+        if (now == last[i]) continue;
+        last[i] = now;
+        ++logs;
+        log().write("coop_imc_change", JsonObj().add("imc", ue::to_utf8(names[i])).add("active", now >= 0).add("priority", now)
+                                           .add("input_enabled", s.input_enabled), s.battle.turn);
+    }
+    UObject* ctrl = game::controller();
+    const int bound = ctrl ? (ue::get_bool(ctrl, STR("IsDefenseInputBound")) ? 1 : 0) : -1;
+    if (bound != last[3]) {
+        last[3] = bound;
+        ++logs;
+        log().write("coop_imc_change", JsonObj().add("imc", "IsDefenseInputBound").add("active", bound == 1).add("input_enabled", s.input_enabled), s.battle.turn);
+    }
+}
+
 // Activité des autres joueurs (écrans d'attente) : chargement (battements « occupé ») et silence du lien, par pair
 // direct. Ligne d'information quand un joueur charge sans qu'on l'attende (« TOTOFF charge votre partie… 12 s »).
 static void peer_activity_tick()
@@ -3929,6 +3962,7 @@ void tick(double dt)
         }
     }
     peer_activity_tick();
+    defense_context_watch();
     if (s.battle.active && !s.battle.hold && !explore::remote_paused() && !game::pause_menu_visible()) s.battle.timer_elapsed += dt;
     if (s.battle.active && !s.input_enabled) enforce_input_block();
     if (s.role == Role::Client) start_pending_battle();
