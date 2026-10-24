@@ -1524,6 +1524,36 @@ bool widget_flag(UObject* w, const wchar_t* fn)
     return c && c.invoke() && c.out_bool(STR("ReturnValue"));
 }
 
+
+// Marchand (essai à deux PC du 2026-10-24) : le choix « Acheter » du pilote est rejoué chez le suiveur, qui avait alors
+// sa propre fenêtre du marchand, entrées libres : achats séparés, et même un combat contre le marchand lancé chez lui
+// pendant que le pilote avait la main. Chez le suiveur, la fenêtre est refermée par son bouton « Partir » dès qu'elle
+// est ouverte ; les achats du pilote lui arrivent par la synchro de l'inventaire et de l'or (D13), un combat contre le
+// marchand lancé par le pilote par le chemin habituel (BattleStart).
+void merchant_follower_tick()
+{
+    static double next = 0, seen_at = -1;
+    if (s.now < next) return;
+    next = s.now + 0.2;
+    if (!sharing() || is_pilot()) { seen_at = -1; return; }
+    UObject* win = ue::get_object(ue::get_object(game::controller(), STR("BP_DialogueSystemComponent")), STR("MerchantWindow"));
+    bool active = false;
+    if (win) { ue::Call c(win, STR("IsActivated")); active = c && c.invoke() && c.out_bool(STR("ReturnValue")); }
+    if (!active) { seen_at = -1; return; }
+    if (seen_at < 0) { seen_at = s.now; return; }
+    if (s.now - seen_at < 0.4) return;   // fin de l'animation d'ouverture
+    seen_at = s.now + 5.0;               // pas de nouvel essai avant 5 s
+    UObject* leave = ue::get_object(win, STR("LeaveButton"));
+    bool ok = false;
+    {
+        ue::Call c(win, STR("BndEvt__WBP_Merchant_Panel_LeaveButton_K2Node_ComponentBoundEvent_5_CommonButtonBaseClicked__DelegateSignature"));
+        if (c && leave) ok = c.set_object(STR("Button"), leave).invoke();
+    }
+    if (!ok) { ue::Call d(win, STR("DeactivateWidget")); ok = d && d.invoke(); }
+    bump(ok ? "merchant_windows_closed" : "merchant_close_errors");
+    log().write("coop_follower_merchant_closed", JsonObj().add("ok", ok).add("leave_button", leave != nullptr));
+    ui::toast("pilot_at_merchant");
+}
 void choice_hover_tick()
 {
     static double next = 0;
@@ -1881,6 +1911,7 @@ void poll_tick()
     movement_lock_tick();
     pilot_stuck_tick();
     choice_hover_tick();
+    merchant_follower_tick();
     // Narration locale
     if (s.intro && s.now - s.intro_since > kIntroMax) { s.intro = false; log().write("coop_intro_timeout", JsonObj()); }
     // Fin de l'intro : le signal du jeu (OnInitialCinematicCompleted) n'arrive pas (vu le 2026-10-21). Elle finit donc

@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.23] - 2026-10-24
+
+### Corrections
+- Marchand : seul le meneur fait ses achats. Chez l'autre joueur, la fenêtre du marchand se referme aussitôt (message
+  « Le meneur est chez le marchand ») ; il ne peut plus acheter de son côté ni lancer le combat du marchand.
+
 ## [0.6.22] - 2026-10-24
 
 ### Corrections
@@ -224,7 +230,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.22...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.23...HEAD
+[0.6.23]: https://github.com/kipavy/e33-coop/compare/v0.6.22...v0.6.23
 [0.6.22]: https://github.com/kipavy/e33-coop/compare/v0.6.21...v0.6.22
 [0.6.21]: https://github.com/kipavy/e33-coop/compare/v0.6.20...v0.6.21
 [0.6.20]: https://github.com/kipavy/e33-coop/compare/v0.6.19...v0.6.20
