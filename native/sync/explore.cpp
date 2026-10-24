@@ -19,6 +19,8 @@
 #include <map>
 #include <map>
 #include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <set>
 #include <string_view>
 #include <vector>
@@ -31,6 +33,10 @@
 #include "../hooks/reflect.hpp"
 #include "../hooks/log.hpp"
 #include "../hooks/ue.hpp"
+
+#include <Unreal/Hooks.hpp>
+#include <Unreal/UClass.hpp>
+#include <Unreal/UFunction.hpp>
 #include "../ui/ui.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -1552,6 +1558,7 @@ void choice_hover_tick()
     bump(ok ? "choice_hovers_shown" : "choice_hover_errors");
     if (s.choice_diag < 40) { ++s.choice_diag; log().write("coop_choice_hover", JsonObj().add("index", want).add("ok", ok)); }
 }
+
 // --- Barrière narrative et pause ------------------------------------------------------------------
 
 // Pause du jeu entier tenue par une ou plusieurs raisons. Le jeu peut l'enlever de lui-même (fin de cinématique :
@@ -1637,6 +1644,44 @@ struct SceneSync {
     int lag_max_ms = 0, end_late_max_ms = 0, barrier_wait_max_ms = 0;
 };
 SceneSync sc;
+DWORD g_explore_thread = 0;   // fil du jeu (relevé au tick d'exploration)
+
+// Crochet global de ProcessEvent (2026-10-24, pont de la carte du monde activé par Killian, pas chez TOTOFFF) :
+//  1. activation (OnInteractionRequested) d'un objet BP_GPE_* hors de kInteractables (pont…) : publiée et rejouée
+//     comme les autres interactions ;
+//  2. diagnostic : fonctions appelées en exploration sur les objets de tir / peinture / GPE (noms distincts, plafonnés),
+//     pour rejouer ensuite les tirs du pilote (sphères de peinture). Classe jugée intéressante une fois par UClass.
+void gpe_process_event(RC::Unreal::UObject* ctx, RC::Unreal::UFunction* fn, void* parms)
+{
+    using namespace RC::Unreal;
+    if (!ctx || !fn || GetCurrentThreadId() != g_explore_thread) return;
+    static std::unordered_map<UClass*, int> kind;   // 0 rien, 1 GPE à rejouer, 2 trace seulement
+    UClass* cls = ctx->GetClassPrivate();
+    auto it = kind.find(cls);
+    if (it == kind.end()) {
+        const std::string n = ue::short_name(cls);
+        int k = 0;
+        if (n.rfind("BP_GPE_", 0) == 0 && n != "BP_GPE_Rope_C") k = 1;
+        else if (n.find("Paint") != std::string::npos || n.find("FreeAim") != std::string::npos || n.find("Projectile") != std::string::npos ||
+                 n.find("Shoot") != std::string::npos || n.find("Target") != std::string::npos || n.find("GPE") != std::string::npos) k = 2;
+        it = kind.emplace(cls, k).first;
+    }
+    if (it->second == 0 || !s.active || !sharing()) return;
+    static const FName interact(STR("OnInteractionRequested"), FNAME_Find);
+    if (it->second == 1 && fn->GetNamePrivate() == interact && !s.replaying) {
+        const std::string path = object_path(ctx);
+        if (!is_pilot()) { bump("local_actions_on_follower"); log().write("coop_follower_interaction", JsonObj().add("actor", path)); return; }
+        s.net.publish(proto::WorldInteract{++s.seq, path, false}, true);
+        bump("interactions_published"); bump("gpe_interactions_published"); touch();
+        sc.interaction = path; sc.interaction_at = s.now;
+        log().write("coop_interaction", JsonObj().add("actor", path).add("instant", false).add("gpe", true));
+        return;
+    }
+    static std::unordered_set<std::string> seen;
+    if (seen.size() >= 300 || !is_pilot() || game::in_battle()) return;
+    const std::string key = ue::short_name(cls) + ":" + ue::to_utf8(fn->GetName());
+    if (seen.insert(key).second) log().write("coop_pe_trace", JsonObj().add("fn", key).add("actor", ue::short_name(ctx)));
+}
 
 constexpr double kSceneCauseWindow = 60.0;   // cause retenue si vue dans la minute qui précède la cinématique
 
@@ -1827,6 +1872,7 @@ void poll_tick()
     if (s.now < s.next_poll) return;
     s.next_poll = s.now + kPollPeriod;
     if (!game::controller()) return;
+    g_explore_thread = GetCurrentThreadId();
     movement_lock_tick();
     pilot_stuck_tick();
     choice_hover_tick();
@@ -2567,6 +2613,7 @@ void subscribe()
             log().write("coop_interaction", JsonObj().add("actor", path).add("instant", instant));
         });
     }
+    RC::Unreal::Hook::RegisterProcessEventPreCallback([](auto&, RC::Unreal::UObject* ctx, RC::Unreal::UFunction* fn, void* parms) { gpe_process_event(ctx, fn, parms); });
     bus.pre(L"/Game/Gameplay/DialogueSystem/BP_DialogueSystemComponent.BP_DialogueSystemComponent_C:OnChoiceMade", [](HookCtx& ctx, UFunction* f) {
         s.choice_pending = false;
         s.choice_hover_want = -1;

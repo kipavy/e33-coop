@@ -19,6 +19,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ### Ajouts
 - Dialogues : l'autre joueur voit en surbrillance la réponse que le meneur survole avant de choisir.
 
+### Corrections
+- Exploration : les éléments du décor activés par le meneur (ex. le pont de la carte du monde) s'activent aussi chez
+  l'autre joueur, qui ne le voit plus marcher dans le vide.
+
 ## [0.6.17] - 2026-10-24
 
 ### Corrections
