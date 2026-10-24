@@ -1,6 +1,6 @@
 {
   "name": "p7_mirror_release_old_host",
-  "description": "Avant D29 (-e33mirrorrelease=old : menus rembobinés avant l'action). Miroir des menus côté observateur (hôte), sans entrées injectées : le faux client (Verso) fouille sa roue 12 s puis choisit son action (compétence Combo1, objet sur Verso, attaque, visée libre puis attaque), ciblage ouvert jusqu'à l'action. Mesure ce que voit l'hôte entre l'arrivée de la commande et l'exécution : changements des menus (menu_release_flips, relevés à chaque image), fermetures de plus de 0,1 s (menu_release_slow), ciblage encore ouvert 1 s après l'action (menu_targeting_after_action). Captures chaque seconde.",
+  "description": "Avant D29 (-e33mirrorrelease=old : menus rembobinés avant l'action). Miroir des menus côté observateur (hôte), sans entrées injectées : le faux client (Verso) fouille sa roue 12 s puis choisit son action (compétence Combo1, objet sur Verso, attaque, visée libre puis attaque), ciblage ouvert jusqu'à l'action. Mesure ce que voit l'hôte entre l'arrivée de la commande et l'exécution : changements des menus (menu_release_flips, relevés à chaque image), fermetures de plus de 0,1 s avant une action (menu_release_slow ; visée libre à part : menu_release_slow_free_aim), ciblage encore ouvert 1 s après l'action (menu_targeting_after_action). Captures chaque seconde.",
   "save": "e33coop-test/TEST_B",
   "encounter": "SM_Lancelier_Alpha",
   "party": ["Verso", "Lune"],

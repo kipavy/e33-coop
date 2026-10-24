@@ -1089,7 +1089,7 @@ bool mirror_release(double now, const std::string& action_key)
         g_mir.exec_at = now;
         const double waited = now - g_mir.release_t0;
         if (g_mir.rel_flips > 0) bump("menu_release_flips", g_mir.rel_flips);
-        if (waited > 0.1) bump("menu_release_slow");
+        if (waited > 0.1) bump(action_key.empty() ? "menu_release_slow_free_aim" : "menu_release_slow");   // visée libre : ancienne fermeture gardée
         bump("menu_release_execs");
         log().write("menu_mirror_exec", JsonObj().add("waited_s", waited).add("flips", g_mir.rel_flips).add("action", action_key), g_mir.turn);
     }
