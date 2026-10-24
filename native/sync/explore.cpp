@@ -1495,7 +1495,7 @@ void pilot_stuck_tick()
 std::vector<UObject*> choice_options()
 {
     std::vector<UObject*> all, out;
-    UObjectGlobals::FindAllOf(STR("WBP_Dialogue_ChoiceOption_C"), all);
+    RC::Unreal::UObjectGlobals::FindAllOf(STR("WBP_Dialogue_ChoiceOption_C"), all);
     std::vector<std::pair<int, UObject*>> v;
     for (UObject* o : all) {
         if (!o) continue;
