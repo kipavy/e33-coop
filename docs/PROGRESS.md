@@ -2,6 +2,11 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 16h30 — v0.6.15 : point faible encore manqué en 0.6.14 ; meneur bloqué
+
+- 16:21:13 (0.6.14) : `coop_free_aim_part` sent vrai (Volester, `BP_FreeAimTargetPart_WeakPoint`), point rejoué recalé sur la zone (~17 u de décalage) mais `coop_free_aim_replay_miss` quand même : un point de la surface, visé depuis un départ un peu différent, frôle la boule. Corrigé : rejeu visé au centre de la zone (les dégâts ne dépendent que de la zone).
+- Meneur client immobile (16:08-16:10, 0.6.12) malgré F8 et contextes rendus, réglé en relançant le jeu : cause inconnue. Diagnostic `coop_pilot_stuck` (touche de déplacement tenue ou entrée de mouvement sans vitesse pendant 3 s : `IsMoveInputIgnored`, mode de déplacement, attache, contextes qui lient W / Z, dialogue, pause).
+
 ## 2026-10-24, 16h — v0.6.14 : tir sur point faible manqué chez l'hôte (essai à deux PC en 0.6.12)
 
 - **Vu en vrai** (15:50) : TOTOFFF tire sur les points faibles (boules bleues) du Portier puis du Volester : touchés chez lui, `coop_free_aim_replay_miss` chez l'hôte (`hit` -1) alors que le point rejoué est identique au mm ; l'état de l'hôte fait foi, la boule reste intacte. Cause : point envoyé relatif au centre du combattant, la petite boule bouge avec l'animation (décalée d'un PC à l'autre).

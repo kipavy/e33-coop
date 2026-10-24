@@ -2813,7 +2813,10 @@ void subscribe()
                 bump("free_aim_part_missing");
                 log().write("coop_free_aim_part_missing", JsonObj().add("seq", static_cast<int>(seq)).add("part", static_cast<int>(shot->part)), s.battle.turn);
             }
-            if (on_part || game::location(unit, a)) p = {a[0] + p[0], a[1] + p[1], a[2] + p[2]};
+            // Zone : visée en son centre (un point de sa surface, visé depuis un endroit un peu différent, la frôlait sans la
+            // toucher : essai du 2026-10-24, 16:21) ; les dégâts ne dépendent que de la zone touchée.
+            if (on_part) p = {a[0], a[1], a[2]};
+            else if (game::location(unit, a)) p = {a[0] + p[0], a[1] + p[1], a[2] + p[2]};
             else {
                 bump("free_aim_anchor_missing");
                 log().write("coop_free_aim_anchor_missing", JsonObj().add("seq", static_cast<int>(seq)).add("kind", static_cast<int>(shot->target.kind))

@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <initializer_list>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -1460,7 +1461,7 @@ void pilot_stuck_tick()
     GetWindowThreadProcessId(GetForegroundWindow(), &pid);
     if (!sharing() || !is_pilot() || !pawn || game::in_battle() || !world_ready() || pid != GetCurrentProcessId()) { since = -1; return; }
     bool key = false;
-    for (int vk : {'W', 'A', 'S', 'D', 'Z', 'Q', VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT}) key = key || (GetAsyncKeyState(vk) & 0x8000) != 0;
+    for (int vk : std::initializer_list<int>{'W', 'A', 'S', 'D', 'Z', 'Q', VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT}) key = key || (GetAsyncKeyState(vk) & 0x8000) != 0;
     double in[3] = {0, 0, 0}, vel[3] = {0, 0, 0};
     if (ue::Call c(pawn, STR("GetLastMovementInputVector")); c && c.invoke() && c.param_size(STR("ReturnValue")) == 24)
         std::memcpy(in, c.param_ptr(STR("ReturnValue")), sizeof in);
