@@ -1143,7 +1143,12 @@ std::string gameplay_stream(HookCtx& ctx, const std::string& fname, bool setup =
     const int es = setup ? -1 : cached_enemy_spot(caller);
     const std::string cls = game::char_class(caller);
     const std::string fn = ue::short_name(node);
-    const bool gameplay = es >= 0 || cls == "BP_BattleDamages_C" || cls.rfind("BP_LU_", 0) == 0 || cls == "AC_jRPG_CharacterBattleStats_C" ||
+    // Mise en place : les ennemis ne sont pas encore dans le cache (rempli au tour 1). Vu en vrai le 2026-10-24 : le
+    // Portier tire un RandomBool à son OnBattleStart qui décide de ses attaques (zone chez l'hôte, un seul héros chez le
+    // client). Flux par classe, sans emplacement (peut-être pas encore attribué) : l'ordre des appels départage.
+    const bool setup_enemy = setup && ue::is_a(caller, STR("BP_jRPG_Enemy_Battle_Base_C"));
+    if (setup_enemy) bump("setup_enemy_draws");
+    const bool gameplay = es >= 0 || setup_enemy || cls == "BP_BattleDamages_C" || cls.rfind("BP_LU_", 0) == 0 || cls == "AC_jRPG_CharacterBattleStats_C" ||
                           cls.rfind("BP_BattleBuff", 0) == 0 || cls.rfind("BP_LootSystemComponent", 0) == 0 ||
                           cls.find("Mechanic") != std::string::npos || cls.find("StainHolder") != std::string::npos ||
                           (cls == "AC_jRPG_BattleManager_C" && fn == "RollBattleRewards") || ue::is_a(caller, STR("BP_Battle_SkillScript_C"));

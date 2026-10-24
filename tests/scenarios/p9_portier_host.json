@@ -1,0 +1,19 @@
+{
+  "name": "p9_portier_host",
+  "description": "Vu en vrai le 2026-10-24 (0.6.12) : le Portier tire un RandomBool à son OnBattleStart (avant le tour 1) qui décide de ses attaques ; l'hôte a vu une attaque de zone, le client une attaque sur un seul héros. Vrai jeu hôte face au faux client, rencontre SM_Portier : les tirages des ennemis pendant la mise en place sont dérivés de la graine et publiés (setup_enemy_draws). Produit l'enregistrement rejoué par p9_portier_client.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Portier*1",
+  "party": ["Lune", "Monoco"],
+  "timeout_s": 600,
+  "wait_players": 1,
+  "max_turns": 30,
+  "shots_every_s": 6,
+  "actions": [
+    { "hero": "Lune", "type": "attack" },
+    { "hero": "Monoco", "type": "attack" }
+  ],
+  "defense": ["parry", "fail"],
+  "launch_args": ["-e33role=host", "-e33port=7777", "-e33owners=Verso:1", "-e33seed=7340291"],
+  "fakepeer": { "start": "after_game", "args": ["client", "--connect", "127.0.0.1:7777", "--script", "{repo}/tests/scenarios/fakeclient_basic.json", "--record", "{run}/recording-fakeclient.jsonl", "--timeout", "600"] },
+  "expect": { "battle_end": "any", "setup_enemy_draws": ">=1", "setup_draws_replaced": ">=1", "setup_draws_natural": "0", "setup_windows_missing": "0" }
+}
