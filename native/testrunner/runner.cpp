@@ -98,6 +98,7 @@ struct Scenario {
     double pause_s = 3.0;                 // durée de ce menu pause (captures du panneau Coop)
     bool end_on_battle = false;           // exploration : le test se termine (vert) quand un combat commence
     bool end_on_session_end = false;      // client : le test se termine quand la session est finie et le menu principal atteint (phase 5)
+    double fail_after_session_end_s = 0;  // > 0 : échec si la session est finie depuis ce délai et le scénario pas fini
     std::vector<json::Value> explore;     // étapes d'exploration (phase 4) : voir run_explore_step
     // "spam_local_input": true : pendant le tour de chaque héros d'un autre joueur (avant son action), le « joueur » d'ici
     // appuie sur des touches de menu et clique (vraies entrées Windows) ; tout effet est une fuite (local_input_leaks).
@@ -243,6 +244,7 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.pause_s = v["pause_s"].as_number(3.0);
     s.end_on_battle = v["end_on_battle"].as_bool(false);
     s.end_on_session_end = v["end_on_session_end"].as_bool(false);
+    s.fail_after_session_end_s = v["fail_after_session_end_s"].as_number(0);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
     s.spam_local_input = v["spam_local_input"].as_bool(false);
     s.spam_every_s = v["spam_every_s"].as_number(0.12);
@@ -1270,6 +1272,12 @@ void tick(float dt)
         if (game::main_menu() && g.t - g.session_end_t > 2.0) { ++g.metrics["back_to_title"]; finish(true, "session ended, back to title"); return; }
         if (g.t - g.session_end_t > 60.0) { finish(true, "session ended (title not reached)"); return; }
         return;
+    }
+    // Session finie (hôte parti) alors que le scénario attend encore : il ne peut plus réussir, échec après le délai
+    // au lieu d'attendre timeout_s au menu (p4_session_client : faux hôte parti 4 s après le choix, 2026-10-24).
+    if (g.sc.fail_after_session_end_s > 0 && coop::session_ended()) {
+        if (g.session_end_t < 0) g.session_end_t = g.t;
+        if (g.t - g.session_end_t > g.sc.fail_after_session_end_s) { fail("session ended before the scenario finished"); return; }
     }
     // Entrée injectée encore enfoncée hors combat : relâchée.
     if (g.spam.up_kind && g.phase != Phase::Battle && g.t >= g.spam.up_at) {

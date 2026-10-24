@@ -3,6 +3,7 @@
   "description": "Phase 4 : vrai jeu client qui rejoint la partie du faux hôte (rejeu de p4_session_host au rythme enregistré). Le client reçoit l'instantané (fichier local .tools/testsaves, jamais versionné), le charge dans l'emplacement coop, suit le pilote, rejoue le combat avec l'ennemi du monde, suit le changement de niveau, l'interaction avec Lune et le choix de dialogue.",
   "join": true,
   "timeout_s": 1000,
+  "fail_after_session_end_s": 15,
   "max_turns": 10,
   "shots_every_s": 10,
   "actions": [{ "type": "flee" }],
