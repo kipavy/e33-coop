@@ -85,6 +85,16 @@ proto::StateSync snapshot(uint32_t battle_id, uint32_t turn)
         for (auto& b : game::buffs(s)) {
             if (game::is_helper_buff(b)) continue;
             u.buffs.push_back({b.cls, b.stacks, b.turns, b.permanent});
+            // Chemin de la classe : un client qui ne l'a jamais chargée (picto qu'il ne possède pas) la charge pour la réparation.
+            if (b.instance && b.cls.rfind("BP_LU_", 0) == 0 || b.instance && b.cls.rfind("BP_BattleBuff", 0) == 0) {
+                bool known = false;
+                for (auto& [c, p] : st.class_paths) known = known || c == b.cls;
+                if (!known && st.class_paths.size() < 200) {
+                    const std::string full = ue::full_name(b.instance->GetClassPrivate());
+                    const auto sp = full.find(' ');
+                    if (sp != std::string::npos) st.class_paths.emplace_back(b.cls, full.substr(sp + 1));
+                }
+            }
         }
         std::sort(u.buffs.begin(), u.buffs.end(), buff_less);
         if (u.unit.kind == proto::ActorKind::Hero)
@@ -164,6 +174,7 @@ std::string diff(const proto::StateSync& local, const proto::StateSync& host)
 
 RepairStats repair(const proto::StateSync& local, const proto::StateSync& host)
 {
+    for (auto& [c, p] : host.class_paths) game::note_class_path(c, p);   // classes de buff à charger si absentes ici
     RepairStats r;
     for (auto& hu : host.units) {
         const auto* lu = find(local, hu.unit);

@@ -162,6 +162,7 @@ struct StateSync {
     std::vector<UnitState> units;
     int32_t gradient_charges = 0;
     double gradient_progress = 0;
+    std::vector<std::pair<std::string, std::string>> class_paths;   // classe de buff -> chemin complet (champ final facultatif, 2026-10-24 : chargement chez un client qui ne l'a pas)
 };
 struct LootEntry { std::string item; int32_t quantity = 0; };
 struct BattleRewards {

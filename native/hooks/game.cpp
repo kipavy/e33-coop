@@ -1,5 +1,6 @@
 #include "game.hpp"
 
+#include <map>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -549,9 +550,36 @@ bool remove_buff(UObject* st, UObject* instance)
     return true;
 }
 
+std::map<std::string, std::string> g_class_paths;   // classe de buff -> chemin complet (envoyé par l'hôte)
+
+void note_class_path(const std::string& cls, const std::string& path) { if (g_class_paths.size() < 500) g_class_paths[cls] = path; }
+
+// Chargement d'une classe par son chemin (picto que ce joueur ne possède pas : jamais chargée ici, 2026-10-24) :
+// KismetSystemLibrary MakeSoftClassPath -> Conv_SoftClassPathToSoftClassRef -> LoadClassAsset_Blocking.
+UClass* load_class_path(const std::string& path)
+{
+    UObject* ksl = ue::find_object(STR("/Script/Engine.Default__KismetSystemLibrary"));
+    ue::Call mk(ksl, STR("MakeSoftClassPath"));
+    ue::Call cv(ksl, STR("Conv_SoftClassPathToSoftClassRef"));
+    ue::Call ld(ksl, STR("LoadClassAsset_Blocking"));
+    if (!mk || !cv || !ld) return nullptr;
+    const std::wstring wp = ue::from_utf8(path);
+    mk.set_string(STR("PathString"), wp.c_str());
+    if (!mk.invoke() || mk.param_size(STR("ReturnValue")) != cv.param_size(STR("SoftClassPath"))) return nullptr;
+    cv.set_raw(STR("SoftClassPath"), mk.param_ptr(STR("ReturnValue")));
+    if (!cv.invoke() || cv.param_size(STR("ReturnValue")) != ld.param_size(STR("AssetClass"))) return nullptr;
+    ld.set_raw(STR("AssetClass"), cv.param_ptr(STR("ReturnValue")));
+    if (!ld.invoke()) return nullptr;
+    return static_cast<UClass*>(ld.out_object(STR("ReturnValue")));
+}
+
 bool add_buff(UObject* st, const std::string& cls_name, int stacks, int turns, bool permanent, std::string& err)
 {
     UClass* cls = ue::find_class_by_short_name(cls_name);
+    if (!cls) if (auto it = g_class_paths.find(cls_name); it != g_class_paths.end()) {
+        cls = load_class_path(it->second);
+        log().write("coop_buff_class_loaded", JsonObj().add("class", cls_name).add("path", it->second).add("ok", cls != nullptr));
+    }
     if (!cls) { err = "buff class not loaded: " + cls_name; return false; }
     FStaticConstructObjectParameters params{cls, st};
     UObject* inst = UObjectGlobals::StaticConstructObject(params);

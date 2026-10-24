@@ -296,7 +296,7 @@ struct State {
     bool turn_dep = false;                                 // -e33turndep=1 : attente du TurnStart par dépendance de début de tour (essai)
     double ready_idle_s = kReadyIdleTimeout;               // hôte : -e33readyidle=N
     double stuck_turn_s = kStuckTurnTimeout;               // hôte : -e33stuckturn=N
-    bool turn_align = true;                                // hôte : démarrage synchronisé des tours ennemis (-e33turnalign=0 : coupé, D28)
+    bool turn_align = false;                               // hôte : démarrage synchronisé des tours ennemis (-e33turnalign=0 : coupé, D28)
     double barrier_battle_since = -1;                      // diagnostic : barrière tenue pendant un combat engagé (depuis)
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     // Défaite (D33) : seul l'hôte choisit sur l'écran de défaite (« Réessayer » / « Abandonner »), les clients suivent.
@@ -3813,7 +3813,7 @@ void apply_options()
     s.turn_timer_s = static_cast<uint16_t>(t.empty() ? 0 : std::wcstoul(t.c_str(), nullptr, 10));
     if (s.battle.active) return;
     s.turn_dep = arg(L"e33turndep") != L"0";
-    s.turn_align = arg(L"e33turnalign") != L"0";
+    s.turn_align = arg(L"e33turnalign") == L"1";   // coupé par défaut depuis 0.6.26 (gels de 2 s en vrai), -e33turnalign=1 pour l'essayer
     s.options_dirty = false;
     log().write("coop_options", JsonObj().add("duo_parry", s.duo_parry).add("turn_timer_s", static_cast<int>(s.turn_timer_s)).add("turndep", s.turn_dep)
                                    .add("turnalign", s.turn_align));
@@ -3939,7 +3939,7 @@ void read_settings()
     s.duo_parry = arg(L"e33duoparry") != L"0";
     if (const std::wstring v = arg(L"e33readyidle"); !v.empty()) s.ready_idle_s = std::wcstod(v.c_str(), nullptr);
     if (const std::wstring v = arg(L"e33stuckturn"); !v.empty()) s.stuck_turn_s = std::wcstod(v.c_str(), nullptr);
-    s.turn_align = arg(L"e33turnalign") != L"0";   // démarrage synchronisé des tours ennemis, par défaut depuis le 2026-10-24 (D28)
+    s.turn_align = arg(L"e33turnalign") == L"1";   // D28 coupé par défaut depuis 0.6.26 (gels de 2 s dans les deux sens en vrai)
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
     ui::init();

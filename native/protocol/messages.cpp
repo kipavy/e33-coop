@@ -101,6 +101,8 @@ void encode_payload(const Message& m, wire::Writer& w)
                 for (auto& f : u.mech) { w.str(f.name); w.u64(static_cast<uint64_t>(f.value)); }
             }
             w.i32(x.gradient_charges); w.f64(x.gradient_progress);
+            w.u16(static_cast<uint16_t>(x.class_paths.size()));
+            for (auto& [c, p] : x.class_paths) { w.str(c); w.str(p); }
         } else if constexpr (std::is_same_v<T, FreeAimEvent>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u8(static_cast<uint8_t>(x.kind)); w.u16(x.seq); w.u32(x.t_ms);
             w.f64(x.x); w.f64(x.y); w.f64(x.z); w_unit(w, x.target);
@@ -283,6 +285,10 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
             x.units.push_back(std::move(u));
         }
         x.gradient_charges = r.i32(); x.gradient_progress = r.f64();
+        if (r.ok() && !r.at_end()) {   // facultatif (chemins des classes de buff)
+            const uint16_t np = r.count(kMaxBuffs * 4);
+            for (uint16_t j = 0; j < np && r.ok(); ++j) { std::string c = r.str(128); std::string p = r.str(512); x.class_paths.emplace_back(std::move(c), std::move(p)); }
+        }
         return finish(x);
     }
     case MsgType::FreeAimEvent: {

@@ -130,6 +130,7 @@ std::vector<Buff> buffs(UObject* stats);
 bool is_helper_buff(const Buff& b);   // agrégateurs : exclus du hash et de la resynchro
 bool remove_buff(UObject* stats, UObject* instance);
 bool add_buff(UObject* stats, const std::string& cls, int stacks, int turns, bool permanent, std::string& err);
+void note_class_path(const std::string& cls, const std::string& path);   // chemin d'une classe de buff envoyé par l'hôte
 
 // Jauge gradient (globale)
 UObject* gradient_gauge();
