@@ -2,6 +2,12 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24 après-midi — menus qui s'ouvrent et se ferment avant l'action d'un autre joueur (branche `fix/mirror-flicker`, D29)
+
+- **Vu par Killian** : quand J2 / J3 lance une compétence, le menu s'ouvre et se ferme 2-3 fois juste avant. Journal de TOTOFFF (0.6.9) : avant chaque action de l'hôte, `menu_mirror_release` appelait `OnCancelTargeting` 3 fois à 0,3 s d'écart puis ramenait la roue à sa page de départ (~0,9 s), avant l'exécution qui rouvre l'action.
+- **Corrigé** (D29) : ciblage refermé dans la même image que l'exécution, plus de rembobinage de la roue. Visée libre : ancienne fermeture (0,3 s, sans changement visible). `-e33mirrorrelease=old` = avant.
+- **Preuves** (build 40089895870 / 40090592656) : `p7_mirror_release_old_host` : `menu_release_flips` 2, `menu_release_slow` 4 ; `p7_mirror_release_host` : 0 et 0 (4 actions : compétence, objet, attaque, attaque après visée libre), ciblage jamais resté ouvert après l'action, `desyncs` 0. Ajoutés à `battery.ps1`.
+
 ## 2026-10-24 midi — v0.6.10 : parade et tir du client à la manette (branche `diag/defense-path`)
 
 - **Cause trouvée sans partie à deux** (journaux de TOTOFFF + diagnostics en scénario) : touches manette de la défense = RB parade, B esquive, A saut, RT contres ; tir de la visée libre = RT. Chez le client (suiveur en exploration), `movement_lock_tick` (explore.cpp) retire `IMC_Locomotion_Default_ALS` et le **rendait au début du combat** (plus « verrouillé » en combat), alors que le jeu retire ce contexte en combat. Il y lie RB = `HitInWorldAction` et RT = `SprintAction` en priorité 1, devant `IMC_BattleDefense` (0) et à égalité avec `IMC_Battle_FreeAim` (1) : RB et RT n'arrivaient pas, B et le clavier si. L'hôte (jamais suiveur) n'était pas touché.
