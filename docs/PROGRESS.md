@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 22h10 — v0.6.24 : messages au-dessus des menus
+
+- Confirmé par Killian en 0.6.22 : combat lancé pendant l'inventaire du client, plus de gel (attente du menu OK). Mais la bannière « fermez le menu » ne s'affichait pas : cartes de l'overlay ajoutées au viewport en ZOrder 500, sous les menus du jeu. ZOrder 30000. Non testé.
+
 ## 2026-10-24, 21h45 — v0.6.23 : fenêtre du marchand chez le suiveur
 
 - Vu par Killian : après le dialogue d'un marchand, TOTOFFF avait sa propre fenêtre du marchand (choix rejoué), entrées libres : achats séparés, combat du marchand lancé chez lui pendant que Killian avait la main. Corrigé (miroir, demande de Killian) : chez le suiveur, `MerchantWindow` activée -> boutons acheter / combattre / partir `SetIsInteractionEnabled(false)`, article focalisé du pilote (`FocusedMerchantItem`, index dans `DynamicEntryBox_Items.GetAllEntries`) envoyé en `DialogueChoice.hover 2` et rejoué par `SetFocus`, fermeture du pilote = `hover 3` -> bouton Partir chez le suiveur. Journaux `coop_merchant_opened/closed`, `coop_follower_merchant_mirror/closed`. Non testé.

@@ -77,7 +77,8 @@ UObject* create_card(UObject* pc, const std::string& text, double duration, int 
     if (!w) { log().write("ui_overlay_error", JsonObj().add("what", "Create returned null")); return nullptr; }
     ue::set_double(w, STR("Duration"), duration);
     ue::Call add(w, STR("AddToViewport"));
-    if (add) add.set_int(STR("ZOrder"), 500 + slot).invoke();
+    // Au-dessus des menus du jeu (inventaire, équipe : la bannière « fermez le menu » y restait cachée, 2026-10-24).
+    if (add) add.set_int(STR("ZOrder"), 30000 + slot).invoke();
     if (slot > 0) {
         ue::Call tr(w, STR("SetRenderTranslation"));
         if (tr) {
