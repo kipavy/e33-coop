@@ -2,6 +2,10 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
+## 2026-10-24, 19h15 — v0.6.19 : combat lancé pendant le menu du client
+
+- 18:54 (0.6.17) : TOTOFFF dans le menu des pictos (`coop_build_offer` reason menu à 18:54:06), Killian lance un combat (18:54:23) : jeu de TOTOFFF figé, Lune déformée dans l'écran, client perdu par timeout (18:54:54). Journal hôte retrouvé dans `Win6433coop-backup-20261024-185606` (l'installateur y déplace l'ancien dossier, journaux compris) ; journal du client non récupéré. Corrigé : `start_pending_battle` attend que `IsPauseMenuVisible` retombe (pas `IsGamePaused` : la barrière narrative met aussi en pause), statut « Combat lancé : fermez le menu » (`coop_battle_wait_menu`). Non testé.
+
 ## 2026-10-24, 19h — v0.6.18 : survol des choix de dialogue
 
 - Demande de Killian : le suiveur ne voyait pas le pilote naviguer dans les choix. `DialogueChoice.hover` (champ final facultatif) : le pilote envoie l'option focalisée / survolée (`WBP_Dialogue_ChoiceOption_C` visibles, rangées par `GetChildIndex`, 10 fois/s), le suiveur fait `SetFocus` sur la même. **Non testé** (Killian joue) : à vérifier en jeu ; diagnostics `coop_choice_options` (options vues, focus / survol) et `coop_choice_hover`.

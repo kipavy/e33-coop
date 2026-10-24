@@ -30,6 +30,7 @@ constexpr Entry kTexts[] = {
     {"keys_client", "Coop : F8 prendre la main · F9 options", "Coop: F8 take control · F9 options"},
     {"your_turn", "À vous de jouer", "Your turn"},
     {"turn_timer", "Tour de {0} : {1} s", "{0}'s turn: {1} s"},
+    {"battle_close_menu", "Combat lancé : fermez le menu pour le rejoindre", "Battle started: close the menu to join it"},
     {"duo_parry", "Parade en duo ! +{1} PA ({0})", "Duo parry! +{1} AP ({0})"},
     {"turn_forced", "Temps écoulé : {0} attaque automatiquement", "Time is up: {0} attacks automatically"},
     // Aperçu de l'action que prépare un autre joueur pendant son tour ({1} : action, {2} : cibles)

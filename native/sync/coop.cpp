@@ -303,6 +303,7 @@ struct State {
     int defense_try_logs = 0;                              // diagnostic : appuis de défense du propriétaire journalisés
     int shoot_input_logs = 0;                              // diagnostic : tirs en visée libre journalisés
     int fa_part_logs = 0;   // journal coop_free_aim_part (plafonné)
+    bool menu_wait_logged = false;   // combat de l'hôte en attente : menu du jeu ouvert ici
     double fa_diag_at = -1;                                // diagnostic : contextes 0,5 s après le début d'une visée libre d'ici
     bool enemy_turn = false;                               // tour en cours : un ennemi (tous les rôles)
     int imc_logs = 0;                                      // diagnostic : contextes d'entrée au début des tours ennemis
@@ -3767,6 +3768,16 @@ void start_pending_battle()
     // (écran d'avertissement), ces appels ont figé le jeu entier (4 runs clients sur ~20, 2026-10-19).
     if (!game::world_pawn()) { s.world_ready_s = 0; return; }
     const bool ready = game::controller() && !game::map_change_in_progress() && !game::main_menu();
+    // Menu du jeu ouvert ici (équipe, pictos, pause : jeu en pause) : lancer le combat dedans a figé le jeu de TOTOFFF
+    // (2026-10-24, Lune déformée dans l'écran des pictos). On attend sa fermeture, avec un message.
+    const bool in_menu = game::pause_menu_visible();   // pas IsGamePaused : la barrière narrative met aussi le jeu en pause
+    if (in_menu) {
+        ui::set_status("battle_menu", "battle_close_menu");
+        if (!s.menu_wait_logged) { s.menu_wait_logged = true; bump("battle_starts_waiting_menu"); log().write("coop_battle_wait_menu", JsonObj()); }
+        s.world_ready_s = 0;
+        return;
+    }
+    if (s.menu_wait_logged) { s.menu_wait_logged = false; ui::clear_status("battle_menu"); }
     s.world_ready_s = ready ? s.world_ready_s + kStep : 0;
     if (s.world_ready_s < 5.0) return;
     const proto::BattleStart bs = *s.pending_start;

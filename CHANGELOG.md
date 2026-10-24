@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.19] - 2026-10-24
+
+### Corrections
+- Combat lancé par l'hôte pendant que l'autre joueur est dans un menu (équipe, pictos…) : son jeu ne se fige plus ; un
+  message lui demande de fermer le menu, puis il rejoint le combat.
+
 ## [0.6.18] - 2026-10-24
 
 ### Ajouts
@@ -200,7 +206,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.18...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.19...HEAD
+[0.6.19]: https://github.com/kipavy/e33-coop/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/kipavy/e33-coop/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/kipavy/e33-coop/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/kipavy/e33-coop/compare/v0.6.15...v0.6.16
