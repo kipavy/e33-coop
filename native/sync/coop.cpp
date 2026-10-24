@@ -3558,6 +3558,13 @@ static void defense_context_watch()
         ++logs;
         log().write("coop_imc_change", JsonObj().add("imc", ue::to_utf8(names[i])).add("active", now >= 0).add("priority", now)
                                            .add("input_enabled", s.input_enabled), s.battle.turn);
+        // Contexte de défense ouvert : ses touches (une fois), widgets CommonUI activés et type d'entrée (manette ?).
+        if (i == 0 && now >= 0) {
+            static bool mapped = false;
+            JsonObj o;
+            if (!mapped) { mapped = true; o.add("mappings", game::imc_mappings(imcs[0])); }
+            log().write("coop_defense_ui_state", o.add("input_type", game::common_input_type()).add("widgets", game::active_common_widgets()), s.battle.turn);
+        }
     }
     UObject* ctrl = game::controller();
     const int bound = ctrl ? (ue::get_bool(ctrl, STR("IsDefenseInputBound")) ? 1 : 0) : -1;

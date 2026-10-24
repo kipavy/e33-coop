@@ -38,6 +38,10 @@ UObject* save_manager();
 UObject* main_menu();         // WBP_MM_MainMenu_C s'il existe
 UObject* world_pawn();        // pion d'exploration (BP_jRPG_Character_World_C) : nul au démarrage et au menu ; sans ProcessEvent
 UObject* input_subsystem();   // sous-système Enhanced Input du joueur local (contextes d'entrée) ; FindFirstOf, pas à chaque image
+// Diagnostic : touches d'un contexte d'entrée (« IA_x=Key;… ») ; widgets CommonUI activés ; type d'entrée courant (0 souris/clavier, 1 tactile, 2 manette).
+std::string imc_mappings(UObject* imc);
+std::string active_common_widgets();
+int common_input_type();
 bool map_change_in_progress();
 bool in_battle();
 

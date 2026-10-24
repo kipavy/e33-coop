@@ -1300,3 +1300,60 @@ bool economy_apply(const std::string& key, int64_t delta, std::string& err)
 }
 
 } // namespace e33::game
+
+namespace e33::game {
+
+// Diagnostic (parade du client à la manette) : liste « action=touche » d'un contexte Enhanced Input (membre Mappings).
+std::string imc_mappings(UObject* imc)
+{
+    if (!imc) return "";
+    auto* ap = CastField<FArrayProperty>(ue::prop(imc, STR("Mappings")));
+    if (!ap) return "?";
+    auto* inner = CastField<FStructProperty>(ap->GetInner());
+    if (!inner) return "?";
+    UStruct* st = inner->GetStruct();
+    FProperty* action = ue::struct_member(st, STR("Action"));
+    auto* key = CastField<FStructProperty>(ue::struct_member(st, STR("Key")));
+    FProperty* key_name = key ? ue::struct_member(key->GetStruct(), STR("KeyName")) : nullptr;
+    if (!action || !key || !key_name) return "?";
+    auto* arr = static_cast<FScriptArray*>(ap->ContainerPtrToValuePtr<void>(imc));
+    auto* data = static_cast<uint8_t*>(arr->GetData());
+    std::string out;
+    for (int32 i = 0; i < arr->Num(); ++i) {
+        uint8_t* m = data + static_cast<size_t>(i) * inner->GetSize();
+        UObject* a = *static_cast<UObject**>(action->ContainerPtrToValuePtr<void>(m));
+        void* k = key->ContainerPtrToValuePtr<void>(m);
+        FName* kn = static_cast<FName*>(key_name->ContainerPtrToValuePtr<void>(k));
+        if (!out.empty()) out += ";";
+        out += (a ? ue::short_name(a) : std::string("null")) + "=" + ue::to_utf8(kn->ToString());
+    }
+    return out;
+}
+
+// Widgets CommonUI activés (ils peuvent prendre des boutons de la manette avant le jeu).
+std::string active_common_widgets()
+{
+    std::vector<UObject*> all;
+    UObjectGlobals::FindAllOf(STR("CommonActivatableWidget"), all);
+    std::string out;
+    int n = 0;
+    for (UObject* w : all) {
+        if (!w || n >= 30) continue;
+        ue::Call c(w, STR("IsActivated"));
+        if (!c || !c.invoke() || !c.out_bool(STR("ReturnValue"))) continue;
+        ++n;
+        if (!out.empty()) out += ",";
+        out += ue::short_name(w->GetClassPrivate());
+    }
+    return out;
+}
+
+int common_input_type()
+{
+    UObject* sub = UObjectGlobals::FindFirstOf(STR("CommonInputSubsystem"));
+    ue::Call c(sub, STR("GetCurrentInputType"));
+    if (!c || !c.invoke()) return -1;
+    return static_cast<int>(c.out_int(STR("ReturnValue"), -1));
+}
+
+} // namespace e33::game
