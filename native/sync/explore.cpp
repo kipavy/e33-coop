@@ -1152,6 +1152,13 @@ std::optional<int> context_priority(UObject* sub, UObject* imc)
     return static_cast<int>(has.out_int(STR("OutFoundPriority")));
 }
 
+// -e33locomotioninbattle=1 : ancien comportement (contextes rendus même en combat), pour le scénario « avant ».
+bool restore_in_battle()
+{
+    static const bool v = cmdline::arg(L"e33locomotioninbattle") == L"1";
+    return v;
+}
+
 bool context_wanted_locked(size_t i)
 {
     const bool follower = sharing() && !is_pilot() && !game::in_battle();
@@ -1182,6 +1189,10 @@ void movement_lock_tick()
         } else if (!lock) {
             auto it = s.removed_locomotion.find(imc);
             if (it == s.removed_locomotion.end()) continue;
+            // Jamais rendus en combat : le jeu y retire lui-même les contextes d'exploration et les remet à la fin.
+            // Rendu en combat, IMC_Locomotion_Default_ALS (priorité 1) passait devant IMC_BattleDefense (0) et prenait
+            // RB (parade) et RT (contres, tir de la visée libre) à la manette du client (essai à deux PC du 2026-10-24).
+            if (game::in_battle() && !restore_in_battle()) continue;
             if (!prio) {
                 ue::Call add(sub, STR("AddMappingContext"));
                 if (!add) return;

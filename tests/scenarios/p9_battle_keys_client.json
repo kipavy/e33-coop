@@ -1,0 +1,18 @@
+{
+  "name": "p9_battle_keys_client",
+  "description": "Parade du client à la manette (essai à deux PC du 2026-10-24 : RB et RT sans effet, B et le clavier oui). Vrai jeu client (Maelle), suiveur en exploration (contextes de déplacement retirés par le mod), face au faux hôte de p3_party_client. Le mod rendait ces contextes au début du combat, où le jeu les retire. Correctif : à chaque coup reçu par Maelle, RB (parade à la manette) et E (clavier) vont au contexte de défense.",
+  "save": "e33coop-test/TEST_B",
+  "encounter": "SM_Lancelier_Alpha",
+  "party": ["Verso", "Maelle", "Lune"],
+  "setup": { "Maelle": { "dead": true }, "Verso": { "dead": true } },
+  "timeout_s": 700,
+  "max_turns": 60,
+  "actions": [
+    { "type": "item", "item": "Consumable_Energy_Level2", "target": "auto" },
+    { "type": "skip" }
+  ],
+  "defense": ["fail"],
+  "launch_args": ["-e33role=client", "-e33connect=127.0.0.1:7777"],
+  "fakepeer": { "start": "before_game", "args": ["host", "--port", "7777", "--replay", "{repo}/tests/recordings/p3_party_host.jsonl", "--timeout", "700"] },
+  "expect": { "battle_end": "any", "rb_to_defense": ">=1", "rb_elsewhere": "0", "e_elsewhere": "0" }
+}

@@ -102,7 +102,6 @@ struct Scenario {
     // "spam_local_input": true : pendant le tour de chaque héros d'un autre joueur (avant son action), le « joueur » d'ici
     // appuie sur des touches de menu et clique (vraies entrées Windows) ; tout effet est une fuite (local_input_leaks).
     bool spam_local_input = false;
-    bool stray_targeting = false;         // tour ennemi : ciblage réenregistré (comme le jeu chez le client, 2026-10-24)
     double spam_every_s = 0.12;
 };
 
@@ -246,7 +245,6 @@ bool load_scenario(const std::wstring& path, std::string& err)
     s.end_on_session_end = v["end_on_session_end"].as_bool(false);
     for (size_t i = 0; i < v["explore"].size(); ++i) s.explore.push_back(v["explore"][i]);
     s.spam_local_input = v["spam_local_input"].as_bool(false);
-    s.stray_targeting = v["stray_targeting"].as_bool(false);
     s.spam_every_s = v["spam_every_s"].as_number(0.12);
     if (s.save.empty() && !s.join && !s.new_game) { err = "scenario needs save (or join, or new_game)"; return false; }
     if (s.encounter.empty() && s.explore.empty()) { err = "scenario needs encounter (or explore steps)"; return false; }
@@ -816,16 +814,6 @@ void subscribe()
             g.pause_until = g.t + g.sc.pause_s;
             ++g.metrics["pauses_opened"];
             log().write("tr_pause_open", JsonObj(), g.turn);
-        }
-        // Ciblage laissé enregistré au début d'un tour ennemi (vu chez le client : RegisterTargetingInput du jeu juste
-        // avant le tour ennemi) : contexte IMC_Battle_Targeting (priorité 1000) devant la défense.
-        if (g.sc.stray_targeting && !game::is_player(ch) && !counter) {
-            UObject* bs = ue::get_object(bm, STR("BattleScreenWidget"));
-            ue::Call c(bs, STR("RegisterTargetingInput"));
-            const bool called = c && c.invoke();
-            ++g.metrics["stray_targeting_injected"];
-            log().write("tr_stray_targeting", JsonObj().add("called", called).add("registered", ue::get_bool(bs, STR("IsTargetingRegistered")))
-                                                  .add("rb", game::top_context_for_key("Gamepad_RightShoulder")), g.turn);
         }
         if (game::is_player(ch) && !counter && coop::controls_spot(game::spot(ch))) {
             ++g.player_turns;
