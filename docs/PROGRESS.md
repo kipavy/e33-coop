@@ -29,7 +29,7 @@ Journaux hôte (01:01-01:51) et client (jusqu'à 01:19) relus désynchro par dé
 - **Corrigé** :
   - visée libre du client ouverte avant que le mod active le combat (combat déjà engagé, 4,6 s d'attente du monde) : tirs jamais publiés, dégâts annulés par la réparation. Combat engagé ici -> mod actif sans les 5 s ; visée d'ici détectée par `IsAiming` (`coop_free_aim_late_start`) ;
   - `LoadCharacterState` **ajoute** l'XP reçue (Frey 769 -> 1538, Lune niveau 18 chez l'hôte seulement) : XP et niveau gardés d'ici (`coop_build_xp_kept`) et hors empreinte de build (chaque fin de combat passait pour une modification : annulations « pas à vous » à tort) ; client : n'envoie que ses personnages ; hôte : annulation depuis le dernier état accepté (avant : réappliquait l'état courant) ;
-  - tirs du suiveur sur les objets du monde publiés et relayés (resynchros `interacted2` du 24/10) ; choix de dialogue en attente abandonnés au changement de niveau (exploration « jamais au calme » 120 s) ;
+  - choix de dialogue en attente abandonnés au changement de niveau (exploration « jamais au calme » 120 s) ;
   - ordre des tours décalé d'un cran (engagement différent, mort d'un seul côté) : commande du même héros au tour ±1 reprise (`coop_command_turn_shift`) ; combats 7 et 9 bloqués 30 s puis abandonnés ;
   - tirages d'`ActivateBuff` pendant la réparation hors rangs du tour (`repair_draws_skipped`) ; `coop_defense_imposed.started`.
 - **Ouvert (conception)** :
