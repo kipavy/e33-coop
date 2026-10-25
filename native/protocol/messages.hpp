@@ -143,6 +143,11 @@ struct Draws {                            // hôte -> clients : tirages de gamep
 };
 struct BuffState { std::string cls; int32_t stacks = 0; int32_t turns = 0; bool permanent = false; };
 struct MechField { std::string name; int64_t value = 0; };   // "Composant.Champ" (ou Champ[i] pour un tableau)
+// Zone de visée libre d'un ennemi (BP_FreeAimTargetPart_C), rang = indice dans FreeAimTargetParts (D37) :
+// collision (ECollisionEnabled, 0 = aucune) de chacune de ses formes (ValidChildren). Zone vide/absente : present = false.
+inline constexpr uint16_t kMaxParts = 32;
+inline constexpr uint16_t kMaxPartShapes = 16;
+struct PartState { bool present = false; std::vector<uint8_t> coll; };
 struct UnitState {
     Unit unit;
     std::string cls;                      // nom de classe (logs)
@@ -153,6 +158,7 @@ struct UnitState {
     bool dead = false;
     std::vector<BuffState> buffs;
     std::vector<MechField> mech;          // mécanique propre (perfection, posture, taches…) : champs entiers du composant
+    std::vector<PartState> parts;         // ennemis : zones de visée libre (si StateSync.parts_known)
 };
 // État complet du combat au début d'un tour (hôte -> clients). Le client ne corrige que ce qui diffère.
 struct StateSync {
@@ -163,6 +169,7 @@ struct StateSync {
     int32_t gradient_charges = 0;
     double gradient_progress = 0;
     std::vector<std::pair<std::string, std::string>> class_paths;   // classe de buff -> chemin complet (champ final facultatif, 2026-10-24 : chargement chez un client qui ne l'a pas)
+    bool parts_known = false;             // section des zones de visée libre présente (champ final facultatif, 2026-10-25, D37)
 };
 struct LootEntry { std::string item; int32_t quantity = 0; };
 struct BattleRewards {
@@ -349,5 +356,7 @@ void encode(const Message& m, wire::Writer& w);
 std::optional<Message> decode(wire::Reader& r, std::string& err);
 // Description JSON compacte (pour les logs).
 std::string to_json(const Message& m);
+// Zones de visée libre en texte court (logs) : collision de chaque forme, "-" = zone absente, "_" = sans forme. Ex. "33 00 -".
+std::string parts_str(const std::vector<PartState>& parts);
 
 } // namespace e33::proto

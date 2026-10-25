@@ -29,6 +29,11 @@ static std::vector<proto::Message> samples()
     us.buffs = {{"BP_BattleBuff_Burn_C", 1, 3, false}, {"BP_BattleBuff_Shell_C", 2, 0, true}};
     us.mech = {{"BP_PerfectionMechanicComponent_C.Perfection", 42}, {"BP_StainHolderComponent_C.Stains[0]", 3}};
     ss.units = {us, proto::UnitState{{proto::ActorKind::Enemy, 0}, "BP_Enemy", 5.5, 0, 0, 0, true, {}}};
+    // Avec zones de visée libre (D37) : point faible coupé, zone absente, zone sans forme.
+    proto::StateSync sp = ss; sp.parts_known = true;
+    sp.units[1].dead = false; sp.units[1].parts = {{true, {3, 3}}, {true, {0, 1}}, {false, {}}, {true, {}}};
+    sp.class_paths = {{"BP_LU_X_C", "/Game/X/BP_LU_X.BP_LU_X_C"}};
+    proto::StateSync sp_empty = ss; sp_empty.parts_known = true;   // section présente, aucun ennemi à zones
     proto::BattleRewards rw; rw.battle_id = 7; rw.xp = 521235; rw.gold = 10448; rw.loot = {{"Lumicolor", 5}, {"ChromaCatalyst", 2}};
     h.join = true;
     proto::ActionCommand forced = ac; forced.forced = true;
@@ -40,7 +45,7 @@ static std::vector<proto::Message> samples()
     return {h, proto::Welcome{1, 99}, proto::Reject{proto::RejectReason::GameBuildMismatch, "host 1 vs client 2"}, proto::Bye{"bye"},
             proto::Ping{5}, proto::Pong{6}, bs, proto::TurnStart{7, 3, proto::ActorKind::Hero, 1, "BP_Maelle"}, ac, dq, dr,
             proto::StateHash{7, 3, 0xDEADBEEFCAFEull}, proto::BattleEnd{7, 1}, proto::Draws{7, 3, {{0xABCD1234u, 0, 2.0}, {7u, 1, 0.25}}},
-            proto::ComboResult{7, 3, 1, 2, true, true, 880}, proto::ComboResult{7, 3, 1, 3, false, false, proto::kNoPress}, ss, rw,
+            proto::ComboResult{7, 3, 1, 2, true, true, 880}, proto::ComboResult{7, 3, 1, 3, false, false, proto::kNoPress}, ss, sp, sp_empty, rw,
             proto::FreeAimEvent{7, 3, 2, proto::FreeAimKind::Shot, 4, 3900, -32163.5, 16193.25, 1188.0, {proto::ActorKind::Enemy, proto::kAutoSpot}},
             wb, proto::SaveOffer{3, 438435, 0x1122334455667788ull, "Level_SpringMeadows_Main_V2"}, ch, proto::JoinWait{"battle"},
             proto::JoinReady{3, "Level_SpringMeadows_Main_V2"}, proto::PilotState{0, 12, "Level_Camp_Main", -2191.5, -1232, 192, 120, 300, -10, 0},
@@ -219,6 +224,55 @@ static void test_compat()
     }
 }
 
+// StateSync et zones de visée libre (D37, 2026-10-25) : sans zones, octets inchangés (enregistrements et hash d'avant) ;
+// avec, section finale ajoutée après class_paths ; valeurs hors bornes refusées.
+static void test_state_parts()
+{
+    proto::StateSync old; old.battle_id = 3; old.turn = 2;
+    proto::UnitState e; e.unit = {proto::ActorKind::Enemy, 1}; e.cls = "BP_Portier_C"; e.hp = 2524;
+    old.units = {e};
+    wire::Writer wo; proto::encode(old, wo);
+    {
+        wire::Reader r(wo.data().data(), wo.size()); std::string err;
+        auto m = proto::decode(r, err);
+        CHECK(m.has_value());
+        if (m) CHECK(!std::get<proto::StateSync>(*m).parts_known);
+        CHECK(proto::to_json(old).find("parts") == std::string::npos);
+    }
+    proto::StateSync neu = old; neu.parts_known = true; neu.units[0].parts = {{true, {0, 0}}, {true, {1}}};
+    wire::Writer wn; proto::encode(neu, wn);
+    CHECK(wn.size() > wo.size());
+    bool prefix = wn.size() > wo.size();
+    for (size_t i = 4; prefix && i < wo.size(); ++i) prefix = wn.data()[i] == wo.data()[i];   // après type + longueur
+    CHECK(prefix);
+    {
+        wire::Reader r(wn.data().data(), wn.size()); std::string err;
+        auto m = proto::decode(r, err);
+        CHECK(m.has_value());
+        if (m) {
+            const auto& x = std::get<proto::StateSync>(*m);
+            CHECK(x.parts_known && x.units.size() == 1 && x.units[0].parts.size() == 2);
+            if (x.units.size() == 1 && x.units[0].parts.size() == 2) {
+                CHECK(x.units[0].parts[0].present && x.units[0].parts[0].coll == std::vector<uint8_t>({0, 0}));
+                CHECK(x.units[0].parts[1].coll == std::vector<uint8_t>({1}));
+            }
+        }
+        CHECK(proto::parts_str(neu.units[0].parts) == "00 1");
+    }
+    // Tronqué au milieu de la section : refusé.
+    for (size_t cut = wo.size() + 1; cut < wn.size(); ++cut) {
+        auto b = wn.data(); b.resize(cut);
+        const uint16_t len = static_cast<uint16_t>(cut - 4);
+        b[2] = static_cast<uint8_t>(len & 0xFF); b[3] = static_cast<uint8_t>(len >> 8);
+        wire::Reader r(b.data(), b.size()); std::string err;
+        CHECK(!proto::decode(r, err));
+    }
+    // Mode de collision hors bornes : refusé.
+    proto::StateSync bad = neu; bad.units[0].parts = {{true, {7}}};
+    wire::Writer wb; proto::encode(bad, wb);
+    { wire::Reader r(wb.data().data(), wb.size()); std::string err; CHECK(!proto::decode(r, err)); }
+}
+
 // Transport mémoire parfait (pour les tests de cycle de vie du lien).
 class Pipe : public net::Transport {
 public:
@@ -324,6 +378,7 @@ int main()
     test_link();
     test_link_fragments();
     test_compat();
+    test_state_parts();
     test_link_restart();
     test_link_busy();
     test_link_version();

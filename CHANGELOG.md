@@ -14,6 +14,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Corrections
+- Combat : les points faibles des ennemis touchés en visée libre sont remis comme chez l'hôte au tour suivant ; avant,
+  un point faible usé chez un seul joueur faisait diverger les dégâts des tirs suivants (PV d'ennemi différents).
+
 ## [0.6.34] - 2026-10-25
 
 ### Corrections
