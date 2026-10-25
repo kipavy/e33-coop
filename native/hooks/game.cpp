@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1538,6 +1539,84 @@ bool economy_apply(const std::string& key, int64_t delta, std::string& err)
     }
     err = "unknown key " + key;
     return false;
+}
+
+// --- Drapeaux persistants (D38) ---------------------------------------------------------------------
+// Dump du 2026-10-25 (BP_jRPG_GI_Custom.hpp) : NamedIDsStates TMap<UNamedID*, bool>, AllNamedIDs TArray<UNamedID*>,
+// WritePersistentFlag(NamedID, Value), GetAllNamedIDs(AllNamedIDs), FindNamedIDByGuid(Guid) ; UNamedID : Guid, Name.
+
+std::string named_id_name(UObject* id) { return id ? ue::to_utf8(id->GetName()) : std::string(); }
+
+bool named_id_guid(UObject* id, uint32_t out[4])
+{
+    FProperty* p = ue::prop(id, STR("Guid"));
+    if (!p || p->GetSize() != 16) return false;
+    std::memcpy(out, p->ContainerPtrToValuePtr<void>(id), 16);
+    return true;
+}
+
+namespace {
+bool named_id_matches(UObject* o, const std::string& name, const uint32_t* guid)
+{
+    if (!o) return false;
+    if (!name.empty() && named_id_name(o) == name) return true;
+    uint32_t g[4]{};
+    return guid && (guid[0] | guid[1] | guid[2] | guid[3]) && named_id_guid(o, g) && std::memcmp(g, guid, 16) == 0;
+}
+} // namespace
+
+UObject* find_named_id(const std::string& name, const uint32_t* guid, std::string& how)
+{
+    UObject* g = gi();
+    if (!g) { how = "no_gi"; return nullptr; }
+    std::vector<std::pair<void*, void*>> pairs;
+    if (reflect::map_pairs(g, STR("NamedIDsStates"), pairs, nullptr, nullptr))
+        for (auto& [k, v] : pairs)
+            if (UObject* o = *static_cast<UObject**>(k); named_id_matches(o, name, guid)) { how = "states"; return o; }
+    if (auto* ap = CastField<FArrayProperty>(ue::prop(g, STR("AllNamedIDs")))) {
+        auto* arr = ap->ContainerPtrToValuePtr<FScriptArray>(g);
+        auto** data = arr ? static_cast<UObject**>(arr->GetData()) : nullptr;
+        for (int32 i = 0; data && i < arr->Num(); ++i)
+            if (named_id_matches(data[i], name, guid)) { how = "all_field"; return data[i]; }
+    }
+    {
+        ModCall mod;
+        ue::Call c(g, STR("GetAllNamedIDs"));
+        if (c && c.invoke())
+            for (UObject* o : c.out_object_array(STR("AllNamedIDs")))
+                if (named_id_matches(o, name, guid)) { how = "all_call"; return o; }
+    }
+    if (guid && (guid[0] | guid[1] | guid[2] | guid[3])) {
+        ModCall mod;
+        ue::Call c(g, STR("FindNamedIDByGuid"));
+        if (c && c.param_size(STR("Guid")) == 16) {
+            c.set_raw(STR("Guid"), guid).invoke();
+            if (UObject* o = c.out_object(STR("ReturnValue"))) { how = "guid"; return o; }
+        }
+    }
+    how = "not_found";
+    return nullptr;
+}
+
+int persistent_flag(UObject* id)
+{
+    std::vector<std::pair<void*, void*>> pairs;
+    FProperty* vp = nullptr;
+    if (!id || !reflect::map_pairs(gi(), STR("NamedIDsStates"), pairs, nullptr, &vp)) return -1;
+    auto* bp = CastField<FBoolProperty>(vp);
+    for (auto& [k, v] : pairs)
+        if (*static_cast<UObject**>(k) == id) return bp ? (bp->GetPropertyValue(v) ? 1 : 0) : (*static_cast<uint8_t*>(v) ? 1 : 0);
+    return -1;
+}
+
+bool write_persistent_flag(UObject* id, bool value)
+{
+    if (!id) return false;
+    ModCall mod;   // notre hook de WritePersistentFlag ne republie pas cette écriture
+    ue::Call c(gi(), STR("WritePersistentFlag"));
+    if (!c) return false;
+    c.set_object(STR("NamedID"), id).set_bool(STR("Value"), value).invoke();
+    return persistent_flag(id) == (value ? 1 : 0);
 }
 
 } // namespace e33::game

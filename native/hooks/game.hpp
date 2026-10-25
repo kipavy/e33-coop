@@ -240,6 +240,15 @@ void economy_sample(std::map<std::string, int64_t>& out);
 // Applique une variation avec les fonctions du jeu (ReceiveGold / TrySpendGold, AddItemToInventory / RemoveItemFromInventory, ChangeLevel).
 bool economy_apply(const std::string& key, int64_t delta, std::string& err);
 
+// --- Drapeaux persistants (GI.NamedIDsStates : TMap<UNamedID*, bool>, D38) ---
+std::string named_id_name(UObject* id);                    // nom de l'objet (clé des feuilles « flags » de l'empreinte)
+bool named_id_guid(UObject* id, uint32_t out[4]);          // UNamedID.Guid
+// UNamedID par nom (clés de NamedIDsStates, puis GI.AllNamedIDs, puis GetAllNamedIDs), sinon par Guid (FindNamedIDByGuid) ;
+// how : où il a été trouvé (journal). guid nul : pas de repli par Guid.
+UObject* find_named_id(const std::string& name, const uint32_t* guid, std::string& how);
+int persistent_flag(UObject* id);                          // -1 absent de NamedIDsStates, sinon 0 / 1 (lecture mémoire)
+bool write_persistent_flag(UObject* id, bool value);       // GI.WritePersistentFlag (ModCall), vrai si la valeur est lue ensuite
+
 // Visée libre
 inline const wchar_t* const FreeAimComp = L"/Game/Gameplay/FreeAim/BP_FreeAimShooterBattleComponent.BP_FreeAimShooterBattleComponent_C:";
 inline const wchar_t* const FreeAimProjectile = L"/Game/Gameplay/WorldSkills/BP_FreeAimProjectile_Base.BP_FreeAimProjectile_Base_C:";

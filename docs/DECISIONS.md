@@ -584,3 +584,35 @@ part chez l'hôte par la demande D34 ; `StartBattle` appelé par le mod marche s
 **Remise en cause si** : combat lancé chez l'hôte suiveur sans `coop_battle_request_received` (autre déclencheur que la
 capsule : zone de transition, embuscade scriptée) ; ou ennemis restés passifs chez l'hôte après la reprise de la main
 (`coop_world_enemies_restored` count 0 alors que des ennemis avaient été rendus passifs).
+
+## D38 — Drapeaux du pilote recopiés, réparation sur place avant l'instantané (2026-10-25, audit de la session du 25/10)
+
+**Constat** (session du 25/10, 01h) : chaque écart d'empreinte d'exploration finissait en instantané complet
+(`ResyncRequest` : 8-9 s d'écran figé puis téléportation), même pour un écart d'or, d'objets ou d'un seul drapeau.
+Cas relevé : `NamedIDsStates{NID_CuratorTutorial}` posé chez l'hôte pilote par une branche de dialogue / d'interface
+vue une seule fois, jamais chez le suiveur (aucun rejeu ne la traverse) -> partie « flags » différente, instantané.
+
+**Décision** :
+1. **Drapeaux du pilote** : hook après `BP_jRPG_GI_Custom_C:WritePersistentFlag` ; chez le pilote (pas pendant un rejeu,
+   ni un appel du mod, ni un chargement), message `FlagSet` (type 72 : nom du `UNamedID`, son Guid, valeur), relayé par
+   l'hôte depuis le pilote seulement (comme `WorldInteract`). Le suiveur l'écrit au point sûr (ni combat, ni chargement,
+   ni dialogue, ni cinématique) par `WritePersistentFlag`, après avoir retrouvé le `UNamedID` : par nom (clé des feuilles
+   de l'empreinte = `GetName`) dans `NamedIDsStates`, puis `GI.AllNamedIDs`, puis `GetAllNamedIDs`, sinon par Guid
+   (`FindNamedIDByGuid`). Valeur déjà égale : rien n'est écrit. Journal `coop_flag_mirrored` (found, how, ok).
+2. **Réparation sur place** : deux écarts de suite limités à `gold`, `inventory2`, `flags` -> le client demande les
+   feuilles de l'hôte (`WorldLeavesRequest` 73 / `WorldLeaves` 74, pages de 30 Ko au plus, fragmentées par le lien, D11)
+   et applique la différence au calme (`quiet(3)`, pas de menu pause ni de menu de jeu) : or et objets par
+   `economy_apply` (D13), niveaux d'équipement après les objets, drapeaux par `WritePersistentFlag`. Les objets de l'hôte
+   gardent leur casse d'origine (l'empreinte est en minuscules, D27 ; le niveau d'une instance se cherche par nom exact) ;
+   tenues et coiffures exclues comme dans l'empreinte. Un `touch()` après l'application : le relevé d'économie reprend sa
+   référence au lieu de renvoyer ces écarts à l'hôte. 2 s après, l'empreinte des parties réparées est comparée à celle de
+   l'hôte (dans `WorldLeaves`).
+3. **Repli** : instantané (ancien chemin) si l'hôte ne répond pas en 15 s (hôte plus ancien), si une écriture échoue
+   (drapeau présent ici seulement : `WritePersistentFlag` ne retire pas la clé ; niveau d'une arme absente chez l'hôte), ou
+   si l'empreinte diffère encore ; puis plus de réparation sur place pendant 5 min. Partie en écart hors de ces trois :
+   instantané directement. `interacted2` exclu : pas de fonction du jeu sûre pour marquer un objet comme utilisé.
+4. `-e33worldrepair=0` coupe le miroir des drapeaux et la réparation (ancien comportement).
+
+**Remise en cause si** : `coop_world_repair` result `still_differs` fréquent (écriture prise par le jeu mais empreinte
+différente : autre champ que ceux appliqués) ; drapeaux du pilote introuvables chez le suiveur (`coop_flag_mirrored`
+found false) ; ou effet visible d'un `WritePersistentFlag` écrit hors de sa branche (tutoriel, quête relancée).

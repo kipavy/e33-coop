@@ -147,6 +147,7 @@ void world_hash_tick()
     // Client : comparer la dernière empreinte de l'hôte une fois calme ici aussi.
     if (!s.pending_world) return;
     if (s.cj != S::ClientJoin::Joined && s.want_join) { s.pending_world.reset(); return; }
+    if (s.wr.st != S::Repair::St::None) return;   // réparation sur place en cours (D38) : comparée après
     if (s.now - s.pending_world_at > 45.0) {
         bump("world_hash_skipped");
         log().write("coop_world_hash_skipped", JsonObj().add("seq", s.pending_world->seq).add("why", "never quiet"));
@@ -231,25 +232,33 @@ void world_hash_tick()
     log().write("coop_world_hash_diff", diff_log);
     if (s.world_mismatch_streak >= 2) {
         s.world_mismatch_streak = 0;
-        bump("world_resyncs");
         // Diagnostic : toutes les feuilles locales des parties en écart (l'hôte journalise les siennes à la réception de
         // la demande, coop_world_leaves) : comparer les deux journaux hors ligne.
         for (const std::string& part : parts)
             if (auto it = leaves.find(part); it != leaves.end()) log_world_leaves(part, it->second, host.seq);
-        s.resync_parts = std::set<std::string>(parts.begin(), parts.end());
-        // Rechargement (5-6 s d'écran figé) jamais en plein mouvement : attendu jusqu'à l'arrêt (world_resync_tick).
-        // Ni en dialogue, cinématique ou combat : l'instantané arriverait à leur fin (chargement bloqué, 2026-10-23).
-        if (s.now - s.last_motion_at < 1.5 || !resync_calm()) {
-            if (s.resync_deferred.empty()) {
-                s.resync_deferred_since = s.now;
-                bump("resyncs_deferred_moving");
-                log().write("coop_world_resync_deferred", JsonObj().add("parts", differ));
-            }
-            s.resync_deferred = differ;
-            return;
-        }
-        send_world_resync(differ);
+        // D38 : écart limité à l'or, aux objets ou aux drapeaux -> réparation sur place d'abord (instantané : 8-9 s figé).
+        if (try_world_repair(differ, parts)) return;
+        start_resync(differ, parts);
     }
+}
+
+// Client : nouvel instantané demandé pour ces parties (au prochain arrêt, hors dialogue / cinématique / combat).
+void start_resync(const std::string& differ, const std::vector<std::string>& parts)
+{
+    bump("world_resyncs");
+    s.resync_parts = std::set<std::string>(parts.begin(), parts.end());
+    // Rechargement (5-6 s d'écran figé) jamais en plein mouvement : attendu jusqu'à l'arrêt (world_resync_tick).
+    // Ni en dialogue, cinématique ou combat : l'instantané arriverait à leur fin (chargement bloqué, 2026-10-23).
+    if (s.now - s.last_motion_at < 1.5 || !resync_calm()) {
+        if (s.resync_deferred.empty()) {
+            s.resync_deferred_since = s.now;
+            bump("resyncs_deferred_moving");
+            log().write("coop_world_resync_deferred", JsonObj().add("parts", differ));
+        }
+        s.resync_deferred = differ;
+        return;
+    }
+    send_world_resync(differ);
 }
 
 void send_world_resync(std::string differ)   // copie : l'appelant peut passer s.resync_deferred

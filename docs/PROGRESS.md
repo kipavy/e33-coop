@@ -23,6 +23,12 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 10. Meneur bloqué (diagnostic `coop_pilot_stuck`).
 11. Panneau Coop au clavier / manette (D25).
 
+## 2026-10-25 — drapeaux du pilote recopiés, réparation sur place (branche `feat/world-repair`, D38, non testé en jeu)
+
+- Suite de l'audit (point 4) : `WritePersistentFlag` du pilote publié (`FlagSet`, type 72) et écrit chez les suiveurs au point sûr (`coop_flag_set` / `coop_flag_mirrored`).
+- Écart limité à l'or, aux objets ou aux drapeaux : feuilles de l'hôte demandées (`WorldLeavesRequest` 73 / `WorldLeaves` 74) et différence appliquée sur place, vérifiée par l'empreinte ; instantané seulement en repli (`coop_world_repair` : applied / ok / still_differs / timeout / apply_failed ; compteurs `world_repairs_requested`, `world_repairs_in_place`, `world_repairs_failed`). `-e33worldrepair=0` : ancien comportement.
+- Vérifié : compilation et tests de protocole (CI). À vérifier à deux PC : résolution des `UNamedID` chez le suiveur, application des objets (casse), absence d'`EconomyDelta` renvoyé après une réparation.
+
 ## 2026-10-25, 12h — audit des désynchros de la session du 25/10 01h (branche `fix/desync-audit`, non testée en jeu)
 
 Journaux hôte (01:01-01:51) et client (jusqu'à 01:19) relus désynchro par désynchro ; hashes de l'hôte recalculés hors ligne.

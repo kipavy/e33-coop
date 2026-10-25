@@ -143,6 +143,15 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u8(static_cast<uint8_t>(x.kind));   // champ final facultatif
         } else if constexpr (std::is_same_v<T, DefeatChoice>) {
             w.u32(x.battle_id); w.u8(x.prompt); w.u8(x.yes);
+        } else if constexpr (std::is_same_v<T, FlagSet>) {
+            w.u32(x.seq); w.str(x.name); for (uint32_t g : x.guid) w.u32(g); w.boolean(x.value);
+        } else if constexpr (std::is_same_v<T, WorldLeavesRequest>) {
+            w.u32(x.seq); w.u16(static_cast<uint16_t>(x.parts.size()));
+            for (auto& p : x.parts) w.str(p);
+        } else if constexpr (std::is_same_v<T, WorldLeaves>) {
+            w.u32(x.seq); w.str(x.part); w.u64(x.hash); w.u16(x.page); w.u16(x.pages);
+            w.u16(static_cast<uint16_t>(x.leaves.size()));
+            for (auto& l : x.leaves) { w.str(l.key); w.str(l.value); }
         } else if constexpr (std::is_same_v<T, SceneSkip>) {
             w.u8(x.player); w.u32(x.seq); w.str(x.scene);
         } else if constexpr (std::is_same_v<T, BarrierRelease>) {
@@ -348,6 +357,25 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         x.cause = static_cast<SceneCause>(c); return finish(x);
     }
     case MsgType::DefeatChoice: { DefeatChoice x; x.battle_id = r.u32(); x.prompt = r.u8(); x.yes = r.u8(); if (x.prompt > 1 || x.yes > 1) r.fail(); return finish(x); }
+    case MsgType::FlagSet: {
+        FlagSet x; x.seq = r.u32(); x.name = r.str(256);
+        for (auto& g : x.guid) g = r.u32();
+        x.value = r.boolean();
+        return finish(x);
+    }
+    case MsgType::WorldLeavesRequest: {
+        WorldLeavesRequest x; x.seq = r.u32();
+        const uint16_t n = r.count(16);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) x.parts.push_back(r.str(64));
+        return finish(x);
+    }
+    case MsgType::WorldLeaves: {
+        WorldLeaves x; x.seq = r.u32(); x.part = r.str(64); x.hash = r.u64(); x.page = r.u16(); x.pages = r.u16();
+        if (x.pages == 0 || x.pages > 256 || x.page >= x.pages) r.fail();
+        const uint16_t n = r.count(8000);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) { LeafEntry l; l.key = r.str(256); l.value = r.str(64); x.leaves.push_back(std::move(l)); }
+        return finish(x);
+    }
     case MsgType::SceneSkip: {
         SceneSkip x; x.player = r.u8(); x.seq = r.u32(); x.scene = r.str(kMaxStr);
         if (x.player > 3) r.fail();
@@ -467,6 +495,9 @@ const char* type_name(MsgType t)
     case MsgType::SceneStart: return "SceneStart";
     case MsgType::SceneSkip: return "SceneSkip";
     case MsgType::DefeatChoice: return "DefeatChoice";
+    case MsgType::FlagSet: return "FlagSet";
+    case MsgType::WorldLeavesRequest: return "WorldLeavesRequest";
+    case MsgType::WorldLeaves: return "WorldLeaves";
     case MsgType::PauseState: return "PauseState";
     case MsgType::Owners: return "Owners";
     case MsgType::BattleReady: return "BattleReady";
@@ -495,7 +526,7 @@ MsgType type_of(const Message& m)
                                         MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
                                         MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta,
                                         MsgType::IntentPreview, MsgType::AimView, MsgType::MenuState, MsgType::SceneStart, MsgType::SceneSkip,
-                                        MsgType::DefeatChoice};
+                                        MsgType::DefeatChoice, MsgType::FlagSet, MsgType::WorldLeavesRequest, MsgType::WorldLeaves};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -617,6 +648,20 @@ std::string to_json(const Message& m)
             o.add("player", static_cast<int>(x.player)).add("seq", x.seq).add("scene", x.scene);
         } else if constexpr (std::is_same_v<T, DefeatChoice>) {
             o.add("battle", x.battle_id).add("prompt", static_cast<int>(x.prompt)).add("yes", static_cast<int>(x.yes));
+        } else if constexpr (std::is_same_v<T, FlagSet>) {
+            char g[40];
+            std::snprintf(g, sizeof g, "%08x%08x%08x%08x", x.guid[0], x.guid[1], x.guid[2], x.guid[3]);
+            o.add("seq", x.seq).add("name", x.name).add("guid", std::string(g)).add("value", x.value);
+        } else if constexpr (std::is_same_v<T, WorldLeavesRequest>) {
+            std::string ps;
+            for (auto& p : x.parts) ps += (ps.empty() ? "" : ",") + p;
+            o.add("seq", x.seq).add("parts", ps);
+        } else if constexpr (std::is_same_v<T, WorldLeaves>) {
+            char h[24];
+            std::snprintf(h, sizeof h, "%016llx", static_cast<unsigned long long>(x.hash));
+            std::string ls = "{";
+            for (size_t i = 0; i < x.leaves.size(); ++i) { if (i) ls += ","; ls += "\"" + json_escape(x.leaves[i].key) + "\":\"" + json_escape(x.leaves[i].value) + "\""; }
+            o.add("seq", x.seq).add("part", x.part).add("hash", std::string(h)).add("page", static_cast<int>(x.page)).add("pages", static_cast<int>(x.pages)).raw("leaves", ls + "}");
         }
         else if constexpr (std::is_same_v<T, PauseState>) { o.add("player", static_cast<int>(x.player)).add("paused", x.paused).add("in_battle", x.in_battle); }
         else if constexpr (std::is_same_v<T, Owners>) {
