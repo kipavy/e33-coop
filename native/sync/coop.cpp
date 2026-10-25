@@ -2819,14 +2819,6 @@ void subscribe()
         bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn_Phase2"), diag("phase2"));
         bus.pre(fn(game::path::BattleMgr, L"ProcessNextTurnStartListener"), diag("next_listener"));
     }
-    // D28 : le jeu ne retient le début de tour que si un « auditeur » (BattleListeners : effets, pictos…) s'inscrit
-    // comme dépendance : pour chacun, ProcessNextTurnStartListener remet le compteur à zéro (Reset), appelle son
-    // OnCharacterTurnStart, puis écoute s'il y a une dépendance (StartListenToDependencies). Sans auditeur inscrit
-    // (tours 9 et 16 du Lancelier Alpha, 2026-10-24), aucune écoute : une inscription faite plus tôt était effacée par
-    // Reset. Inscription juste après le premier Reset du tour ennemi : le jeu écoute alors et attend notre résolution.
-    // Client (même raison) : tour ennemi commencé ici avant l'état de l'hôte (vérification différée, -e33turndep) et que le jeu
-    // n'aurait pas retenu faute d'auditeur : il le retient maintenant jusqu'à l'état de l'hôte, jeu animé. Sinon le client
-    // jouait le tour en avance et figeait son image en attendant les défenses des héros de l'hôte (sens inverse de D28).
     // Amélioration d'arme faite par ce joueur (Curateur du camp) : envoyée aussitôt (builds, D13).
     bus.pre(L"/Game/Gameplay/Pictos/BP_ItemUpgradeSystem.BP_ItemUpgradeSystem_C:UpgradeWeaponFromInstance", [](HookCtx&, UFunction*) { builds::on_upgrade_pre(); });
     bus.post(L"/Game/Gameplay/Pictos/BP_ItemUpgradeSystem.BP_ItemUpgradeSystem_C:UpgradeWeaponFromInstance", [](HookCtx&, UFunction*) { builds::on_upgrade_post(); });
@@ -2838,6 +2830,14 @@ void subscribe()
         if (!item.empty() && !ch.empty()) builds::on_item_use_pre(item + "@" + ch);
     });
     bus.post(L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_InventoryManager.AC_jRPG_InventoryManager_C:UseItemOnCharacter", [](HookCtx&, UFunction*) { builds::on_item_use_post(); });
+    // D28 : le jeu ne retient le début de tour que si un « auditeur » (BattleListeners : effets, pictos…) s'inscrit
+    // comme dépendance : pour chacun, ProcessNextTurnStartListener remet le compteur à zéro (Reset), appelle son
+    // OnCharacterTurnStart, puis écoute s'il y a une dépendance (StartListenToDependencies). Sans auditeur inscrit
+    // (tours 9 et 16 du Lancelier Alpha, 2026-10-24), aucune écoute : une inscription faite plus tôt était effacée par
+    // Reset. Inscription juste après le premier Reset du tour ennemi : le jeu écoute alors et attend notre résolution.
+    // Client (même raison) : tour ennemi commencé ici avant l'état de l'hôte (vérification différée, -e33turndep) et que le jeu
+    // n'aurait pas retenu faute d'auditeur : il le retient maintenant jusqu'à l'état de l'hôte, jeu animé. Sinon le client
+    // jouait le tour en avance et figeait son image en attendant les défenses des héros de l'hôte (sens inverse de D28).
     bus.post(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:Reset", [](HookCtx& ctx, UFunction*) {
         auto& b = s.battle;
         if (!b.active || b.ending) return;
