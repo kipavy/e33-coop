@@ -82,6 +82,10 @@ void subscribe()
     // (Steam, 2 PC), l'hôte a ouvert avec Maelle et le client avec Verso, puis chacun attendait l'autre. On attend
     // donc le TurnStart de l'hôte et on remplace le paramètre Character avant que le tour ne commence.
     bus.pre(fn(game::path::BattleMgr, L"StartCharacterTurn"), [](HookCtx& ctx, UFunction* f) {
+        // Fin de l'action du tour précédent (D36) : tous ses coups sont passés (vu le 2026-10-25, combat 9 tour 15 : coups
+        // encore reçus après OnTurnEnded du boss, jamais après StartCharacterTurn). Publiée avant toute attente ici.
+        if (s.role != Role::Solo && s.battle.active && !s.battle.ending && !ue::get_bool(game::battle_manager(), STR("HasActiveCounterAttack")))
+            enemy_action_done("start_character_turn");
         if (s.role == Role::Host && s.turn_align && !s.battle.ending) {   // D28 : qui joue le prochain tour
             ++s.battle.sct_seq;
             auto** slot = static_cast<UObject**>(ue::param_address(ctx, f, STR("Character")));
@@ -787,6 +791,7 @@ void subscribe()
     bus.pre(fn(game::path::BattleMgr, L"StartBattleEndFlow"), [](HookCtx& ctx, UFunction* f) {
         if (!s.battle.active || s.battle.ending) return;
         const int result = static_cast<int>(ue::read_param_int(ctx, f, STR("BattleEndResult")).value_or(-1));
+        enemy_action_done("battle_end");   // D36 : action finie ici (combat fini pendant une attaque ennemie)
         s.battle.ending = true;
         s.battle.local_end = result;
         if (s.role == Role::Host) broadcast(proto::BattleEnd{s.battle.id, static_cast<uint8_t>(std::clamp(result, 0, 3))});

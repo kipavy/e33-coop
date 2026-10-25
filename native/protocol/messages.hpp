@@ -24,7 +24,7 @@ namespace e33::proto {
 //      aperçu de l'action en préparation (IntentPreview), caméra de la visée libre du propriétaire (AimView),
 //      état des menus de combat du propriétaire, rejoué dans les menus du jeu chez les autres (MenuState),
 //      scène (cinématique) commencée par le pilote et sa cause, déclenchée aussitôt chez les suiveurs (SceneStart), et passée
-//      ensemble (SceneSkip).
+//      ensemble (SceneSkip), fin d'une action ennemie chez un joueur et coups reçus par ses héros (EnemyActionDone, D36).
 inline constexpr uint16_t kProtocolVersion = 6;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
@@ -37,6 +37,7 @@ enum class MsgType : uint16_t {
     WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52, SceneStart = 53, SceneSkip = 54,
     Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
     BuildOffer = 65, BuildChunk = 66, EconomyDelta = 67, DefeatChoice = 68,
+    EnemyActionDone = 70,
 };
 
 const char* type_name(MsgType t);
@@ -132,6 +133,17 @@ struct DefenseResult {
     uint8_t spot = 0;
     uint16_t hit = 0;
     Defense result = Defense::Fail;
+};
+// Fin d'une action (tour d'un combattant, ennemi en général) chez l'émetteur, au début du tour suivant ici (D36) : nombre
+// de coups reçus pendant ce tour par chacun des héros qu'il contrôle. Une instance qui attend la défense du coup k d'un
+// de ces héros cesse d'attendre si le propriétaire en a reçu moins de k (coup absent chez lui). Émetteur -> hôte -> autres.
+struct HitCount { uint8_t spot = 0; uint16_t hits = 0; };
+struct EnemyActionDone {
+    uint32_t battle_id = 0;
+    uint32_t turn = 0;
+    Unit actor{ActorKind::Enemy, kAutoSpot};   // combattant dont c'était le tour (kAutoSpot : inconnu)
+    uint8_t player = 0;                   // émetteur, propriétaire des héros listés
+    std::vector<HitCount> hits;
 };
 struct StateHash { uint32_t battle_id = 0; uint32_t turn = 0; uint64_t hash = 0; };
 struct BattleEnd { uint32_t battle_id = 0; uint8_t result = 0; };
@@ -340,7 +352,7 @@ using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStar
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
                              WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
                              Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk, EconomyDelta,
-                             IntentPreview, AimView, MenuState, SceneStart, SceneSkip, DefeatChoice>;
+                             IntentPreview, AimView, MenuState, SceneStart, SceneSkip, DefeatChoice, EnemyActionDone>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

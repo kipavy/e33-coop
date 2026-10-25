@@ -23,9 +23,17 @@ uint8_t default_owner(int index, int spot, const std::string& name)
     return character_owner(name);   // même répartition qu'hors combat (builds) : le k-ième de l'équipe au k-ième joueur
 }
 
-void begin_turn_common()
+void begin_turn_common(UObject* actor)
 {
     ++s.battle.turn;
+    s.battle.turn_actor = actor_unit(actor);
+    // Fins d'action (D36) et états hachés des tours passés : bornés (quelques tours suffisent).
+    {
+        auto& od = s.battle.owner_done;
+        for (auto it = od.begin(); it != od.end();) it = it->first.first + 4 < s.battle.turn ? od.erase(it) : std::next(it);
+        auto& hs = s.battle.hashed_state;
+        for (auto it = hs.begin(); it != hs.end();) it = it->first + 8 < s.battle.turn ? hs.erase(it) : std::next(it);
+    }
     if (s.battle.turn == 1) setup_close();   // mise en place finie : tirages des tours à partir d'ici (D30)
     s.battle.draw_rank.clear();
     s.battle.hit_seq.clear();
@@ -126,7 +134,7 @@ void host_turn_start(UObject* actor)
             log().write("coop_hero_components", JsonObj().add("hero", game::hardcoded_name(h)).raw("components", comps + "]"));
         }
     }
-    begin_turn_common();
+    begin_turn_common(actor);
     b.ots_seq = b.sct_seq;   // alignement des tours ennemis : OnTurnStart de ce tour passé
     b.play_since = s.now;
     b.cur_enemy = !game::is_player(actor);
@@ -138,6 +146,7 @@ void host_turn_start(UObject* actor)
     b.local_hash[b.turn] = h;
     broadcast(proto::StateHash{b.id, b.turn, h});
     broadcast(st);
+    b.hashed_state[b.turn] = st;   // journal desync : l'état exact haché
     check_hash(b.turn);
 }
 
@@ -202,7 +211,7 @@ void client_turn_start(UObject* actor)
     if (b.dep_active && b.dep_turn != b.turn + 1) { bump("turn_deps_superseded"); dep_solve("superseded"); }
     if (b.dep_finish_pending) { b.dep_finish_pending = false; b.dep_start = {}; }
     b.ots_seq = b.sct_seq;
-    begin_turn_common();
+    begin_turn_common(actor);
     if (!b.ready_sent) {   // démarrage coordonné : l'hôte attend que chacun ait commencé ce combat
         b.ready_sent = true;
         for (auto& p : s.peers) send_to(p, proto::BattleReady{b.id, s.my_player_id});
@@ -340,6 +349,7 @@ void client_turn_finish(UObject* actor)
     if (b.turn == 1) check_start_mech(mine, host);
     uint64_t h = sync::hash(mine, au);
     const uint64_t host_hash = sync::hash(host, au);
+    proto::StateSync hashed = mine;   // état dont h est le hash (journal desync)
     if (h != host_hash) {
         // La simulation locale a divergé : log détaillé, puis resynchronisation depuis l'état de l'hôte.
         bump("raw_hash_diffs");
@@ -358,11 +368,13 @@ void client_turn_finish(UObject* actor)
         // l'hôte (même début de tour des deux côtés).
         const bool fixed = sync::hash(after, au) == sync::hash(target, au);
         h = deferred ? (fixed ? host_hash : sync::hash(after, au)) : sync::hash(after, au);
+        hashed = deferred && fixed ? host : after;
         log().write("coop_resync", JsonObj().raw("diff", sync::diff(mine, host)).raw("repaired", sync::repair_json(r)).add("deferred", deferred)
                                        .add("fixed", fixed).raw("remaining", fixed ? "[]" : sync::diff(after, target)), b.turn);
     }
     b.dep_start = {};
     b.local_hash[b.turn] = h;
+    b.hashed_state[b.turn] = std::move(hashed);
     for (auto& p : s.peers) send_to(p, proto::StateHash{b.id, b.turn, h});
     check_hash(b.turn);
     b.host_sync.erase(b.turn);
@@ -604,6 +616,9 @@ void on_turn_start(UObject* actor)
         s.early_turn_actor = actor;
         s.early_turn_at = s.now;
     }
+    // Fin de l'action du tour qui s'achève (D36) : coups reçus ici par nos héros, publiés avant l'attente éventuelle du
+    // début de tour de l'hôte (client). Repli : en général déjà publiée au StartCharacterTurn (coop_hooks).
+    enemy_action_done("turn_start");
     s.enemy_turn = actor && !game::is_player(actor);
     if (s.role != Role::Solo && s.battle.active) duo_parry_check();
     // Commandes de défense (parade, esquive, saut) : branchées par le jeu quand il lance lui-même le combat, pas

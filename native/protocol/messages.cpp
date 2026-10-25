@@ -145,6 +145,10 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.u32(x.battle_id); w.u8(x.prompt); w.u8(x.yes);
         } else if constexpr (std::is_same_v<T, SceneSkip>) {
             w.u8(x.player); w.u32(x.seq); w.str(x.scene);
+        } else if constexpr (std::is_same_v<T, EnemyActionDone>) {
+            w.u32(x.battle_id); w.u32(x.turn); w_unit(w, x.actor); w.u8(x.player);
+            w.u16(static_cast<uint16_t>(x.hits.size()));
+            for (auto& h : x.hits) { w.u8(h.spot); w.u16(h.hits); }
         } else if constexpr (std::is_same_v<T, BarrierRelease>) {
             w.u32(x.seq);
         } else if constexpr (std::is_same_v<T, PauseState>) {
@@ -353,6 +357,13 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         if (x.player > 3) r.fail();
         return finish(x);
     }
+    case MsgType::EnemyActionDone: {
+        EnemyActionDone x; x.battle_id = r.u32(); x.turn = r.u32(); x.actor = r_unit(r); x.player = r.u8();
+        if (x.player > 3) r.fail();
+        const uint16_t n = r.count(8);
+        for (uint16_t i = 0; i < n && r.ok(); ++i) { HitCount h; h.spot = r.u8(); h.hits = r.u16(); x.hits.push_back(h); }
+        return finish(x);
+    }
     case MsgType::PauseState: { PauseState x; x.player = r.u8(); x.paused = r.boolean(); x.in_battle = r.boolean(); if (x.player > 3) r.fail(); return finish(x); }
     case MsgType::Owners: {
         Owners x; x.battle_id = r.u32();
@@ -467,6 +478,7 @@ const char* type_name(MsgType t)
     case MsgType::SceneStart: return "SceneStart";
     case MsgType::SceneSkip: return "SceneSkip";
     case MsgType::DefeatChoice: return "DefeatChoice";
+    case MsgType::EnemyActionDone: return "EnemyActionDone";
     case MsgType::PauseState: return "PauseState";
     case MsgType::Owners: return "Owners";
     case MsgType::BattleReady: return "BattleReady";
@@ -495,7 +507,7 @@ MsgType type_of(const Message& m)
                                         MsgType::Owners, MsgType::BattleReady, MsgType::Roster, MsgType::WorldHash, MsgType::ResyncRequest,
                                         MsgType::BuildOffer, MsgType::BuildChunk, MsgType::EconomyDelta,
                                         MsgType::IntentPreview, MsgType::AimView, MsgType::MenuState, MsgType::SceneStart, MsgType::SceneSkip,
-                                        MsgType::DefeatChoice};
+                                        MsgType::DefeatChoice, MsgType::EnemyActionDone};
     static_assert(std::size(order) == std::variant_size_v<Message>);
     return order[m.index()];
 }
@@ -617,6 +629,10 @@ std::string to_json(const Message& m)
             o.add("player", static_cast<int>(x.player)).add("seq", x.seq).add("scene", x.scene);
         } else if constexpr (std::is_same_v<T, DefeatChoice>) {
             o.add("battle", x.battle_id).add("prompt", static_cast<int>(x.prompt)).add("yes", static_cast<int>(x.yes));
+        } else if constexpr (std::is_same_v<T, EnemyActionDone>) {
+            std::string hs = "{";
+            for (size_t i = 0; i < x.hits.size(); ++i) { if (i) hs += ","; hs += "\"" + std::to_string(x.hits[i].spot) + "\":" + std::to_string(x.hits[i].hits); }
+            o.add("battle", x.battle_id).add("turn", x.turn).raw("actor", unit_json(x.actor)).add("player", static_cast<int>(x.player)).raw("hits", hs + "}");
         }
         else if constexpr (std::is_same_v<T, PauseState>) { o.add("player", static_cast<int>(x.player)).add("paused", x.paused).add("in_battle", x.in_battle); }
         else if constexpr (std::is_same_v<T, Owners>) {

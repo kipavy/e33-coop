@@ -14,6 +14,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Corrections
+- Combat : moins de gels de 3 s quand un monstre attaque. Si l'attaque touche moins de fois votre héros chez vous que
+  chez l'autre joueur, son jeu n'attend plus votre parade pour les coups en trop.
+
 ## [0.6.34] - 2026-10-25
 
 ### Corrections

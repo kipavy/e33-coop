@@ -8,6 +8,8 @@
 //     ici (DefenseRequest.turn_ms après ce début), pas avant.
 //     --missing-hits N : seuls les N premiers coups de chaque tour ennemi existent ici ; au coup suivant, pas de réponse,
 //     un menu du tour suivant est envoyé (client déjà passé au tour suivant, vu le 2026-10-25 : 3 coups chez lui, 5 chez l'hôte).
+//     --done-hits N : seuls les N premiers coups de chaque tour ennemi existent ici ; au coup suivant, pas de réponse, la fin
+//     de l'action ici est annoncée (EnemyActionDone, D36), sans aucun signe du tour suivant (client encore dans le tour).
 //
 //   fakepeer host --port 7777 --replay r.jsonl [--log f.jsonl] [--timeout 900]
 //     Faux hôte face au vrai jeu client : rejoue les messages hôte->client d'un enregistrement, en attendant
@@ -101,6 +103,7 @@ struct Args {
     std::string net;           // réseau simulé (voir NetSim)
     double turn_lag = 0;       // client : --turn-lag S, tours ennemis commencés S secondes après l'hôte (voir run_client)
     int missing_hits = 0;      // client : --missing-hits N, coups au-delà du N-ième d'un tour sans réponse (voir run_client)
+    int done_hits = 0;         // client : --done-hits N, coups au-delà du N-ième sans réponse, fin d'action annoncée (D36)
     std::string in, out;       // slice : enregistrement source, tranche écrite
     int xfer = 0;              // slice : n° de l'instantané de départ
     double to = 1e18;          // slice : fin de la tranche (temps de l'enregistrement)
@@ -315,6 +318,9 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
     const int def_delay_every = std::max<int>(1, static_cast<int>(script["defense_delay_every"].as_int(1)));
     // --turn-lag : tours ennemis (TurnStart reçu) et début de chacun ici (StateHash renvoyé turn_lag s après celui de l'hôte).
     std::map<uint32_t, bool> enemy_turn;
+    std::map<uint32_t, proto::Unit> turn_actor;                       // --done-hits : combattant de chaque tour (TurnStart)
+    std::map<uint32_t, std::map<uint8_t, uint16_t>> done_answered;    // --done-hits : tour -> emplacement -> coups répondus
+    std::set<uint32_t> done_sent;                                     // --done-hits : tours dont la fin d'action est annoncée
     std::map<uint32_t, double> my_turn_at;
 
     std::vector<std::string> defense;
@@ -434,6 +440,7 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 if (!bs->world_enemy.empty()) ++counts["world_battles"];
             } else if (auto* ts = std::get_if<proto::TurnStart>(&m)) {
                 enemy_turn[ts->turn] = ts->kind == proto::ActorKind::Enemy;
+                turn_actor[ts->turn] = {ts->kind, ts->index};
                 bool my_hero_turn = false;
                 for (auto& o : owners) if (ts->kind == proto::ActorKind::Hero && o.spot == ts->index && o.player_id == my_id) my_hero_turn = true;
                 if (dc.is_object() && !disconnected && counts["disconnects"] == 0 && ts->turn >= static_cast<uint32_t>(dc["at_turn"].as_int(3)) &&
@@ -608,6 +615,25 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++turns_played;
             } else if (auto* dq = std::get_if<proto::DefenseRequest>(&m)) {
                 if (stuck) continue;
+                if (a.done_hits > 0) {
+                    // Action finie ici après N coups : fin d'action annoncée (une fois par tour), coups suivants sans réponse.
+                    if (done_sent.count(dq->turn)) { ++counts["hits_after_done"]; continue; }
+                    auto& answered = done_answered[dq->turn];
+                    if (dq->hit > a.done_hits) {
+                        proto::EnemyActionDone d;
+                        d.battle_id = dq->battle_id;
+                        d.turn = dq->turn;
+                        if (auto it = turn_actor.find(dq->turn); it != turn_actor.end()) d.actor = it->second;
+                        d.player = my_id;
+                        for (auto& o : owners) if (o.player_id == my_id && d.hits.size() < 8) d.hits.push_back({o.spot, answered[o.spot]});
+                        lp->send(d);
+                        done_sent.insert(dq->turn);
+                        ++counts["hits_missing"];
+                        ++counts["enemy_done_sent"];
+                        continue;
+                    }
+                    answered[dq->spot] = std::max<uint16_t>(answered[dq->spot], dq->hit);
+                }
                 if (a.missing_hits > 0 && dq->hit > a.missing_hits) {
                     // Coup absent ici : on est déjà au tour suivant (menu du héros ouvert), une seule fois par tour.
                     static std::set<uint32_t> ahead_sent;
@@ -662,6 +688,8 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                     ended = true;
                     ended_at = now_s();   // quelques secondes de plus pour les récompenses
                 }
+            } else if (std::get_if<proto::EnemyActionDone>(&m)) {
+                ++counts["enemy_done_received"];   // fin d'action de l'hôte (D36) : rien à attendre ici
             } else if (auto* dc = std::get_if<proto::DefeatChoice>(&m)) {
                 // Défaite (D33) : comme le vrai client, rien à choisir (il suit l'hôte chez lui ; ici, rien à faire).
                 ++counts[dc->prompt == 1 ? (dc->yes ? "defeat_reserve_yes" : "defeat_reserve_no") : (dc->yes ? "defeat_retries" : "defeat_abandons")];
@@ -1049,7 +1077,7 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                            std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg) ||
                            std::holds_alternative<proto::IntentPreview>(l.msg) || std::holds_alternative<proto::AimView>(l.msg) ||
                            std::holds_alternative<proto::MenuState>(l.msg) || std::holds_alternative<proto::SceneStart>(l.msg) ||
-                           std::holds_alternative<proto::SceneSkip>(l.msg)) {
+                           std::holds_alternative<proto::SceneSkip>(l.msg) || std::holds_alternative<proto::EnemyActionDone>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;
@@ -1225,6 +1253,7 @@ int main(int argc, char** argv)
         else if (k == "--net") a.net = v;
         else if (k == "--turn-lag") a.turn_lag = std::atof(v.c_str());
         else if (k == "--missing-hits") a.missing_hits = std::atoi(v.c_str());
+        else if (k == "--done-hits") a.done_hits = std::atoi(v.c_str());
         else if (k == "--pilot-gap") { const auto c = v.find(':'); a.pilot_gap_from = std::atof(v.c_str()); a.pilot_gap_to = c == std::string::npos ? 1e18 : std::atof(v.c_str() + c + 1); }
         else if (k == "--in") a.in = v;
         else if (k == "--out") a.out = v;

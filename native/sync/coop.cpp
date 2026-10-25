@@ -246,13 +246,19 @@ void check_hash(uint32_t turn)
     bump("hashes_compared");
     if (l->second != r->second) {
         bump("desyncs");
+        // État exact haché pour ce tour (photo du début de tour, ou état après réparation chez le client) ; à défaut, photo
+        // actuelle (state_from "now" : peut déjà différer de ce qui a été haché).
+        auto hs = s.battle.hashed_state.find(turn);
+        const bool hashed = hs != s.battle.hashed_state.end();
         log().write("desync", JsonObj().add("battle", s.battle.id).add("turn", turn).add("local", hex64(l->second)).add("remote", hex64(r->second))
-                                  .raw("state", proto::to_json(sync::snapshot(s.battle.id, turn))), turn);
+                                  .add("state_from", hashed ? "hashed" : "now")
+                                  .raw("state", proto::to_json(hashed ? hs->second : sync::snapshot(s.battle.id, turn))), turn);
     } else {
         log().write("hash_ok", JsonObj().add("battle", s.battle.id).add("hash", hex64(l->second)), turn);
     }
     s.battle.local_hash.erase(l);
     s.battle.remote_hash.erase(r);
+    s.battle.hashed_state.erase(turn);
 }
 
 // --- Réseau ------------------------------------------------------------------------------
@@ -428,6 +434,7 @@ bool handle_battle_common(Peer& p, proto::Message& m)
         else if (auto* x4 = std::get_if<proto::MenuState>(&m)) sign(x4->battle_id, x4->turn);
         else if (auto* x5 = std::get_if<proto::AimView>(&m)) sign(x5->battle_id, x5->turn);
         else if (auto* x6 = std::get_if<proto::DefenseResult>(&m)) sign(x6->battle_id, x6->turn);
+        else if (auto* x7 = std::get_if<proto::EnemyActionDone>(&m); x7 && x7->player == p.player_id) sign(x7->battle_id, x7->turn);
     }
     if (auto* ac = std::get_if<proto::ActionCommand>(&m)) {
         if (ac->battle_id != b.id) return true;
@@ -507,6 +514,7 @@ bool handle_battle_common(Peer& p, proto::Message& m)
         if (s.role == Role::Host) publish(*dr, &p);
         return true;
     }
+    if (auto* ed = std::get_if<proto::EnemyActionDone>(&m)) { on_enemy_action_done(p, *ed); return true; }
     if (auto* sh = std::get_if<proto::StateHash>(&m)) {
         if (sh->battle_id == b.id) {
             // Hôte : ce joueur a commencé ce tour chez lui (il répond de nouveau s'il était bloqué).
@@ -954,7 +962,7 @@ void read_settings()
 {
     for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages",
                           "session_ended", "players_left", "heroes_taken_over", "peer_timeouts", "sessions_rejected", "battle_ready_timeouts", "turn_timer_expired",
-                          "defense_timeouts", "defense_waits_owner_ahead", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
+                          "defense_timeouts", "defense_waits_owner_ahead", "defense_waits_owner_done", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
                           "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions",
                           "setup_draws_replaced", "setup_draws_natural", "start_mech_diffs", "raw_mech_diffs"})
         s.counters[c] = 0;
@@ -977,6 +985,7 @@ void read_settings()
     if (const std::wstring v = arg(L"e33readyidle"); !v.empty()) s.ready_idle_s = std::wcstod(v.c_str(), nullptr);
     if (const std::wstring v = arg(L"e33stuckturn"); !v.empty()) s.stuck_turn_s = std::wcstod(v.c_str(), nullptr);
     s.turn_align = arg(L"e33turnalign") != L"0";   // démarrage synchronisé des tours ennemis, par défaut depuis le 2026-10-24 (D28)
+    s.enemy_done = arg(L"e33enemydone") != L"0";   // fin d'action ennemie publiée et utilisée, par défaut depuis le 2026-10-25 (D36)
     s.my_name = ue::to_utf8(arg(L"e33name"));
     s.name_from_arg = !s.my_name.empty();
     ui::init();
