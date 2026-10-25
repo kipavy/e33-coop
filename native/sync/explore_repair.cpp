@@ -99,7 +99,8 @@ void apply_inventory(const std::vector<proto::LeafEntry>& host, ApplyOut& o)
         for (auto& [k, t] : mine) if (k.rfind(prefix, 0) == 0) keys.insert(k);
         for (auto& [k, t] : theirs) if (k.rfind(prefix, 0) == 0) keys.insert(k);
         for (const std::string& k : keys) {
-            const auto mi = mine.find(k), ti = theirs.find(k);
+            const auto mi = mine.find(k);
+            const auto ti = theirs.find(k);
             const int64_t mn = mi == mine.end() ? 0 : mi->second.n, hn = ti == theirs.end() ? 0 : ti->second.n;
             const int64_t d = hn - mn;
             if (d == 0) continue;
