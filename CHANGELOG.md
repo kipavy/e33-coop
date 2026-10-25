@@ -14,6 +14,21 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.34] - 2026-10-25
+
+### Corrections
+- Combat : plus de combat figé puis abandonné quand l'ordre des tours diffère d'un cran entre les deux joueurs
+  (combat engagé différemment, héros mort chez un seul) ; l'action du héros est retrouvée.
+- Combat : les tirs en visée libre faits dès le début d'un combat que votre personnage a engagé sont bien envoyés à
+  l'autre joueur ; avant, leurs dégâts disparaissaient au tour suivant.
+- Combat : la remise à niveau de l'état en début de tour ne décale plus les coups critiques et effets aléatoires
+  de la suite du tour.
+- Personnages : l'expérience n'est plus doublée quand le build d'un personnage est partagé (un personnage pouvait
+  gagner un niveau chez un seul joueur).
+- Personnages : plus de message « ce personnage n'est pas à vous » à tort après chaque combat.
+- Exploration : un choix de dialogue resté en attente ne bloque plus les vérifications de synchro après un
+  changement de zone.
+
 ## [0.6.33] - 2026-10-25
 
 ### Corrections
@@ -305,7 +320,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.33...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.34...HEAD
+[0.6.34]: https://github.com/kipavy/e33-coop/compare/v0.6.33...v0.6.34
 [0.6.33]: https://github.com/kipavy/e33-coop/compare/v0.6.32...v0.6.33
 [0.6.32]: https://github.com/kipavy/e33-coop/compare/v0.6.31...v0.6.32
 [0.6.31]: https://github.com/kipavy/e33-coop/compare/v0.6.30...v0.6.31
