@@ -9,6 +9,14 @@ add_library(${TARGET} SHARED
     ../hooks/reflect.cpp
     ../testrunner/runner.cpp
     ../sync/coop.cpp
+    ../sync/coop_draws.cpp
+    ../sync/coop_turns.cpp
+    ../sync/coop_defense.cpp
+    ../sync/coop_battle_end.cpp
+    ../sync/coop_hooks.cpp
+    ../sync/coop_steam.cpp
+    ../sync/coop_remote.cpp
+    ../sync/coop_tick.cpp
     ../sync/explore.cpp
     ../sync/mount.cpp
     ../sync/builds.cpp
