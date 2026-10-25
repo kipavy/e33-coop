@@ -225,25 +225,25 @@ void check_builds()
         refresh_cache();
         return;
     }
-    if (!s.host) {
-        // Client : tout changement part à l'hôte, qui tranche (annulation éventuelle par son état).
-        std::vector<uint8_t> blob;
-        if (!make_blob(blob)) return;
-        for (auto& n : changed) s.baseline[n] = cur.at(n);
-        send_offer(blob, changed, false, "menu");
-        return;
-    }
-    // Hôte : ses personnages sont diffusés ; ceux d'un client sont remis à leur état accepté.
     std::vector<std::string> mine, foreign;
     for (auto& n : changed) (s.net.owner_of(n) == s.me ? mine : foreign).push_back(n);
-    if (!mine.empty()) {
+    if (!s.host) {
+        // Client : seuls ses personnages partent à l'hôte. Un personnage d'un autre joueur changé ici sans menu
+        // (effet d'un événement rejoué) prend sa nouvelle référence : l'hôte, lui, le corrige par ses propres offres.
+        // Avant : tout partait, l'hôte refusait et renvoyait son état (« pas à vous » affiché à tort, essai du 2026-10-25).
+        for (auto& n : foreign) s.baseline[n] = cur.at(n);
+        if (!foreign.empty())
+            log().write("coop_build_foreign_change", JsonObj().add("count", static_cast<int64_t>(foreign.size())));
+        if (mine.empty()) return;
         std::vector<uint8_t> blob;
-        if (make_blob(blob)) {
-            for (auto& n : mine) s.baseline[n] = cur.at(n);
-            send_offer(blob, mine, true, "menu");
-            s.cache = blob;
-        }
+        if (!make_blob(blob)) return;
+        for (auto& n : mine) s.baseline[n] = cur.at(n);
+        send_offer(blob, mine, false, "menu");
+        return;
     }
+    // Hôte : ceux d'un client sont d'abord remis à leur état accepté (cache = dernier état accepté, pas l'état
+    // courant : avant, le cache était refait avec le changement étranger dedans et l'« annulation » ne défaisait rien),
+    // puis ses personnages sont diffusés.
     if (!foreign.empty() && !s.cache.empty()) {
         std::vector<proto::BuildName> names;
         for (auto& n : foreign) names.push_back({n, 0});
@@ -251,6 +251,14 @@ void check_builds()
         bump("builds_reverted", static_cast<int>(foreign.size()));
         for (auto& n : foreign) ui::toast("build_not_yours", {n, s.net.name_of ? s.net.name_of(s.net.owner_of(n)) : ""});
         log().write("coop_build_reverted", JsonObj().add("count", static_cast<int64_t>(foreign.size())));
+    }
+    if (!mine.empty()) {
+        std::vector<uint8_t> blob;
+        if (make_blob(blob)) {
+            for (auto& n : mine) s.baseline[n] = cur.at(n);
+            send_offer(blob, mine, true, "menu");
+            s.cache = blob;
+        }
     }
 }
 

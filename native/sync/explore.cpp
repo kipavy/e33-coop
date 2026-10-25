@@ -1382,6 +1382,14 @@ void on_map_change(const proto::MapChange& mc)
         log().write("coop_map_change_ignored", JsonObj().add("level", mc.level).add("why", "menu"));
         return;
     }
+    // Choix de dialogue du pilote encore en attente ici (dialogue jamais ouvert chez nous) : il ne viendra plus après
+    // un changement de niveau. Gardé, il tenait l'exploration « jamais au calme » 120 s (pas d'empreinte, pas de copie
+    // coop ; essai du 2026-10-25, feu de camp).
+    if (!s.choices.empty()) {
+        bump("choices_dropped_map_change", static_cast<int>(s.choices.size()));
+        log().write("coop_choices_dropped", JsonObj().add("count", static_cast<int64_t>(s.choices.size())).add("why", "map_change"));
+        s.choices.clear();
+    }
     s.map_spawns[mc.level] = mc.spawn_tag;
     s.expect_level = mc.level;
     s.expect_level_at = s.now;
@@ -2753,7 +2761,8 @@ bool handle(uint8_t from, const proto::Message& m)
                                   std::holds_alternative<proto::PilotState>(m)))
         return true;
     if (auto* wi = std::get_if<proto::WorldInteract>(&m)) {
-        if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
+        const bool shot = wi->actor.rfind("freeaim:", 0) == 0;   // tir sur un objet du monde : accepté de n'importe quel joueur
+        if (s.host) { if (from != s.pilot && !shot) return true; s.net.relay(m, from, true); }
         s.interactions.push_back(*wi);
         touch();
         return true;
@@ -2902,7 +2911,9 @@ void subscribe()
         if (logged < 40 && ++logged)
             log().write("coop_freeaim_world_hit", JsonObj().add("target", target ? ue::short_name(target) : std::string("null"))
                                                      .add("class", target ? ue::short_name(target->GetClassPrivate()) : std::string()).add("hittable", hittable).add("pilot", is_pilot()));
-        if (!hittable || !is_pilot()) return;
+        // Suiveur compris : son tir sur une cage touche sa copie de l'objet, jamais l'autre (essai du 2026-10-24,
+        // 22:34 : deux resynchros « interacted2 »). L'hôte relaie les tirs de tout le monde (WorldInteract « freeaim: »).
+        if (!hittable) return;
         const std::string path = object_path(target);
         s.net.publish(proto::WorldInteract{++s.seq, "freeaim:" + path, false}, true);
         bump("freeaim_hits_published"); touch();

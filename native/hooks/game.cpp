@@ -1265,9 +1265,13 @@ bool character_build(const std::string& name, uint64_t& hash, std::string* summa
     if (!p || !v) return false;
     reflect::Leaves all, kept;
     reflect::flatten(p, v, "", all);
-    // PV et PM changent hors des menus (dégâts d'exploration, soins) : ce n'est pas le build.
+    // PV et PM changent hors des menus (dégâts d'exploration, soins) : ce n'est pas le build. XP et niveau non plus :
+    // gagnés en combat, pareil chez tout le monde (combats communs). Les compter faisait passer chaque fin de combat pour
+    // une modification de build (personnage d'un autre joueur « annulé », proposé à l'hôte, refusé ; essai du 2026-10-25).
     for (auto& l : all)
-        if (l.first.find("CurrentHP") == std::string::npos && l.first.find("CurrentMP") == std::string::npos) kept.push_back(l);
+        if (l.first.find("CurrentHP") == std::string::npos && l.first.find("CurrentMP") == std::string::npos
+            && l.first != ".CurrentExperience" && l.first != ".CurrentLevel")
+            kept.push_back(l);
     hash = reflect::hash(kept);
     if (summary) *summary = std::to_string(kept.size()) + " leaves";
     // Les sorties sont des copies (tableaux, maps) : libérées ici, sinon fuite à chaque contrôle.
@@ -1406,7 +1410,26 @@ bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>&
         void* dst = c.param_ptr(STR("CharacterState"));
         p->InitializeValue(dst);
         p->CopyCompleteValue(dst, v);
+        // LoadCharacterState ajoute l'XP de l'état reçu à celle du personnage au lieu de la remplacer (essai du
+        // 2026-10-25 : Frey 769 -> 1538, Lune 1002 -> 3006 puis niveau 18 chez l'hôte seulement). XP et niveau ne
+        // viennent pas des builds (combats communs) : on garde ceux d'ici.
+        const int64_t level_before = ue::get_int(cd, STR("CurrentLevel"), -1);
+        const int64_t xp_before = ue::get_int(cd, STR("CurrentExperienceInLevel"), -1);
         c.invoke();
+        if (level_before >= 0 && xp_before >= 0) {
+            const int64_t level_after = ue::get_int(cd, STR("CurrentLevel"), -1);
+            const int64_t xp_after = ue::get_int(cd, STR("CurrentExperienceInLevel"), -1);
+            if (level_after != level_before || xp_after != xp_before) {
+                if (level_after != level_before) {
+                    ue::Call sl(cd, STR("SetLevel"));
+                    if (sl) sl.set_int(STR("NewLevel"), level_before).invoke();
+                }
+                ue::set_int(cd, STR("CurrentLevel"), level_before);
+                ue::set_int(cd, STR("CurrentExperienceInLevel"), xp_before);
+                log().write("coop_build_xp_kept", JsonObj().add("name", name).add("level", level_before).add("xp", xp_before)
+                                                      .add("level_load", level_after).add("xp_load", xp_after));
+            }
+        }
         fix_equipment(cd, name, p, dst);
         p->DestroyValue(dst);
         ue::Call d(cd, STR("DispatchModificationsIfPossible"));

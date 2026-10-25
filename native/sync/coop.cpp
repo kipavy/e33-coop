@@ -341,6 +341,7 @@ struct State {
     std::map<UObject*, int> removed_contexts;              // contextes d'entrée retirés pendant le blocage -> priorité
     std::map<std::string, int> counters;
     FreeAimOwner fa_own;                                   // visée d'un héros d'ici
+    std::pair<uint32_t, int> fa_own_ended{0, -1};          // (tour, emplacement) d'une visée d'ici finie : pas de reprise tardive tant que IsAiming reste vrai
     FreeAimReplay fa_rep;                                  // visée rejouée d'un héros d'un autre joueur
     std::optional<std::array<double, 3>> local_aim;        // test runner : point visé par le « joueur » (set_local_aim)
     // Session (phase 5)
@@ -3283,12 +3284,14 @@ void subscribe()
             publish(fa_event(proto::FreeAimKind::Cancel, 0, s.fa_own.point));
             bump("free_aim_cancels_published");
             s.fa_own.active = false;
+            s.fa_own_ended = {s.battle.turn, s.fa_own.spot};
         });
     }
     bus.post(fn(game::FreeAimComp, L"EndFreeAim"), [fa_event](HookCtx& ctx, UFunction*) {
         if (!s.fa_own.active || ue::component_owner(ctx.Context) != game::find_unit(true, s.fa_own.spot)) return;
         publish(fa_event(proto::FreeAimKind::End, 0, s.fa_own.point));
         s.fa_own.active = false;
+        s.fa_own_ended = {s.battle.turn, s.fa_own.spot};
     });
 
     // Défenses : TryParryHitFromCharacter (coups parables) ou ReceiveDamageFromObject (coups sautables).
@@ -3845,6 +3848,7 @@ void back_to_neutral(const char* why)
     s.input_sub = nullptr;
     s.removed_contexts.clear();
     s.fa_own = FreeAimOwner{};
+    s.fa_own_ended = {0, -1};
     s.fa_rep = FreeAimReplay{};
     s.local_aim.reset();
     s.roster.clear();
@@ -4195,7 +4199,11 @@ void start_pending_battle()
     }
     if (s.menu_wait_logged) { s.menu_wait_logged = false; ui::clear_status("battle_menu"); }
     s.world_ready_s = ready ? s.world_ready_s + kStep : 0;
-    if (s.world_ready_s < 5.0) return;
+    // Combat déjà engagé ici (notre pion a suivi le pilote) : le monde est chargé et le jeu donne déjà la main au
+    // joueur. Attendre 5 s de plus laissait le mod inactif pendant que le joueur agissait (essai du 2026-10-25, 01:11 :
+    // tirs en visée libre jamais publiés). On démarre dès que le contrôleur est là.
+    const bool engaged_here = game::in_battle() && game::controller() && !game::map_change_in_progress();
+    if (s.world_ready_s < 5.0 && !engaged_here) return;
     log().write("coop_battle_start_widgets", JsonObj().add("widgets", widgets).add("widget_timeout", widget_timeout));
     const proto::BattleStart bs = *s.pending_start;
     std::string err;
@@ -4903,6 +4911,32 @@ void tick(double dt)
         }
         intent::aim_camera_tick(s.now, dt, replaying ? &ar : nullptr);
     }
+    // Visée libre d'un héros d'ici ouverte sans que StartFreeAimFromUI soit vu (combat pas encore actif pour le mod :
+    // essai du 2026-10-25, 01:11, combat déjà engagé chez le client, visée ouverte pendant les 4,6 s d'attente du
+    // BattleStart -> aucun tir publié, dégâts annulés par la réparation du tour suivant). On part de l'état du jeu.
+    if (s.battle.active && !s.fa_own.active && s.battle.turn > 0) {
+        UObject* cur = game::current_character();
+        const bool replaying_here = s.fa_rep.started && !s.fa_rep.done;
+        const bool aiming_here = cur && ue::get_bool(ue::get_object(cur, STR("BP_FreeAimShooterBattleComponent")), STR("IsAiming"));
+        const std::pair<uint32_t, int> key{s.battle.turn, cur ? game::spot(cur) : -1};
+        if (!aiming_here && s.fa_own_ended == key) s.fa_own_ended = {0, -1};   // visée vraiment refermée : une nouvelle peut suivre
+        if (cur && aiming_here && !replaying_here && s.fa_own_ended != key && game::is_player(cur) && controls(key.second)) {
+            s.fa_own = FreeAimOwner{};
+            s.fa_own.active = true;
+            s.fa_own.seen_aiming = true;
+            s.fa_own.spot = game::spot(cur);
+            s.fa_own.t0 = SteadyClock::now();
+            proto::FreeAimEvent e;
+            e.battle_id = s.battle.id;
+            e.turn = s.battle.turn;
+            e.spot = static_cast<uint8_t>(s.fa_own.spot);
+            e.kind = proto::FreeAimKind::Start;
+            publish(e);
+            bump("free_aims_published");
+            bump("free_aim_late_starts");
+            log().write("coop_free_aim_late_start", JsonObj().add("spot", s.fa_own.spot), s.battle.turn);
+        }
+    }
     // Visée libre d'un héros d'ici quittée par un autre chemin que CancelFreeAimFromUI / EndFreeAim (touche
     // d'annulation de la visée : vu le 2026-10-21, l'autre joueur restait en visée et l'action suivante attendait).
     if (s.fa_own.active) {
@@ -4918,6 +4952,7 @@ void tick(double dt)
             e.x = s.fa_own.point[0]; e.y = s.fa_own.point[1]; e.z = s.fa_own.point[2];
             publish(e);
             s.fa_own.active = false;
+            s.fa_own_ended = {s.battle.turn, s.fa_own.spot};
             bump("free_aim_exits_detected");
             bump("free_aim_cancels_published");
             log().write("coop_free_aim_local_exit", JsonObj().add("spot", s.fa_own.spot), s.battle.turn);
