@@ -23,6 +23,22 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 10. Meneur bloqué (diagnostic `coop_pilot_stuck`).
 11. Panneau Coop au clavier / manette (D25).
 
+## 2026-10-25, 12h — audit des désynchros de la session du 25/10 01h (branche `fix/desync-audit`, non testée en jeu)
+
+Journaux hôte (01:01-01:51) et client (jusqu'à 01:19) relus désynchro par désynchro ; hashes de l'hôte recalculés hors ligne.
+- **Corrigé** :
+  - visée libre du client ouverte avant que le mod active le combat (combat déjà engagé, 4,6 s d'attente du monde) : tirs jamais publiés, dégâts annulés par la réparation. Combat engagé ici -> mod actif sans les 5 s ; visée d'ici détectée par `IsAiming` (`coop_free_aim_late_start`) ;
+  - `LoadCharacterState` **ajoute** l'XP reçue (Frey 769 -> 1538, Lune niveau 18 chez l'hôte seulement) : XP et niveau gardés d'ici (`coop_build_xp_kept`) et hors empreinte de build (chaque fin de combat passait pour une modification : annulations « pas à vous » à tort) ; client : n'envoie que ses personnages ; hôte : annulation depuis le dernier état accepté (avant : réappliquait l'état courant) ;
+  - tirs du suiveur sur les objets du monde publiés et relayés (resynchros `interacted2` du 24/10) ; choix de dialogue en attente abandonnés au changement de niveau (exploration « jamais au calme » 120 s) ;
+  - ordre des tours décalé d'un cran (engagement différent, mort d'un seul côté) : commande du même héros au tour ±1 reprise (`coop_command_turn_shift`) ; combats 7 et 9 bloqués 30 s puis abandonnés ;
+  - tirages d'`ActivateBuff` pendant la réparation hors rangs du tour (`repair_draws_skipped`) ; `coop_defense_imposed.started`.
+- **Ouvert (conception)** :
+  1. nombre de coups d'une attaque ennemie différent d'un PC à l'autre (combat 6 tour 9 : 5 coups chez l'hôte, 3 chez le client) : message « action ennemie finie » avec les coups par héros, l'hôte esquive les siens en trop ;
+  2. cibles aléatoires des compétences (ThunderFall : `Array_Random` dans le script de compétence, ordre des rebonds différent) : fonction de choix à trouver et à rejouer comme `GetRandomAliveHero` ;
+  3. zones de visée libre (points faibles) des ennemis absentes de `StateSync` / réparation ;
+  4. drapeaux posés d'un seul côté (`NID_CuratorTutorial`) : publier `WritePersistentFlag` du pilote ; puis réparation sur place de l'inventaire et des drapeaux au lieu de l'instantané complet (8-9 s) ;
+  5. parade imposée refusée par le jeu (combat 1 tour 6) : cause à lire dans `started` ; Lumina `LightningAPCost-` perdue à l'application d'un build (cause inconnue).
+
 ## 2026-10-25, 10h — v0.6.33 : attentes de défense pour des coups absents chez le propriétaire (testé)
 
 - Journaux de l'hôte du 25/10 (session 01:01) : les « gels » sont surtout des attentes de défense figées de 3 s qui expirent (`coop_wait_long` defense 3016 ms, ok false). Tour 9 du combat 6 : attaque ennemie à 5 coups sur Lune chez l'hôte, 3 chez TOTOFFF, déjà dans son menu du tour 10 (IntentPreview / MenuState tour 10 reçus à 773,0) -> coups 4 et 5 attendus 3 s chacun. Même cas au combat 8, tour 1. Journal de TOTOFFF non disponible (récupéré à 01:18, avant ces combats).
