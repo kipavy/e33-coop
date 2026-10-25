@@ -33,27 +33,50 @@ bool setup_window()
     return s.setup.open && s.now - s.setup.opened_at < 120.0;
 }
 
-// Diagnostic : chaîne des cadres de script d'un tirage (5 premiers appels par fonction, puis 600 par combat, et 400
-// pendant la mise en place).
-void trace_random(HookCtx& ctx, const std::string& fname)
+// Cadres de script (objet, fonction, emplacement d'ennemi) en tableau JSON, du plus récent au plus ancien.
+std::string trace_frames(RC::Unreal::FFrame* f, int max_depth)
 {
-    static std::map<std::string, int> seen;
-    const bool early = seen[fname]++ < 5;
-    const bool in_battle = s.battle.active && s.battle.traced_draws < 600;
-    const bool in_setup = !in_battle && setup_window() && s.setup.traced < 400;
-    if (!early && !in_battle && !in_setup) return;
-    if (in_battle) ++s.battle.traced_draws;
-    if (in_setup) ++s.setup.traced;
     std::string frames = "[";
-    RC::Unreal::FFrame* f = &ctx.TheStack;
-    for (int depth = 0; f && depth < 4; ++depth) {
+    for (int depth = 0; f && depth < max_depth; ++depth) {
         if (frames.size() > 1) frames += ",";
         frames += JsonObj().add("o", ue::full_name(f->Object())).add("n", ue::short_name(f->Node())).add("enemy", cached_enemy_spot(f->Object())).str();
         RC::Unreal::FFrame* prev = f->PreviousFrame();
         if (prev == f) break;
         f = prev;
     }
-    log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).add("setup", setup_window() && !(s.battle.active && s.battle.turn > 0)).raw("frames", frames + "]")
+    return frames + "]";
+}
+
+// Diagnostic D39 (2026-10-25) : le budget de 600 traces par combat est épuisé dès les premiers tours (combat 1 de la
+// session du 25/10 : épuisé vers 01:12:20, ThunderFall de Lune au tour 7 à 01:13:30, sans aucune trace). Budget à part
+// pour les tours des héros, sans les appelants cosmétiques connus ni les flux déjà synchronisés (critiques, Luminas) :
+// le choix des cibles des rebonds (ThunderFall) doit y apparaître s'il passe par KismetMathLibrary.
+void trace_hero_turn(HookCtx& ctx, const std::string& fname)
+{
+    auto& b = s.battle;
+    if (!b.active || b.turn == 0 || s.enemy_turn || b.traced_hero_draws >= 300) return;
+    UObject* caller = script_caller(ctx);
+    if (!caller) return;
+    const std::string cls = game::char_class(caller);
+    static const char* const cosmetic[] = {"Audio", "Cloud", "AnimBP", "ABP_", "AnimBlueprint", "BTTask", "RandomVariation", "AN_ENM", "BP_BattleDamages_C", "BP_LU_"};
+    for (const char* c : cosmetic) if (cls.find(c) != std::string::npos) return;
+    ++b.traced_hero_draws;
+    bump("hero_turn_draws_traced");
+    log().write("rng_trace_hero", JsonObj().add("fn", fname).add("caller", cls).raw("frames", trace_frames(&ctx.TheStack, 7)), b.turn);
+}
+
+// Diagnostic : chaîne des cadres de script d'un tirage (5 premiers appels par fonction, puis 600 par combat, et 400
+// pendant la mise en place ; au-delà, budget des tours des héros).
+void trace_random(HookCtx& ctx, const std::string& fname)
+{
+    static std::map<std::string, int> seen;
+    const bool early = seen[fname]++ < 5;
+    const bool in_battle = s.battle.active && s.battle.traced_draws < 600;
+    const bool in_setup = !in_battle && setup_window() && s.setup.traced < 400;
+    if (!early && !in_battle && !in_setup) { trace_hero_turn(ctx, fname); return; }
+    if (in_battle) ++s.battle.traced_draws;
+    if (in_setup) ++s.setup.traced;
+    log().write("rng_trace", JsonObj().add("fn", fname).add("battle", s.battle.active).add("setup", setup_window() && !(s.battle.active && s.battle.turn > 0)).raw("frames", trace_frames(&ctx.TheStack, 4))
                                  .add("has_result", ctx.RESULT_DECL != nullptr), s.battle.turn);
 }
 
@@ -220,11 +243,71 @@ double natural_value(HookCtx& ctx, RandomKind kind)
     }
 }
 
+// --- Cibles des coups des héros (diagnostic D39) ------------------------------------------------
+// Session du 25/10, combat 1 tour 7 : ThunderFall de Lune (rebonds sur des ennemis au hasard), mêmes tirages rang par
+// rang des deux côtés mais ordre des cibles différent (client : Luster, Portier, Luster x2… ; hôte : Portier, Luster x2…)
+// -> PV du Portier 463 / 638. Aucun tirage synchronisé ne couvre ce choix (Array_Random du script de compétence, non
+// hookable, ou appelant non reconnu). Chaque coup d'un héros sur un ennemi est noté comme un pseudo-tirage du flux
+// « HeroHitTargets#<héros> » (rang = n° du coup dans le tour, valeur = emplacement de l'ennemi), publié par l'hôte avec
+// ses tirages (message Draws, pas de nouveau type) et comparé chez le client en fin de tour. Rien n'est corrigé ici :
+// l'état de l'hôte répare les PV au tour suivant.
+constexpr int kHitTargetSpots = 8;
+
+std::string hit_targets_stream(int hero_spot) { return "HeroHitTargets#" + std::to_string(hero_spot); }
+
+void record_hit_target(int hero_spot, int enemy_spot)
+{
+    auto& b = s.battle;
+    if (hero_spot < 0 || hero_spot >= kHitTargetSpots || enemy_spot < 0) return;
+    const std::string stream = hit_targets_stream(hero_spot);
+    const uint32_t key = fnv32(stream);
+    const uint16_t rank = b.draw_rank[key]++;
+    b.stream_names.emplace(key, stream);
+    b.local_draws[b.turn][(static_cast<uint64_t>(key) << 16) | rank] = enemy_spot;
+    bump("hero_hits_recorded");
+    if (++b.hit_target_logs <= 400)
+        log().write("coop_hero_hit", JsonObj().add("hero", hero_spot).add("hit", static_cast<int>(rank)).add("enemy", enemy_spot), b.turn);
+    if (s.role == Role::Host) broadcast(proto::Draws{b.id, b.turn, {{key, rank, static_cast<double>(enemy_spot)}}});
+}
+
+// Client : séquences de cibles d'un tour comparées à celles de l'hôte, puis retirées des tirages (ni tirages faux ni
+// écarts de nombre dans compare_draws).
+void compare_hit_targets(uint32_t turn, std::map<uint64_t, double>& mine, std::map<uint64_t, double>& host)
+{
+    for (int spot = 0; spot < kHitTargetSpots; ++spot) {
+        const uint32_t key = fnv32(hit_targets_stream(spot));
+        auto take = [key](std::map<uint64_t, double>& m) {
+            std::vector<int> seq;   // dans l'ordre des rangs (clé = flux << 16 | rang)
+            for (auto it = m.lower_bound(static_cast<uint64_t>(key) << 16); it != m.end() && static_cast<uint32_t>(it->first >> 16) == key;) {
+                seq.push_back(static_cast<int>(it->second));
+                it = m.erase(it);
+            }
+            return seq;
+        };
+        const std::vector<int> l = take(mine), h = take(host);
+        if (l.empty() && h.empty()) continue;
+        bump("hero_hit_sequences_checked");
+        if (l == h) continue;
+        auto arr = [](const std::vector<int>& v) {
+            std::string r = "[";
+            for (size_t i = 0; i < v.size(); ++i) r += (i ? "," : "") + std::to_string(v[i]);
+            return r + "]";
+        };
+        std::vector<int> ls = l, hs = h;
+        std::sort(ls.begin(), ls.end());
+        std::sort(hs.begin(), hs.end());
+        bump("skill_target_mismatches");
+        log().write("coop_skill_targets_mismatch", JsonObj().add("hero", spot).raw("local", arr(l)).raw("host", arr(h))
+                                                       .add("same_count", l.size() == h.size()).add("same_set", ls == hs), turn);
+    }
+}
+
 // Client : compare les tirages de gameplay d'un tour terminé avec ceux de l'hôte (même flux, même rang, même valeur).
 void compare_draws(uint32_t turn)
 {
     auto& mine = s.battle.local_draws[turn];
     auto& host = s.battle.host_draws[turn];
+    compare_hit_targets(turn, mine, host);
     auto name = [](uint64_t k) {
         auto it = s.battle.stream_names.find(static_cast<uint32_t>(k >> 16));
         return it != s.battle.stream_names.end() ? it->second : std::to_string(k >> 16);

@@ -208,6 +208,8 @@ struct Battle {
     std::map<uint32_t, std::map<uint64_t, double>> local_draws;
     std::map<uint32_t, std::map<uint64_t, double>> host_draws;
     int traced_draws = 0;
+    int traced_hero_draws = 0;                             // diagnostic D39 : tirages tracés pendant les tours des héros (hors budget)
+    int hit_target_logs = 0;                               // diagnostic D39 : coups de héros sur un ennemi journalisés
     std::map<UObject*, int> enemy_spots;                   // ennemi -> emplacement (sans appel au jeu dans les hooks de tirage)
     // Fin
     int local_end = -1;
@@ -477,6 +479,8 @@ void replace_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string
 bool draw_allowed(const std::string& stream);
 double natural_value(HookCtx& ctx, RandomKind kind);
 void compare_draws(uint32_t turn);
+void record_hit_target(int hero_spot, int enemy_spot);
+std::string trace_frames(RC::Unreal::FFrame* f, int max_depth);
 void setup_reset(uint64_t seed, bool seeded, const std::string& source);
 void host_setup_open(bool notice);
 void client_setup_open();

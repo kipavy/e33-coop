@@ -613,6 +613,16 @@ void subscribe()
         if (!hero || !game::is_player(hero)) return;
         defense_point(ctx.Context, hero, false);
     });
+    // Diagnostic D39 : cible de chaque coup d'un héros sur un ennemi (TryParryHitFromCharacter est appelé sur les stats de
+    // l'ennemi à chaque coup, compétences comprises : 9 coups du ThunderFall du 25/10 = 9 appels). Lecture seule.
+    bus.post(fn(game::path::Stats, L"TryParryHitFromCharacter"), [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active || s.battle.turn == 0) return;
+        const int es = cached_enemy_spot(ue::component_owner(ctx.Context));
+        if (es < 0) return;
+        UObject* attacker = ue::component_owner(ue::read_param_object(ctx, f, STR("AttackingCharacter")));
+        if (!attacker || !game::is_player(attacker)) { bump("hero_hits_unattributed"); return; }
+        record_hit_target(game::spot(attacker), es);
+    });
     bus.pre(fn(game::path::Stats, L"ReceiveDamageFromObject"), [](HookCtx& ctx, UFunction* f) {
         if (s.role == Role::Solo || !s.battle.active) return;
         UObject* hero = ue::component_owner(ctx.Context);
@@ -738,6 +748,17 @@ void subscribe()
             bump("targets_synced");
         });
     }
+    // Diagnostic D39 : seul helper BP du dump qui tire un objet au hasard dans un tableau quelconque (Array_Random sur une
+    // copie sans « Object »). Candidat (peu probable : le ThunderFall du 25/10 frappe deux fois de suite le même ennemi)
+    // pour les rebonds des compétences ; journalisé avec ses appelants, jamais modifié.
+    bus.post(L"/Game/Gameplay/GenericFunctionLibrary.GenericFunctionLibrary_C:GetRandomOtherObjectFromArray", [](HookCtx& ctx, UFunction* f) {
+        if (s.role == Role::Solo || !s.battle.active || !on_game_thread()) return;
+        bump("random_object_picks");
+        if (counter("random_object_picks") > 60) return;
+        UObject* pick = ue::read_out_object(ctx, f, STR("OutItem"));
+        log().write("coop_random_object_pick", JsonObj().add("pick", game::char_class(pick)).add("enemy", cached_enemy_spot(pick))
+                                                   .raw("frames", trace_frames(ctx.TheStack.PreviousFrame(), 5)), s.battle.turn);
+    });
     bus.post(fn(game::path::Targeting, L"GetRandomCharacterByBuffCritera"), [](HookCtx&, UFunction*) {
         if (s.role == Role::Solo || !s.battle.active) return;
         bump("unsynced_random_targeting");

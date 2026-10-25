@@ -14,6 +14,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+### Modifications
+- Combat : les journaux comparent désormais, coup par coup, l'ennemi touché par les compétences des héros chez chaque
+  joueur (compétences à cibles au hasard, comme la foudre à rebonds de Lune), pour préparer leur correction.
+
 ## [0.6.34] - 2026-10-25
 
 ### Corrections

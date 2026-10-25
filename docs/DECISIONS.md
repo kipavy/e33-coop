@@ -584,3 +584,44 @@ part chez l'hôte par la demande D34 ; `StartBattle` appelé par le mod marche s
 **Remise en cause si** : combat lancé chez l'hôte suiveur sans `coop_battle_request_received` (autre déclencheur que la
 capsule : zone de transition, embuscade scriptée) ; ou ennemis restés passifs chez l'hôte après la reprise de la main
 (`coop_world_enemies_restored` count 0 alors que des ennemis avaient été rendus passifs).
+
+## D39 — Cibles aléatoires des compétences des héros : mesurer avant de corriger (2026-10-25, désynchro vue en vrai)
+
+**Constat** (25/10, combat 1, tour 7, journaux des deux PC) : ThunderFall de Lune (héros de TOTOFFF, client), cibles de
+l'action [Portier, Luster, Bruler] des deux côtés, 9 coups. Tirages `RollCriticalHit` / `BP_LU_FreeAimMarkingShot_C`
+identiques rang par rang, mais ennemi touché à chaque coup différent : client Luster, Portier, Luster x2, Bruler x2,
+Portier x2, Bruler ; hôte Portier, Luster x2, Bruler, Luster x2, Bruler x3 -> PV du Portier 463 / 638 (réparés au
+tour 8). Aucun `coop_draw` ne couvre ce choix, et aucun `rng_trace` : le budget de 600 traces par combat était épuisé
+des deux côtés vers 01:12:20 (le ThunderFall est à 01:13:30). Dump 23765773 : le script de ThunderFall n'est pas chargé
+(seuls ses FX) ; `FL_TargetingHelpers_C` n'a aucun helper « ennemi au hasard » (`GetAllAliveEnemies`, `GetAllEnemies`,
+mais `GetRandomAliveHero` / `GetRandomCharacterByBuffCritera` pour le hasard) ; `BP_Battle_SkillScript_C` n'a que
+`AcquireTargets` / `GetTargetedCharacters` (pas de tirage). Seul autre helper BP de tirage d'objet :
+`GenericFunctionLibrary_C:GetRandomOtherObjectFromArray` (exclut un objet ; peu compatible avec deux coups de suite sur
+le même ennemi). Choix le plus probable : `Array_Random` dans l'ubergraph du script de compétence (non hookable,
+GAME-INTERNALS §15), ou un `KismetMathLibrary:Random*` d'un appelant non reconnu comme gameplay.
+
+**Décision** : pas de correctif à l'aveugle (pas de fonction BP sûre à rejouer). Diagnostic seulement :
+- chaque coup d'un héros sur un ennemi (post-hook `TryParryHitFromCharacter` sur les stats de l'ennemi, attaquant =
+  héros) est noté comme pseudo-tirage du flux `HeroHitTargets#<héros>` (rang = n° du coup dans le tour, valeur =
+  emplacement de l'ennemi) ; l'hôte le publie avec ses tirages (`Draws`, **aucun nouveau type de message** : le 65 est
+  déjà `BuildOffer`) ; le client compare les séquences en fin de tour (`coop_skill_targets_mismatch` hero, local, host,
+  same_count, same_set) et les retire de la comparaison des tirages ;
+- budget de traces à part pour les tours des héros (`rng_trace_hero`, 300 par combat, 7 cadres, sans appelants
+  cosmétiques ni flux déjà synchronisés) : un tirage KismetMath du script de compétence y apparaîtra ;
+- `GetRandomOtherObjectFromArray` journalisé (`coop_random_object_pick`, 60 au plus), jamais modifié.
+
+**Journaux / compteurs** : `coop_hero_hit` (400 par combat), `hero_hits_recorded`, `hero_hits_unattributed`,
+`hero_hit_sequences_checked`, `skill_target_mismatches`, `hero_turn_draws_traced`, `random_object_picks`.
+
+**Correctif visé ensuite** (selon ce que montrent les journaux) :
+- si `rng_trace_hero` montre un `Random*` du script (classe `*SkillScript*` ou BP du héros) : l'ajouter aux flux de
+  gameplay (`gameplay_stream`), correctif d'une ligne ;
+- si `coop_random_object_pick` montre ThunderFall : post-hook de réécriture comme `GetRandomAliveHero` (tirage de la
+  graine parmi les éléments du tableau, seulement si le choix naturel est un ennemi vivant) ;
+- sinon (`Array_Random` pur) : le propriétaire du héros publie la cible de chaque coup (nouveau message), et chez les
+  autres, avant le coup n (pré-hook `ReceiveDamage` / `TryParryHitFromCharacter` de l'ennemi), le coup est redirigé vers
+  l'ennemi du propriétaire. Risqué (dégâts appliqués par le BP au mauvais acteur, animations, mort d'un ennemi d'un seul
+  côté) : à n'essayer qu'avec des journaux qui en montrent la fréquence.
+
+**Remise en cause si** : `hero_hits_unattributed` élevé (l'attaquant passé au jeu n'est pas le héros), ou
+`coop_skill_targets_mismatch` fréquent sur des attaques à cible unique (alors le coup n'est pas celui qu'on croit).

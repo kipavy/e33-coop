@@ -23,6 +23,12 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 10. Meneur bloqué (diagnostic `coop_pilot_stuck`).
 11. Panneau Coop au clavier / manette (D25).
 
+## 2026-10-25 — cibles aléatoires des compétences : diagnostic D39 (branche `feat/skill-targets`, non testée en jeu)
+
+- Recherche (journaux du 25/10, combat 1 tour 7, dump 23765773) : ThunderFall de Lune, 9 coups, cibles différentes coup par coup (client Luster, Portier… ; hôte Portier, Luster…), tirages identiques. Aucun `rng_trace` : budget de 600 épuisé des deux côtés avant le tour 7. Script de ThunderFall absent du dump ; aucun helper « ennemi au hasard » dans `FL_TargetingHelpers_C`. Pas de fonction sûre à rejouer : rien n'est corrigé.
+- Ajouté (D39) : cible de chaque coup de héros comparée hôte / client (`coop_skill_targets_mismatch`, via `Draws`, sans nouveau message) ; traces des tirages des tours des héros (`rng_trace_hero`) ; `GetRandomOtherObjectFromArray` journalisé (`coop_random_object_pick`).
+- À regarder à la prochaine session à deux PC : un ThunderFall (ou autre compétence à rebonds) puis `coop_skill_targets_mismatch`, `rng_trace_hero` du même tour (classe appelante) et `coop_random_object_pick`. Correctif selon le cas (D39) : flux de gameplay ajouté, réécriture du helper, ou cibles publiées par le propriétaire et coups redirigés (nouveau message, risqué).
+
 ## 2026-10-25, 12h — audit des désynchros de la session du 25/10 01h (branche `fix/desync-audit`, non testée en jeu)
 
 Journaux hôte (01:01-01:51) et client (jusqu'à 01:19) relus désynchro par désynchro ; hashes de l'hôte recalculés hors ligne.
@@ -34,7 +40,7 @@ Journaux hôte (01:01-01:51) et client (jusqu'à 01:19) relus désynchro par dé
   - tirages d'`ActivateBuff` pendant la réparation hors rangs du tour (`repair_draws_skipped`) ; `coop_defense_imposed.started`.
 - **Ouvert (conception)** :
   1. nombre de coups d'une attaque ennemie différent d'un PC à l'autre (combat 6 tour 9 : 5 coups chez l'hôte, 3 chez le client) : message « action ennemie finie » avec les coups par héros, l'hôte esquive les siens en trop ;
-  2. cibles aléatoires des compétences (ThunderFall : `Array_Random` dans le script de compétence, ordre des rebonds différent) : fonction de choix à trouver et à rejouer comme `GetRandomAliveHero` ;
+  2. cibles aléatoires des compétences (ThunderFall : ordre des rebonds différent) : aucune fonction BP de choix trouvée, diagnostic D39 (branche `feat/skill-targets`) pour mesurer et trouver le tirage ;
   3. zones de visée libre (points faibles) des ennemis absentes de `StateSync` / réparation ;
   4. drapeaux posés d'un seul côté (`NID_CuratorTutorial`) : publier `WritePersistentFlag` du pilote ; puis réparation sur place de l'inventaire et des drapeaux au lieu de l'instantané complet (8-9 s) ;
   5. parade imposée refusée par le jeu (combat 1 tour 6) : cause à lire dans `started` ; Lumina `LightningAPCost-` perdue à l'application d'un build (cause inconnue).
