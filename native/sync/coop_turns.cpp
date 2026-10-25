@@ -303,6 +303,10 @@ proto::StateSync shift_host_state(const proto::StateSync& host, const proto::Sta
             for (auto& x : c->mech) if (x.name == f.name) { fc = &x; break; }
             if (fa && fc) f.value += fc->value - fa->value;
         }
+        // Zones de visée libre (D37) : zone changée ici pendant l'attente (tir d'ici) -> état d'ici.
+        if (a->parts.size() == c->parts.size() && h.parts.size() == c->parts.size())
+            for (size_t i = 0; i < h.parts.size(); ++i)
+                if (a->parts[i].present != c->parts[i].present || a->parts[i].coll != c->parts[i].coll) h.parts[i] = c->parts[i];
     }
     out.gradient_charges += now.gradient_charges - start.gradient_charges;
     out.gradient_progress += now.gradient_progress - start.gradient_progress;
@@ -347,13 +351,17 @@ void client_turn_finish(UObject* actor)
     // Comparaison au même instant que l'hôte (début du tour) : photo prise alors si la vérification est différée.
     const proto::StateSync mine = deferred ? b.dep_start : sync::snapshot(b.id, b.turn);
     if (b.turn == 1) check_start_mech(mine, host);
+    // Hash annoncé (StateHash) : sans les zones de visée libre, comparable avec tout pair. Contrôle et réparation : avec
+    // elles quand les deux états les portent (D37).
+    const bool wp = mine.parts_known && host.parts_known;
     uint64_t h = sync::hash(mine, au);
     const uint64_t host_hash = sync::hash(host, au);
     proto::StateSync hashed = mine;   // état dont h est le hash (journal desync)
-    if (h != host_hash) {
+    if (sync::hash(mine, au, wp) != sync::hash(host, au, wp)) {
         // La simulation locale a divergé : log détaillé, puis resynchronisation depuis l'état de l'hôte.
         bump("raw_hash_diffs");
         if (mech_differs(mine, host)) bump("raw_mech_diffs");   // écart sur une mécanique propre (roue, taches…, D30)
+        if (sync::parts_differ(mine, host)) bump("raw_parts_diffs");   // zones de visée libre (D37)
         const proto::StateSync now = deferred ? sync::snapshot(b.id, b.turn) : mine;
         const proto::StateSync target = deferred ? shift_host_state(host, mine, now) : host;
         // Les buffs remis par la réparation passent par ActivateBuff, qui tire au hasard : sans garde, ces tirages
@@ -363,10 +371,11 @@ void client_turn_finish(UObject* actor)
         s.repairing = false;
         bump("repairs");
         bump("repair_failures", r.failed);
+        bump("repaired_parts", r.parts);   // zones de visée libre remises (D37)
         const proto::StateSync after = sync::snapshot(b.id, b.turn);
         // Différé : réussi si l'état actuel égale l'état de l'hôte décalé des effets d'ici ; on annonce alors le hash de
         // l'hôte (même début de tour des deux côtés).
-        const bool fixed = sync::hash(after, au) == sync::hash(target, au);
+        const bool fixed = sync::hash(after, au, wp) == sync::hash(target, au, wp);
         h = deferred ? (fixed ? host_hash : sync::hash(after, au)) : sync::hash(after, au);
         hashed = deferred && fixed ? host : after;
         log().write("coop_resync", JsonObj().raw("diff", sync::diff(mine, host)).raw("repaired", sync::repair_json(r)).add("deferred", deferred)

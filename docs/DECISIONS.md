@@ -660,3 +660,27 @@ détection, actor_mismatch), `coop_defense_imposed` why `owner_done` + `owner_hi
 le client bloqué ailleurs avant `StartCharacterTurn`) ; `enemy_action_done_actor_mismatches` fréquent (tours décalés) ;
 ou `defense_waits_owner_done` sur des coups que le propriétaire a bien reçus (fin publiée trop tôt : un
 `StartCharacterTurn` au milieu d'une action, à exclure comme les contre-attaques).
+
+## D37 — Zones de visée libre des ennemis dans l'état de début de tour (2026-10-25, bug vu en vrai, étend D11)
+
+**Constat** (session du 25/10, combat 1) : les tirs en visée libre du client touchent et usent des points faibles chez
+lui ; la réparation du tour 2 remet PV, brise et buffs de l'hôte, mais les zones restent usées chez le client. Les tirs
+suivants de l'hôte sur ces zones : 2 touches chez l'hôte, 1 chez le client -> Portier 2524 PV chez le client contre
+1297 chez l'hôte au tour 3.
+
+**Ce que disent les dumps** (23765773) : `BP_FreeAimTargetPart_C` n'a ni PV ni compteur de touches (`BodyPartType`,
+`BaseDamage`, `DamageMultiplier`, `ValidChildren` = ses formes, `LastHitComponentRef`). Le jeu lit l'état d'une zone
+par la collision de ses formes (`DEBUG_GetColor` -> `K2_IsCollisionEnabled`) et la coupe par `DisablePartsCollisions`.
+Les classes propres aux ennemis (Portier…) ne sont pas dans le dump : leurs visuels (boule détruite) restent inconnus.
+
+**Décision** : `StateSync` porte, en champ final facultatif, pour chaque ennemi la collision (`GetCollisionEnabled`) de
+chaque forme de chaque zone de `FreeAimTargetParts` (`parts_known`). Le hash l'inclut (collision active ou non) **seulement
+quand l'état local et celui de l'hôte la portent** ; le hash annoncé (`StateHash`) reste celui d'avant, comme celui des
+enregistrements anciens. Écart -> `diff` champ `parts` (ex. `"00 33"`), réparation : `DisablePartsCollisions` si l'hôte a
+tout coupé, puis `SetCollisionEnabled` (mode exact de l'hôte) sur chaque forme encore différente ; journal
+`coop_repair_parts` (`how` = disable / set / count / shapes / absent), compteurs `raw_parts_diffs`, `repaired_parts`.
+Vérification différée : zone changée ici pendant l'attente gardée telle qu'ici. Visuels propres à l'ennemi non réparés.
+
+**Remise en cause si** : `raw_parts_diffs` à chaque tour sans tir en visée libre (collision qui bouge avec l'animation :
+comparer seulement après un tir) ; ou `coop_repair_parts` sans `failed` mais tirs rejoués encore différents (l'état usé est
+ailleurs, dans la classe de l'ennemi : lire son BP) ; ou zone réactivée invisible qui reste touchable chez le client.

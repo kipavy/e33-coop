@@ -964,7 +964,7 @@ void read_settings()
                           "session_ended", "players_left", "heroes_taken_over", "peer_timeouts", "sessions_rejected", "battle_ready_timeouts", "turn_timer_expired",
                           "defense_timeouts", "defense_waits_owner_ahead", "defense_waits_owner_done", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
                           "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions",
-                          "setup_draws_replaced", "setup_draws_natural", "start_mech_diffs", "raw_mech_diffs"})
+                          "setup_draws_replaced", "setup_draws_natural", "start_mech_diffs", "raw_mech_diffs", "raw_parts_diffs", "repaired_parts"})
         s.counters[c] = 0;
 
     s.game_build = read_build_id();

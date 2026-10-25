@@ -36,6 +36,12 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 - `desync` : l'état journalisé est celui qui a été haché (`state_from` hashed), plus une photo prise après coup.
 - Test écrit, non lancé : faux client `--done-hits N` et `p8_enemydone_host`.
 
+## 2026-10-25 — zones de visée libre des ennemis dans la réparation (branche `feat/enemy-parts-state`, D37, non testé en jeu)
+
+- **Constat** (combat 1, 25/10) : points faibles usés par les tirs du client restés usés après la réparation du tour 2 ; tirs de l'hôte suivants : 2 touches chez lui, 1 chez le client (Portier 2524 / 1297 PV au tour 3).
+- **Fait** : `StateSync` porte la collision de chaque forme des zones (`FreeAimTargetParts` -> `ValidChildren`) des ennemis (champ final facultatif) ; hash avec zones seulement si les deux états les portent ; `diff` champ `parts` ; réparation `DisablePartsCollisions` / `SetCollisionEnabled`, journal `coop_repair_parts`, compteurs `raw_parts_diffs` / `repaired_parts`. Tests de protocole (aller-retour, ancien format, tronqué).
+- **À vérifier en jeu** : un tir du client sur un point faible du Portier -> au tour suivant `coop_resync` avec `parts` dans `diff` et `coop_repair_parts` `failed` 0, `fixed` true ; puis tirs de l'hôte sur la même zone : mêmes PV des deux côtés. Sans tir : `raw_parts_diffs` doit rester 0. Visuel de la boule non réparé (classe de l'ennemi hors dump).
+
 ## 2026-10-25, 12h — audit des désynchros de la session du 25/10 01h (branche `fix/desync-audit`, non testée en jeu)
 
 Journaux hôte (01:01-01:51) et client (jusqu'à 01:19) relus désynchro par désynchro ; hashes de l'hôte recalculés hors ligne.

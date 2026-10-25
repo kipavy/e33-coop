@@ -53,6 +53,95 @@ std::string mech_str(const std::vector<proto::MechField>& a, const std::vector<p
     return s;
 }
 
+// Zones de visée libre (D37). Comparées sur « collision active ou non » de chaque forme : le mode exact (requête,
+// physique…) ne dit rien de plus sur l'état de la zone et n'est remis que par la réparation.
+bool same_parts(const std::vector<proto::PartState>& a, const std::vector<proto::PartState>& b)
+{
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (a[i].present != b[i].present || a[i].coll.size() != b[i].coll.size()) return false;
+        for (size_t k = 0; k < a[i].coll.size(); ++k) if ((a[i].coll[k] != 0) != (b[i].coll[k] != 0)) return false;
+    }
+    return true;
+}
+
+// ECollisionEnabled d'une forme ; -1 si illisible.
+int collision_of(UObject* shape)
+{
+    ue::Call c(shape, STR("GetCollisionEnabled"));
+    if (!c || !c.invoke()) return -1;
+    return static_cast<int>(c.out_int(STR("ReturnValue"), -1));
+}
+
+// Zones de visée libre d'un combattant : FreeAimTargetParts (BP_FreeAimTargetPart_C), formes = ValidChildren.
+// La zone n'a aucun compteur ni PV propre (dump 2026-10-18) ; le jeu lit son état par la collision de ses formes
+// (DEBUG_GetColor -> K2_IsCollisionEnabled) et la coupe par DisablePartsCollisions. Classe inattendue : zone absente.
+std::vector<proto::PartState> read_parts(UObject* ch)
+{
+    std::vector<proto::PartState> out;
+    if (!ch) return out;
+    const auto parts = ue::get_object_array(ch, STR("FreeAimTargetParts"));
+    for (size_t i = 0; i < parts.size() && i < proto::kMaxParts; ++i) {
+        proto::PartState p;
+        UObject* part = parts[i];
+        if (part && ue::is_a(part, STR("BP_FreeAimTargetPart_C"))) {
+            p.present = true;
+            const auto shapes = ue::get_object_array(part, STR("ValidChildren"));
+            for (size_t k = 0; k < shapes.size() && k < proto::kMaxPartShapes; ++k)
+                p.coll.push_back(static_cast<uint8_t>(std::clamp(collision_of(shapes[k]), 0, 5)));   // illisible = sans collision
+        }
+        out.push_back(std::move(p));
+    }
+    return out;
+}
+
+// Remet les zones de l'hôte sur un ennemi d'ici. Toutes les formes coupées chez l'hôte : fonction du jeu
+// (DisablePartsCollisions) ; puis SetCollisionEnabled sur chaque forme encore différente. Les visuels propres à
+// l'ennemi (boule détruite…) ne sont pas touchés.
+void repair_parts(UObject* ch, const proto::UnitState& lu, const proto::UnitState& hu, RepairStats& r)
+{
+    const auto parts = ue::get_object_array(ch, STR("FreeAimTargetParts"));
+    const size_t n = std::min<size_t>(parts.size(), proto::kMaxParts);
+    auto note = [&](int index, const std::string& local, const std::string& host, const char* how, int failed) {
+        log().write("coop_repair_parts", JsonObj().add("unit", unit_key(hu.unit)).add("cls", hu.cls).add("part", index).add("local", local)
+                                             .add("host", host).add("how", how).add("failed", failed));
+    };
+    if (n != hu.parts.size() || n != lu.parts.size()) {
+        ++r.failed;
+        note(-1, proto::parts_str(lu.parts), proto::parts_str(hu.parts), "count", 1);
+        return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const auto& want = hu.parts[i];
+        if (same_parts({lu.parts[i]}, {want})) continue;
+        ++r.parts;
+        const std::string ls = proto::parts_str({lu.parts[i]}), hs = proto::parts_str({want});
+        UObject* part = parts[i];
+        if (!want.present || !part || !ue::is_a(part, STR("BP_FreeAimTargetPart_C"))) { ++r.failed; note(static_cast<int>(i), ls, hs, "absent", 1); continue; }
+        const auto shapes = ue::get_object_array(part, STR("ValidChildren"));
+        if (std::min<size_t>(shapes.size(), proto::kMaxPartShapes) != want.coll.size()) { ++r.failed; note(static_cast<int>(i), ls, hs, "shapes", 1); continue; }
+        const bool all_off = std::all_of(want.coll.begin(), want.coll.end(), [](uint8_t v) { return v == 0; });
+        const char* how = "set";
+        if (all_off && !want.coll.empty()) {
+            ue::Call c(part, STR("DisablePartsCollisions"));
+            if (c && c.invoke()) how = "disable";
+        }
+        int failed = 0;
+        for (size_t k = 0; k < want.coll.size(); ++k) {
+            UObject* shape = shapes[k];
+            const int cur = shape ? collision_of(shape) : -1;
+            if (cur >= 0 && (cur != 0) == (want.coll[k] != 0)) continue;
+            ue::Call c(shape, STR("SetCollisionEnabled"));
+            if (!c) { ++failed; continue; }
+            c.set_int(STR("NewType"), want.coll[k]).invoke();
+            const int now = collision_of(shape);
+            if (now < 0 || (now != 0) != (want.coll[k] != 0)) ++failed;
+        }
+        r.failed += failed;
+        note(static_cast<int>(i), ls, hs, how, failed);
+    }
+}
+
 std::string buffs_str(const std::vector<proto::BuffState>& v)
 {
     std::string s;
@@ -61,6 +150,17 @@ std::string buffs_str(const std::vector<proto::BuffState>& v)
 }
 
 } // namespace
+
+bool parts_differ(const proto::StateSync& local, const proto::StateSync& host)
+{
+    if (!local.parts_known || !host.parts_known) return false;
+    for (auto& hu : host.units) {
+        if (hu.unit.kind != proto::ActorKind::Enemy || hu.dead) continue;
+        const auto* lu = find(local, hu.unit);
+        if (lu && !lu->dead && !same_parts(lu->parts, hu.parts)) return true;
+    }
+    return false;
+}
 
 proto::Unit unit_of(UObject* ch)
 {
@@ -72,6 +172,7 @@ proto::StateSync snapshot(uint32_t battle_id, uint32_t turn)
     proto::StateSync st;
     st.battle_id = battle_id;
     st.turn = turn;
+    st.parts_known = true;
     auto add = [&](UObject* c) {
         UObject* s = game::stats(c);
         proto::UnitState u;
@@ -99,6 +200,8 @@ proto::StateSync snapshot(uint32_t battle_id, uint32_t turn)
         std::sort(u.buffs.begin(), u.buffs.end(), buff_less);
         if (u.unit.kind == proto::ActorKind::Hero)
             for (auto& [name, value] : game::mechanic_fields(c)) u.mech.push_back({name, value});
+        else
+            u.parts = read_parts(c);   // zones de visée libre (D37)
         st.units.push_back(std::move(u));
     };
     auto heroes = game::players();
@@ -115,7 +218,7 @@ proto::StateSync snapshot(uint32_t battle_id, uint32_t turn)
     return st;
 }
 
-uint64_t hash(const proto::StateSync& st, proto::Unit actor)
+uint64_t hash(const proto::StateSync& st, proto::Unit actor, bool with_parts)
 {
     wire::Fnv64 h;
     for (auto& u : st.units) {
@@ -133,6 +236,14 @@ uint64_t hash(const proto::StateSync& st, proto::Unit actor)
         for (auto& b : u.buffs) { h.str(b.cls); h.i64(b.stacks); h.i64(b.turns); h.i64(b.permanent ? 1 : 0); }
         h.i64(static_cast<int64_t>(u.mech.size()));
         for (auto& f : u.mech) { h.str(f.name); h.i64(f.value); }
+        if (with_parts && u.unit.kind == proto::ActorKind::Enemy) {   // D37 : collision active ou non, forme par forme
+            h.i64(static_cast<int64_t>(u.parts.size()));
+            for (auto& p : u.parts) {
+                h.i64(p.present ? 1 : 0);
+                h.i64(static_cast<int64_t>(p.coll.size()));
+                for (auto v : p.coll) h.i64(v != 0 ? 1 : 0);
+            }
+        }
     }
     h.i64(st.gradient_charges);
     h.i64(std::llround(st.gradient_progress * 1000));
@@ -163,6 +274,8 @@ std::string diff(const proto::StateSync& local, const proto::StateSync& host)
         for (size_t i = 0; buffs_equal && i < hu.buffs.size(); ++i) buffs_equal = same_buff(lu->buffs[i], hu.buffs[i]);
         if (!buffs_equal) item(k, "buffs", buffs_str(lu->buffs), buffs_str(hu.buffs));
         if (!same_mech(lu->mech, hu.mech)) item(k, "mech", mech_str(lu->mech, hu.mech), mech_str(hu.mech, lu->mech));
+        if (local.parts_known && host.parts_known && hu.unit.kind == proto::ActorKind::Enemy && !same_parts(lu->parts, hu.parts))
+            item(k, "parts", proto::parts_str(lu->parts), proto::parts_str(hu.parts));
     }
     for (auto& lu : local.units)
         if (!find(host, lu.unit) && !(lu.unit.kind == proto::ActorKind::Enemy && lu.dead)) item(unit_key(lu.unit) + ":" + lu.cls, "extra", "present", "-");
@@ -209,6 +322,8 @@ RepairStats repair(const proto::StateSync& local, const proto::StateSync& host)
             r.mech += game::set_mechanic_fields(ch, want, failed);
             r.failed += failed;
         }
+        if (local.parts_known && host.parts_known && hu.unit.kind == proto::ActorKind::Enemy && !hu.dead && !same_parts(lu->parts, hu.parts))
+            repair_parts(ch, *lu, hu, r);
         if (lu->break_bar != hu.break_bar) {
             ++r.breakbar;
             ue::Call c(st, STR("SetCurrentBreakBarDamage"));
@@ -270,7 +385,7 @@ RepairStats repair(const proto::StateSync& local, const proto::StateSync& host)
 std::string repair_json(const RepairStats& r)
 {
     return JsonObj().add("hp", r.hp).add("ap", r.ap).add("shield", r.shield).add("break", r.breakbar).add("death", r.death)
-        .add("buffs", r.buffs).add("mech", r.mech).add("gradient", r.gradient).add("failed", r.failed).str();
+        .add("buffs", r.buffs).add("mech", r.mech).add("gradient", r.gradient).add("parts", r.parts).add("failed", r.failed).str();
 }
 
 } // namespace e33::sync

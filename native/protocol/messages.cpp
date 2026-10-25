@@ -1,5 +1,6 @@
 #include "messages.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iterator>
@@ -103,6 +104,19 @@ void encode_payload(const Message& m, wire::Writer& w)
             w.i32(x.gradient_charges); w.f64(x.gradient_progress);
             w.u16(static_cast<uint16_t>(x.class_paths.size()));
             for (auto& [c, p] : x.class_paths) { w.str(c); w.str(p); }
+            if (x.parts_known) {   // champ final facultatif (D37) : zones de visée libre, unité par unité
+                w.u16(static_cast<uint16_t>(x.units.size()));
+                for (auto& u : x.units) {
+                    w.u16(static_cast<uint16_t>(std::min<size_t>(u.parts.size(), kMaxParts)));
+                    for (size_t j = 0; j < u.parts.size() && j < kMaxParts; ++j) {
+                        const auto& p = u.parts[j];
+                        w.boolean(p.present);
+                        const size_t ns = std::min<size_t>(p.coll.size(), kMaxPartShapes);
+                        w.u16(static_cast<uint16_t>(ns));
+                        for (size_t k = 0; k < ns; ++k) w.u8(p.coll[k]);
+                    }
+                }
+            }
         } else if constexpr (std::is_same_v<T, FreeAimEvent>) {
             w.u32(x.battle_id); w.u32(x.turn); w.u8(x.spot); w.u8(static_cast<uint8_t>(x.kind)); w.u16(x.seq); w.u32(x.t_ms);
             w.f64(x.x); w.f64(x.y); w.f64(x.z); w_unit(w, x.target);
@@ -292,6 +306,20 @@ std::optional<Message> decode_payload(MsgType t, wire::Reader& r, std::string& e
         if (r.ok() && !r.at_end()) {   // facultatif (chemins des classes de buff)
             const uint16_t np = r.count(kMaxBuffs * 4);
             for (uint16_t j = 0; j < np && r.ok(); ++j) { std::string c = r.str(128); std::string p = r.str(512); x.class_paths.emplace_back(std::move(c), std::move(p)); }
+        }
+        if (r.ok() && !r.at_end()) {   // facultatif (zones de visée libre, D37)
+            x.parts_known = true;
+            const uint16_t nu = r.count(kMaxUnits);
+            if (nu != x.units.size()) r.fail();
+            for (uint16_t i = 0; i < nu && r.ok(); ++i) {
+                const uint16_t npart = r.count(kMaxParts);
+                for (uint16_t j = 0; j < npart && r.ok(); ++j) {
+                    PartState p; p.present = r.boolean();
+                    const uint16_t ns = r.count(kMaxPartShapes);
+                    for (uint16_t k = 0; k < ns && r.ok(); ++k) { const uint8_t c = r.u8(); if (c > 5) r.fail(); p.coll.push_back(c); }
+                    x.units[i].parts.push_back(std::move(p));
+                }
+            }
         }
         return finish(x);
     }
@@ -535,6 +563,18 @@ std::optional<Message> decode(wire::Reader& r, std::string& err)
 
 static std::string unit_json(const Unit& u) { return JsonObj().add("k", static_cast<int>(u.kind)).add("s", static_cast<int>(u.spot)).str(); }
 
+std::string parts_str(const std::vector<PartState>& parts)
+{
+    std::string s;
+    for (auto& p : parts) {
+        if (!s.empty()) s += " ";
+        if (!p.present) { s += "-"; continue; }
+        if (p.coll.empty()) s += "_";
+        for (auto v : p.coll) s += static_cast<char>('0' + (v % 10));
+    }
+    return s;
+}
+
 std::string to_json(const Message& m)
 {
     JsonObj o;
@@ -589,11 +629,15 @@ std::string to_json(const Message& m)
                 for (size_t j = 0; j < u.buffs.size(); ++j) { if (j) bs += ","; bs += JsonObj().add("c", u.buffs[j].cls).add("n", u.buffs[j].stacks).add("t", u.buffs[j].turns).add("p", u.buffs[j].permanent).str(); }
                 std::string ms = "{";
                 for (size_t j = 0; j < u.mech.size(); ++j) { if (j) ms += ","; ms += "\"" + json_escape(u.mech[j].name) + "\":" + std::to_string(u.mech[j].value); }
-                us += JsonObj().raw("u", unit_json(u.unit)).add("c", u.cls).add("hp", u.hp).add("ap", u.ap).add("shield", u.shield)
-                          .add("break", u.break_bar).add("dead", u.dead).raw("buffs", bs + "]").raw("mech", ms + "}").str();
+                JsonObj uo;
+                uo.raw("u", unit_json(u.unit)).add("c", u.cls).add("hp", u.hp).add("ap", u.ap).add("shield", u.shield)
+                    .add("break", u.break_bar).add("dead", u.dead).raw("buffs", bs + "]").raw("mech", ms + "}");
+                if (x.parts_known && !u.parts.empty()) uo.add("parts", parts_str(u.parts));
+                us += uo.str();
             }
             o.add("battle", x.battle_id).add("turn", x.turn).add("reason", static_cast<int>(x.reason)).raw("units", us + "]")
                 .add("gradient_charges", x.gradient_charges).add("gradient_progress", x.gradient_progress);
+            if (x.parts_known) o.add("parts_known", true);
         } else if constexpr (std::is_same_v<T, FreeAimEvent>) {
             o.add("battle", x.battle_id).add("turn", x.turn).add("spot", static_cast<int>(x.spot)).add("kind", static_cast<int>(x.kind)).add("seq", static_cast<int>(x.seq))
                 .add("t_ms", x.t_ms).add("x", x.x).add("y", x.y).add("z", x.z).raw("target", unit_json(x.target)).add("part", static_cast<int>(x.part));
