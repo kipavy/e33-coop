@@ -14,23 +14,21 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
-### Modifications
-- Combat : les journaux comparent désormais, coup par coup, l'ennemi touché par les compétences des héros chez chaque
-  joueur (compétences à cibles au hasard, comme la foudre à rebonds de Lune), pour préparer leur correction.
+## [0.6.35] - 2026-10-25
 
 ### Corrections
 - Combat : moins de gels de 3 s quand un monstre attaque. Si l'attaque touche moins de fois votre héros chez vous que
   chez l'autre joueur, son jeu n'attend plus votre parade pour les coups en trop.
-
-### Corrections
 - Combat : les points faibles des ennemis touchés en visée libre sont remis comme chez l'hôte au tour suivant ; avant,
   un point faible usé chez un seul joueur faisait diverger les dégâts des tirs suivants (PV d'ennemi différents).
-
-### Corrections
 - Exploration : les étapes de progression franchies par le meneur (tutoriels, branches de dialogue vues une seule fois)
   sont recopiées chez l'autre joueur ; elles ne provoquent plus de rechargement de la partie.
 - Exploration : un écart d'or, d'objets ou de progression est corrigé sur place, sans l'écran figé de 8-9 s ni la
   téléportation du rechargement complet (gardé en dernier recours).
+
+### Modifications
+- Combat : les journaux comparent désormais, coup par coup, l'ennemi touché par les compétences des héros chez chaque
+  joueur (compétences à cibles au hasard, comme la foudre à rebonds de Lune), pour préparer leur correction.
 
 ## [0.6.34] - 2026-10-25
 
@@ -338,7 +336,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.34...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.35...HEAD
+[0.6.35]: https://github.com/kipavy/e33-coop/compare/v0.6.34...v0.6.35
 [0.6.34]: https://github.com/kipavy/e33-coop/compare/v0.6.33...v0.6.34
 [0.6.33]: https://github.com/kipavy/e33-coop/compare/v0.6.32...v0.6.33
 [0.6.32]: https://github.com/kipavy/e33-coop/compare/v0.6.31...v0.6.32
