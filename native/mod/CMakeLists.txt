@@ -18,6 +18,13 @@ add_library(${TARGET} SHARED
     ../sync/coop_remote.cpp
     ../sync/coop_tick.cpp
     ../sync/explore.cpp
+    ../sync/explore_join.cpp
+    ../sync/explore_follow.cpp
+    ../sync/explore_replay.cpp
+    ../sync/explore_maps.cpp
+    ../sync/explore_narrative.cpp
+    ../sync/explore_worldhash.cpp
+    ../sync/explore_hooks.cpp
     ../sync/mount.cpp
     ../sync/builds.cpp
     ../sync/coopsave.cpp
