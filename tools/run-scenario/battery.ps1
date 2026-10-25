@@ -27,7 +27,7 @@ $all = @(
     "p8_sprint_client", "p8_sprint_sm_client", "p8_sprint_long_client", "p8_sprint_hardnet_client",
     "p8_cutscene_host", "p8_cutscene_sync_client", "p8_cutscene_client", "p8_dialogue_host", "p8_dialogue_sync_client",
     "p8_esquie_host", "p8_esquie_client",
-    "p8_prologue_client", "p8_prologue_host", "p8_readystall_host", "p8_thinking_host", "p8_defwait_host", "p8_turnalign_host",
+    "p8_prologue_client", "p8_prologue_host", "p8_readystall_host", "p8_thinking_host", "p8_defwait_host", "p8_turnalign_host", "p8_hitsahead_host",
     "p9_join_stuck_client", "p9_battle_keys_client", "p9_battle_keys_old_client", "p3_freeaim_old_client", "p7_mirror_release_host", "p7_mirror_release_old_host",
     "p9_rng_host", "p9_rng_client", "p9_rng_old_client",
     "p9_zones_host", "p9_zones_client", "p9_zones_rapid_client"

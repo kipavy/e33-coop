@@ -7,7 +7,7 @@
 P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible sans divergence durable ; P3 = confort.
 
 **P1**
-1. Gels de 2 s quand un monstre attaque (D28) : 0 gel voulu ; repenser avec `p8_turnlag_*`.
+1. Gels quand un monstre attaque : attentes de 3 s pour des coups absents chez le client corrigées en 0.6.33 (`owner_ahead`) ; restent les coups visant d'autres héros chez le client (tour encore en cours chez lui) et les alignements D28 animés de 2-3 s.
 2. À vérifier en jeu (corrigés sans test) : monstres de l'hôte passifs quand J2 mène (0.6.32, D35), améliorations d'armes et élixir de J2 (0.6.32, `coop_economy_delta` why upgrade / use, `coop_item_use_replayed`), cinématique de zone chez J2 (0.6.31), arme changée par J2 (0.6.30), marchand (0.6.29), combat lancé par J2 meneur (0.6.29, D34).
 
 **P2**
@@ -22,6 +22,13 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 9. Animation d'escalade de rebord absente chez le client.
 10. Meneur bloqué (diagnostic `coop_pilot_stuck`).
 11. Panneau Coop au clavier / manette (D25).
+
+## 2026-10-25, 10h — v0.6.33 : attentes de défense pour des coups absents chez le propriétaire (testé)
+
+- Journaux de l'hôte du 25/10 (session 01:01) : les « gels » sont surtout des attentes de défense figées de 3 s qui expirent (`coop_wait_long` defense 3016 ms, ok false). Tour 9 du combat 6 : attaque ennemie à 5 coups sur Lune chez l'hôte, 3 chez TOTOFFF, déjà dans son menu du tour 10 (IntentPreview / MenuState tour 10 reçus à 773,0) -> coups 4 et 5 attendus 3 s chacun. Même cas au combat 8, tour 1. Journal de TOTOFFF non disponible (récupéré à 01:18, avant ces combats).
+- Correctif : l'attente cesse dès que le propriétaire est à un tour suivant (hôte : un message de lui pour un tour > tour courant, `b.acks` ; client : état de l'hôte d'un tour suivant) ; coup esquivé ici (pas de dégâts qu'il n'a pas reçus), `why owner_ahead`, compteur `defense_waits_owner_ahead`. Un résultat déjà reçu reste prioritaire (1er essai : `p8_turnlag_client` en échec, coups des héros de l'hôte esquivés alors que leur résultat était là).
+- Test : faux client `--missing-hits N` (seuls les N premiers coups d'un tour existent chez lui, puis menu du tour suivant) et `p8_hitsahead_host` (vert : 2 sorties owner_ahead, attente max 78 ms) ; `p8_turnlag_host`, `p8_turnlag_client`, `p3_party_host`, `p3_party_client` verts.
+- Non couvert : tour 15 du combat 9 (client encore dans le tour, l'ennemi a frappé d'autres héros chez lui : 2 attentes de 3 s) et alignements D28 de 2,8-3 s (jeu animé, pas figé) ; le client ne signale pas la fin de l'action ennemie chez lui.
 
 ## 2026-10-25, 02h05 — v0.6.32 : monstres de l'hôte quand J2 mène, améliorations d'armes, élixir, téléportations (non testé)
 

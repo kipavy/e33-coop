@@ -14,6 +14,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.33] - 2026-10-25
+
+### Corrections
+- Combat : plus de gel de 3 s quand une attaque ennemie frappe plus de fois chez vous que chez l'autre joueur (il
+  est déjà passé au tour suivant) ; avant, le jeu restait figé 3 s pour chaque coup en trop.
+
 ## [0.6.32] - 2026-10-25
 
 ### Corrections
@@ -299,7 +305,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.32...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.33...HEAD
+[0.6.33]: https://github.com/kipavy/e33-coop/compare/v0.6.32...v0.6.33
 [0.6.32]: https://github.com/kipavy/e33-coop/compare/v0.6.31...v0.6.32
 [0.6.31]: https://github.com/kipavy/e33-coop/compare/v0.6.30...v0.6.31
 [0.6.30]: https://github.com/kipavy/e33-coop/compare/v0.6.29...v0.6.30
