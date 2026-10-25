@@ -42,6 +42,7 @@ bool joined();                // client : instantané chargé et monde prêt
 int joined_players();         // hôte : clients entrés dans la partie
 uint8_t pilot();
 bool is_pilot();
+bool shared();                // exploration partagée (hôte : un client entré ; client : entré dans la partie)
 void request_pilot();         // demande la main (touche F8, test runner)
 bool narrative_active();      // dialogue ou cinématique en cours ici
 bool choice_pending();        // question de dialogue posée ici, sans réponse

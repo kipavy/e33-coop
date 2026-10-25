@@ -4740,8 +4740,8 @@ void tick(double dt)
     // l'hôte) et ceux de l'hôte deviennent passifs. Vu le 2026-10-25 : le pion suiveur de l'hôte touchait un monstre
     // que le client n'avait pas touché -> combat imposé. Ennemis rendus au jeu dès que ce joueur redevient meneur.
     {
-        const bool lead_here = explore::sharing() && explore::is_pilot();
-        const bool want_passive = s.role == Role::Client ? !lead_here : (explore::sharing() && !explore::is_pilot());
+        const bool lead_here = explore::shared() && explore::is_pilot();
+        const bool want_passive = s.role == Role::Client ? !lead_here : (explore::shared() && !explore::is_pilot());
         static bool was_passive = false;
         if (!want_passive && was_passive && game::explore_pawn() && !game::map_change_in_progress()) {
             was_passive = false;
