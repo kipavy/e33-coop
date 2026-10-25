@@ -293,6 +293,7 @@ struct State {
     std::optional<uint32_t> perturb_turn;                  // client : -e33perturb=N (test de resynchro)
     std::optional<uint32_t> perturb_end_turn;              // client : -e33perturbend=N (test de la fin imposée : ennemis increvables ici)
     bool imposing = false;                                 // une défense imposée est en cours (pas une entrée parasite)
+    bool repairing = false;                                // réparation d'état en cours : ses tirages (ActivateBuff…) ne prennent pas de rang du tour
     bool lock_input = true;                                // -e33lockinput=0 : laisser les entrées pendant les tours des autres
     bool turn_dep = false;                                 // -e33turndep=1 : attente du TurnStart par dépendance de début de tour (essai)
     double ready_idle_s = kReadyIdleTimeout;               // hôte : -e33readyidle=N
@@ -1883,7 +1884,11 @@ void client_turn_finish(UObject* actor)
         if (mech_differs(mine, host)) bump("raw_mech_diffs");   // écart sur une mécanique propre (roue, taches…, D30)
         const proto::StateSync now = deferred ? sync::snapshot(b.id, b.turn) : mine;
         const proto::StateSync target = deferred ? shift_host_state(host, mine, now) : host;
+        // Les buffs remis par la réparation passent par ActivateBuff, qui tire au hasard : sans garde, ces tirages
+        // prenaient les rangs du tour et décalaient ceux de la suite (essai du 2026-10-25, combat 1, tour 3).
+        s.repairing = true;
         const sync::RepairStats r = sync::repair(now, target);
+        s.repairing = false;
         bump("repairs");
         bump("repair_failures", r.failed);
         const proto::StateSync after = sync::snapshot(b.id, b.turn);
@@ -2137,7 +2142,7 @@ UObject* timeline_hero(UObject* timeline)
 }
 
 // Impose sur ce héros la défense décidée par son propriétaire, juste avant le test du jeu.
-void impose_defense(UObject* hero, proto::Defense d, bool jumpable)
+bool impose_defense(UObject* hero, proto::Defense d, bool jumpable)
 {
     s.imposing = true;
     bool started = true;
@@ -2172,6 +2177,7 @@ void impose_defense(UObject* hero, proto::Defense d, bool jumpable)
     }
     s.imposing = false;
     if (!started) bump("defense_start_failed");
+    return started;
 }
 
 proto::Defense local_result(const LocalHit& lh, bool parried, bool dodged, bool gradient)
@@ -2256,11 +2262,12 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
             log().write("coop_player_unresponsive", JsonObj().add("player", static_cast<int>(owner)).add("why", "defense timeout, turn not started there"), b.turn);
         }
     }
-    impose_defense(hero, res, jumpable);
+    const bool started = impose_defense(hero, res, jumpable);
     b.imposed_check[stats_comp] = static_cast<int>(res);
     b.turn_defenses.push_back({spot, res});
     bump("defenses_imposed");
     log().write("coop_defense_imposed", JsonObj().add("spot", spot).add("hit", static_cast<int>(hit)).add("owner", static_cast<int>(owner)).add("jumpable", jumpable)
+                                         .add("started", started)
                                          .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms).add("why", why), b.turn);
 }
 
@@ -3377,6 +3384,7 @@ void subscribe()
             if (s.role == Role::Solo) return;
             // Threads d'animation, chargement… : jamais un tirage de gameplay, et aucun accès au jeu permis ici.
             if (!on_game_thread()) { bump("off_thread_draws"); return; }
+            if (s.repairing) { bump("repair_draws_skipped"); return; }
             trace_random(ctx, fname);
             if (!ctx.RESULT_DECL) return;
             // Avant le tour 1 : mise en place du combat (D30).
@@ -4338,6 +4346,24 @@ void run_remote_action()
     if (controls(spot) && !b.forced.count(key)) return;
     if (b.executed.count(key) || b.hold) return;
     if (replay_free_aim(key, cur)) return;   // visée libre du propriétaire d'abord (elle ne termine pas le tour)
+    // Ordre des tours décalé d'un cran entre les deux jeux (engagement différent, mort d'un seul côté) : la commande de
+    // ce héros est rangée sous le tour voisin et n'était jamais trouvée (essai du 2026-10-25, combats 7 et 9 : 30 s
+    // d'attente puis abandon). Une commande non jouée du même héros au tour précédent ou suivant est la sienne.
+    if (!b.commands.count(key)) {
+        for (const uint32_t t : {b.turn - 1, b.turn + 1}) {
+            const std::pair<uint32_t, int> other{t, spot};
+            auto o = b.commands.find(other);
+            if (t == 0 || o == b.commands.end() || b.executed.count(other) || b.forced.count(other)) continue;
+            proto::ActionCommand ac = o->second;
+            ac.turn = b.turn;
+            b.commands[key] = ac;
+            b.command_time[key] = b.command_time[other];
+            b.commands.erase(other);
+            bump("commands_turn_shifted");
+            log().write("coop_command_turn_shift", JsonObj().add("spot", spot).add("from_turn", static_cast<int64_t>(t)), b.turn);
+            break;
+        }
+    }
     auto it = b.commands.find(key);
     if (it == b.commands.end()) {
         // Hôte : attaque automatique imposée au héros d'un autre joueur et diffusée (il la jouera en arrivant à ce tour).
