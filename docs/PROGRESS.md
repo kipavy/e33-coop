@@ -12,7 +12,7 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 
 **P2**
 3. J2 meneur : son sprint vu comme une marche avec téléportations chez l'hôte. Journaux du 25/10 : le pion suiveur de l'hôte n'obtient pas le sprint par moments (300 u/s, allure 1 ; diagnostic `coop_follow_sprint_refused` en 0.6.32), et rafale de téléportations annulées par le jeu (corrigée en 0.6.32 : attente croissante, `coop_follower_teleport_undone`).
-4. Pétank : ses déplacements ne sont pas vus par J2 (acteur du monde qui bouge, non synchronisé).
+4. Pétank immobile chez J2 : ennemi du monde (`BP_EnemyWorld_Petank_*`) rendu passif chez le suiveur, donc sans fuite ; détection gardée en 0.6.32 (fuit chez chacun, position non synchronisée).
 5. Tirs en exploration (0.6.29, à vérifier : `coop_freeaim_world_hit`).
 6. Écran de défaite (D33, 0.6.20) jamais testé ; scénarios `p3_defeat_*` jamais lancés.
 7. Journaux d'expédition : sélection non synchro (écran à préciser par Killian).
@@ -28,6 +28,7 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 - Monstres (D35) : le client mène -> ses ennemis du monde restent actifs (son pion engage, la demande D34 fait partir le combat chez l'hôte) et ceux de l'hôte sont rendus passifs (capsule de rencontre, détection, verrou d'aggro), rendus au jeu dès que l'hôte reprend la main ou à la fin de session (`coop_world_enemies_passive` / `_restored`, champ pilot).
 - Améliorations d'armes (journaux du camp 01:01) : aucun `EconomyDelta` « level: » n'est parti des deux côtés. L'amélioration se fait pendant le dialogue du Curateur ; or un dialogue est un « événement » (`touch`) qui fait reprendre la référence du relevé d'économie après lui, amélioration comprise. Désormais économie relevée juste avant / après `BP_ItemUpgradeSystem.UpgradeWeaponFromInstance`, écart (niveau + matériaux) envoyé aussitôt (`coop_economy_delta` why upgrade).
 - Élixir de chroma de J2 (01:14:49) : seul `item:PartyHealConsumable -1` était appliqué chez l'hôte. Utilisations hors combat (`BP_jRPG_Controller_World.HealParty`, `InventoryManager.UseItemOnCharacter`) envoyées en clé `use:heal_party` / `use:<objet>@<personnage>` (même message, pas de changement de protocole), rejouées par la même fonction du jeu, qui dépense l'objet (`coop_item_use_replayed` : spent ; dépense différée attendue, pas renvoyée).
+- Pétank : `BP_EnemyWorld_Petank_*` est un ennemi du monde, rendu passif chez le suiveur (détection coupée) -> immobile. Sa détection est gardée (il fuit le pion suiveur), capsule de rencontre toujours coupée.
 - Suivi : chez l'hôte suiveur, 4017 téléportations dans la session, dont ~2800 en 1 min (cible 700 u plus bas, pion remis en place par le jeu à chaque image). Téléportation annulée -> attente 1, 2, 4, 8, 10 s (`coop_follower_teleport_undone`). Sprint refusé par l'ALS (300 u/s, allure 1, entre 01:14 et 01:22) : diagnostic `coop_follow_sprint_refused` (mode de rotation, entrée, visée).
 
 ## 2026-10-25, 01h30 — v0.6.31 : cinématique de zone non lancée chez le suiveur (non testé)

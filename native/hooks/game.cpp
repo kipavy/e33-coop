@@ -1045,6 +1045,9 @@ int passive_world_enemies()
             if (c) { c.set_bool(STR("bInGenerateOverlapEvents"), false).invoke(); ++n; remember(g_passive_capsules, name); }
         }
         // Pas de poursuite ni de détection du pion (verrou posé une seule fois : tant que la détection reste coupée).
+        // Sauf les Pétanks : ils fuient le joueur qui les voit ; sans détection, ils restaient immobiles chez le suiveur
+        // (vu le 2026-10-25 au Sanctuaire ancien). Leur capsule reste coupée : pas de combat au contact ici.
+        if (name.find("Petank") != std::string::npos) continue;
         if (ue::get_bool(e, STR("EnableDetection"))) {
             ue::set_bool(e, STR("EnableDetection"), false);
             ue::Call lock(e, STR("AddAggroLock"));

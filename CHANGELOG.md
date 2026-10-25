@@ -24,6 +24,7 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
   partagées et le niveau d'une arme différait d'un joueur à l'autre.
 - Objets utilisés hors combat (élixir de chroma, objet donné à un personnage depuis le menu) : l'effet (soin) a
   aussi lieu chez l'autre joueur ; avant, seule la quantité suivait.
+- Pétanks : ils fuient aussi chez le joueur qui suit (avant, ils restaient immobiles chez lui).
 - Suivi du meneur : quand le jeu annule une téléportation du personnage suiveur, le mod attend avant de réessayer au
   lieu de le téléporter à chaque image.
 
