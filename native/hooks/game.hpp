@@ -233,6 +233,9 @@ bool apply_characters_blob(const std::wstring& slot, const std::vector<uint8_t>&
                            std::vector<std::string>& applied, std::string& err);
 // --- Ressources communes (D13) : or, quantités d'objets ("item:<id>"), niveaux d'équipement ("level:<id>") ---
 UObject* inventory_manager();
+// Rejoue ici l'utilisation d'un objet hors combat faite par un autre joueur : « heal_party » (élixir de chroma,
+// contrôleur HealParty) ou « <objet>@<personnage> » (UseItemOnCharacter). L'objet est dépensé par le jeu.
+bool replay_item_use(const std::string& what, std::string& err);
 void economy_sample(std::map<std::string, int64_t>& out);
 // Applique une variation avec les fonctions du jeu (ReceiveGold / TrySpendGold, AddItemToInventory / RemoveItemFromInventory, ChangeLevel).
 bool economy_apply(const std::string& key, int64_t delta, std::string& err);

@@ -34,6 +34,12 @@ void set_player_id(uint8_t id);
 bool handle(uint8_t from, const proto::Message& m);   // true si consommé
 void tick(double now);
 void rebaseline();          // après le chargement d'un instantané : l'état chargé est la nouvelle référence
+// Amélioration d'arme faite ici (BP_ItemUpgradeSystem.UpgradeWeaponFromInstance) : économie relevée avant, écart envoyé après.
+void on_upgrade_pre();
+void on_upgrade_post();
+// Objet utilisé hors combat ici : « heal_party » (contrôleur HealParty) ou « <objet>@<personnage> » (UseItemOnCharacter).
+void on_item_use_pre(const std::string& what);
+void on_item_use_post();
 bool menu_open();           // un menu de jeu est ouvert ici (les changements partent à sa fermeture)
 
 } // namespace e33::builds

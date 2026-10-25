@@ -2827,6 +2827,17 @@ void subscribe()
     // Client (même raison) : tour ennemi commencé ici avant l'état de l'hôte (vérification différée, -e33turndep) et que le jeu
     // n'aurait pas retenu faute d'auditeur : il le retient maintenant jusqu'à l'état de l'hôte, jeu animé. Sinon le client
     // jouait le tour en avance et figeait son image en attendant les défenses des héros de l'hôte (sens inverse de D28).
+    // Amélioration d'arme faite par ce joueur (Curateur du camp) : envoyée aussitôt (builds, D13).
+    bus.pre(L"/Game/Gameplay/Pictos/BP_ItemUpgradeSystem.BP_ItemUpgradeSystem_C:UpgradeWeaponFromInstance", [](HookCtx&, UFunction*) { builds::on_upgrade_pre(); });
+    bus.post(L"/Game/Gameplay/Pictos/BP_ItemUpgradeSystem.BP_ItemUpgradeSystem_C:UpgradeWeaponFromInstance", [](HookCtx&, UFunction*) { builds::on_upgrade_post(); });
+    // Objet utilisé hors combat par ce joueur (élixir de chroma, objet donné à un personnage) : effet rejoué chez les autres.
+    bus.pre(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Controller_World.BP_jRPG_Controller_World_C:HealParty", [](HookCtx&, UFunction*) { builds::on_item_use_pre("heal_party"); });
+    bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_Controller_World.BP_jRPG_Controller_World_C:HealParty", [](HookCtx&, UFunction*) { builds::on_item_use_post(); });
+    bus.pre(L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_InventoryManager.AC_jRPG_InventoryManager_C:UseItemOnCharacter", [](HookCtx& ctx, UFunction* f) {
+        const std::string item = ue::read_param_fname(ctx, f, STR("ItemToUse")), ch = ue::read_param_fname(ctx, f, STR("CharacterHardcodedName"));
+        if (!item.empty() && !ch.empty()) builds::on_item_use_pre(item + "@" + ch);
+    });
+    bus.post(L"/Game/jRPGTemplate/Blueprints/Components/AC_jRPG_InventoryManager.AC_jRPG_InventoryManager_C:UseItemOnCharacter", [](HookCtx&, UFunction*) { builds::on_item_use_post(); });
     bus.post(L"/Game/Gameplay/BP_DependencyRefCounter.BP_DependencyRefCounter_C:Reset", [](HookCtx& ctx, UFunction*) {
         auto& b = s.battle;
         if (!b.active || b.ending) return;

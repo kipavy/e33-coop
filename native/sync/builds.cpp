@@ -276,11 +276,69 @@ std::map<std::string, int64_t> econ_diff(const std::map<std::string, int64_t>& c
     return d;
 }
 
+// Objets utilisés hors combat (élixir de chroma, objet donné à un personnage depuis le menu) : la quantité seule ne
+// suffit pas, l'effet (soin) doit aussi avoir lieu chez les autres. Vu le 2026-10-25 : élixir de J2, soin absent chez
+// l'hôte. L'utilisation part en clé « use:<quoi> » (au lieu de « item:<objet> » = -1) ; les autres appellent la même
+// fonction du jeu, qui dépense l'objet elle-même.
+struct Use { std::string what, item; double at; };
+std::vector<Use> g_uses;                       // utilisations d'ici dont la dépense n'est pas encore partie
+std::map<std::string, int64_t> g_expect;       // dépenses attendues ici après un rejeu (dépense différée par le jeu)
+double g_expect_at = -1;
+
+std::string use_item_of(const std::string& what)
+{
+    if (what == "heal_party") return "PartyHealConsumable";
+    return what.substr(0, what.find('@'));
+}
+
+// Remplace dans d la dépense d'un objet utilisé ici par sa clé « use: ».
+void convert_uses(std::map<std::string, int64_t>& d)
+{
+    for (auto it = g_uses.begin(); it != g_uses.end();) {
+        if (s.now - it->at > 15.0) { it = g_uses.erase(it); continue; }
+        auto f = d.find("item:" + it->item);
+        if (f == d.end() || f->second >= 0) { ++it; continue; }
+        if (++f->second == 0) d.erase(f);
+        d["use:" + it->what] += 1;
+        it = g_uses.erase(it);
+    }
+}
+
+// Retire de d les dépenses faites ici par un rejeu (pas à renvoyer).
+void drop_expected(std::map<std::string, int64_t>& d)
+{
+    if (g_expect_at >= 0 && s.now - g_expect_at > 15.0) g_expect.clear();
+    for (auto it = g_expect.begin(); it != g_expect.end();) {
+        auto f = d.find(it->first);
+        if (f != d.end() && f->second < 0) {
+            const int64_t take = std::max(f->second, it->second);   // deux négatifs : le plus proche de 0
+            f->second -= take;
+            it->second -= take;
+            if (f->second == 0) d.erase(f);
+        }
+        if (it->second == 0) it = g_expect.erase(it); else ++it;
+    }
+}
+
 bool econ_apply(const std::vector<proto::EconomyPart>& parts, std::string& err)
 {
     bool ok = true;
     for (auto& p : parts) {
         std::string e1;
+        if (p.key.rfind("use:", 0) == 0) {
+            const std::string what = p.key.substr(4), item = "item:" + use_item_of(what);
+            std::map<std::string, int64_t> before, after;
+            game::economy_sample(before);
+            bool one = true;
+            for (int64_t i = 0; i < p.delta; ++i) one = game::replay_item_use(what, e1) && one;
+            game::economy_sample(after);
+            const int64_t spent = (before.count(item) ? before[item] : 0) - (after.count(item) ? after[item] : 0);
+            // Dépense pas encore faite par le jeu (animation ?) : à ne pas renvoyer quand elle arrivera.
+            if (spent < p.delta) { g_expect[item] -= p.delta - spent; g_expect_at = s.now; }
+            log().write("coop_item_use_replayed", JsonObj().add("what", what).add("count", p.delta).add("ok", one).add("spent", spent).add("err", e1));
+            if (!one) { ok = false; err += (err.empty() ? "" : "; ") + p.key + ": " + e1; }
+            continue;
+        }
         if (!game::economy_apply(p.key, p.delta, e1)) { ok = false; err += (err.empty() ? "" : "; ") + p.key + ": " + e1; }
     }
     return ok;
@@ -290,6 +348,26 @@ void econ_resample()
 {
     game::economy_sample(e.prev);
     e.prev_at = s.now;
+}
+
+// Amélioration d'arme faite ici (Curateur du camp, pendant son dialogue) : le relevé périodique ne la voit pas (un
+// dialogue est un « événement », la référence est reprise après lui, amélioration comprise). Vu le 2026-10-25 : armes
+// améliorées des deux côtés, aucun delta envoyé, niveau 3 chez l'hôte et 4 chez le client. On mesure donc l'économie
+// juste avant et juste après la fonction du jeu, et l'écart (niveau + matériaux dépensés) part aussitôt.
+std::map<std::string, int64_t> g_upgrade_before;
+bool g_upgrade_open = false;
+
+void econ_send(const std::map<std::string, int64_t>& d, const char* why)
+{
+    proto::EconomyDelta m;
+    m.seq = ++e.seq;
+    m.origin = s.me;
+    m.authoritative = s.host;
+    std::string ks;
+    for (auto& [k, v] : d) { m.parts.push_back({k, v}); ks += (ks.empty() ? "" : ",") + k + "=" + std::to_string(v); }
+    s.net.publish(m);
+    bump("economy_deltas_sent");
+    log().write("coop_economy_delta", JsonObj().add("seq", m.seq).add("parts", ks).add("authoritative", m.authoritative).add("why", why));
 }
 
 void econ_tick()
@@ -305,19 +383,13 @@ void econ_tick()
     game::economy_sample(cur);
     // Premier relevé, ou un événement (coffre, combat, butin…) depuis le précédent : nouvelle référence, rien à envoyer.
     if (e.prev_at < 0 || age < s.now - e.prev_at) { e.prev = cur; e.prev_at = s.now; return; }
-    const auto d = econ_diff(cur, e.prev);
+    auto d = econ_diff(cur, e.prev);
     e.prev = cur;
     e.prev_at = s.now;
+    drop_expected(d);
+    convert_uses(d);
     if (d.empty() || !s.net.sharing || !s.net.sharing()) return;
-    proto::EconomyDelta m;
-    m.seq = ++e.seq;
-    m.origin = s.me;
-    m.authoritative = s.host;
-    std::string ks;
-    for (auto& [k, v] : d) { m.parts.push_back({k, v}); ks += (ks.empty() ? "" : ",") + k + "=" + std::to_string(v); }
-    s.net.publish(m);
-    bump("economy_deltas_sent");
-    log().write("coop_economy_delta", JsonObj().add("seq", m.seq).add("parts", ks).add("authoritative", m.authoritative));
+    econ_send(d, "sample");
 }
 
 void econ_receive(uint8_t from, const proto::EconomyDelta& m)
@@ -364,6 +436,62 @@ void econ_receive(uint8_t from, const proto::EconomyDelta& m)
 
 void reset() { s = S{}; }
 
+void on_upgrade_pre()
+{
+    if (!s.active || game::in_battle() || game::mod_call_depth() > 0) return;
+    game::economy_sample(g_upgrade_before);
+    g_upgrade_open = true;
+}
+
+// Écart mesuré autour d'une fonction du jeu appelée ici : envoyé aussitôt, et référence du relevé périodique décalée
+// d'autant (l'écart ne repart pas une seconde fois).
+void send_measured(std::map<std::string, int64_t> d, const char* why)
+{
+    if (e.prev_at >= 0) for (auto& [k, v] : d) e.prev[k] += v;
+    convert_uses(d);
+    log().write("coop_economy_measured", JsonObj().add("why", why).add("changes", static_cast<int64_t>(d.size())).add("sharing", s.net.sharing && s.net.sharing()));
+    if (d.empty() || !s.net.sharing || !s.net.sharing()) return;
+    econ_send(d, why);
+}
+
+void on_upgrade_post()
+{
+    if (!g_upgrade_open) return;
+    g_upgrade_open = false;
+    std::map<std::string, int64_t> after;
+    game::economy_sample(after);
+    bump("economy_upgrades_sent");
+    send_measured(econ_diff(after, g_upgrade_before), "upgrade");
+}
+
+std::map<std::string, int64_t> g_use_before;
+bool g_use_open = false;
+int g_use_depth = 0;   // appels imbriqués (HealParty peut passer par UseItemOnCharacter) : seul le premier compte
+
+void on_item_use_pre(const std::string& what)
+{
+    if (g_use_depth++ > 0) return;
+    if (!s.active || game::in_battle() || game::mod_call_depth() > 0) return;
+    g_uses.push_back({what, use_item_of(what), s.now});
+    game::economy_sample(g_use_before);
+    g_use_open = true;
+    log().write("coop_item_use_local", JsonObj().add("what", what));
+}
+
+void on_item_use_post()
+{
+    if (g_use_depth > 0) --g_use_depth;
+    if (g_use_depth > 0 || !g_use_open) return;
+    g_use_open = false;
+    std::map<std::string, int64_t> after;
+    game::economy_sample(after);
+    auto d = econ_diff(after, g_use_before);
+    // Dépense pas encore faite (le jeu la fait plus tard) : le relevé périodique la convertira (g_uses).
+    if (d.empty()) return;
+    bump("economy_item_uses_sent");
+    send_measured(std::move(d), "use");
+}
+
 void init(bool host, const Net& net)
 {
     s.host = host;
@@ -371,7 +499,7 @@ void init(bool host, const Net& net)
     s.active = true;
     for (const char* c : {"build_offers_sent", "build_offers_authoritative", "builds_applied", "builds_rejected", "builds_reverted", "build_errors",
                           "build_hash_mismatches", "build_changes_detected",
-                          "economy_deltas_sent", "economy_deltas_applied", "economy_rejected", "economy_errors"})
+                          "economy_deltas_sent", "economy_deltas_applied", "economy_rejected", "economy_errors", "economy_upgrades_sent", "economy_item_uses_sent"})
         bump(c, 0);
 }
 

@@ -1451,6 +1451,22 @@ void economy_sample(std::map<std::string, int64_t>& out)
     }
 }
 
+bool replay_item_use(const std::string& what, std::string& err)
+{
+    ModCall mod;   // nos hooks d'utilisation ne renvoient pas ce rejeu
+    if (what == "heal_party") {
+        ue::Call c(controller(), STR("HealParty"));
+        if (!c) { err = "HealParty not found"; return false; }
+        return c.invoke();
+    }
+    const auto at = what.find('@');
+    if (at == std::string::npos) { err = "bad use " + what; return false; }
+    ue::Call c(inventory_manager(), STR("UseItemOnCharacter"));
+    if (!c) { err = "UseItemOnCharacter not found"; return false; }
+    const std::wstring item = ue::from_utf8(what.substr(0, at)), ch = ue::from_utf8(what.substr(at + 1));
+    return c.set_fname(STR("ItemToUse"), item.c_str()).set_fname(STR("CharacterHardcodedName"), ch.c_str()).invoke();
+}
+
 bool economy_apply(const std::string& key, int64_t delta, std::string& err)
 {
     if (delta == 0) return true;
