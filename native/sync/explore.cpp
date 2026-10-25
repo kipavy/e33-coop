@@ -594,6 +594,9 @@ struct FollowCtl {
     double last_arrival = -1;
     double discontinuity_at = -100;         // trou de données / saut du pilote : téléportation « gap » permise
     double teleport_at = -100;
+    double tp_from[3]{};                    // position du pion juste avant la dernière téléportation
+    int tp_fails = 0;                       // téléportations annulées par le jeu d'affilée (pion revenu sur place)
+    double tp_block_until = -1;
     // Conduite
     bool moving = false;
     bool sprint = false;
@@ -850,6 +853,7 @@ void follow_metrics(const Rendered& R, double rv, double own, double gap_now, do
 
 void teleport_follower(UObject* pawn, const Rendered& R, const char* why, double err, double dz, double rv, double own_speed)
 {
+    game::location(pawn, fc.tp_from);
     game::teleport_pawn(pawn, R.pos, R.yaw);
     bump("follower_teleports");
     if (std::string(why) != "gap") bump("follower_teleports_nogap");
@@ -973,6 +977,15 @@ void follow_tick()
         if (std::fabs(dz) > 400) { if (fc.dz_since < 0) fc.dz_since = s.now; else if (s.now - fc.dz_since > 0.5) tp = after_gap ? "gap" : "dz"; }
         else fc.dz_since = -1;
     }
+    // Téléportation annulée par le jeu (pion revenu là où il était : 4017 téléportations en 25 min chez l'hôte le
+    // 2026-10-25, une par image, cible 700 u plus bas) : attente croissante avant la suivante (1, 2, 4, 8 s, 10 s au plus).
+    if (tp && s.now - fc.teleport_at < 2.0 && std::hypot(me.pos[0] - fc.tp_from[0], me.pos[1] - fc.tp_from[1]) < 300 && std::fabs(me.pos[2] - fc.tp_from[2]) < 300) {
+        ++fc.tp_fails;
+        fc.tp_block_until = s.now + std::min(10.0, static_cast<double>(1 << std::min(fc.tp_fails - 1, 4)));
+        bump("follower_teleports_undone");
+        log().write("coop_follower_teleport_undone", JsonObj().add("why", tp).add("fails", fc.tp_fails).add("wait_s", fc.tp_block_until - s.now).add("dz", std::round(dz)));
+    } else if (tp && s.now - fc.teleport_at > 10.0) fc.tp_fails = 0;
+    if (tp && s.now < fc.tp_block_until) tp = nullptr;
     const bool fresh = s.now - s.last_pilot_at < 1.0;   // mesures d'arrivée (changement de niveau) : position récente du pilote seulement
     if (tp) { if (fresh) mt_follow(gap_now, true, 0, 0); teleport_follower(pawn, R, tp, err, dz, rv, own_speed); return; }
     // Vitesse voulue : celle du pilote rendu + rattrapage de l'écart, plafonnée.
@@ -1027,6 +1040,28 @@ void follow_tick()
     if (fc.sprint) {
         f.sprint_s += fdt;
         if (own_speed > run_speed + 50) f.sprint_gait_ok_s += fdt;
+        // Diagnostic : sprint voulu mais pas accordé par l'ALS (hôte suiveur à 300 u/s, allure 1, pendant que le client
+        // sprintait, 2026-10-25 ; jamais vu chez le client suiveur). L'ALS refuse le sprint si l'entrée < 0,9 ou, en mode
+        // « LookingDirection », si le mouvement s'écarte de plus de 50° de la visée : on relève ces valeurs.
+        static double refused_since = -1, next_refused_log = 0;
+        if (own_speed < run_speed + 20 && fc.moving) {
+            if (refused_since < 0) refused_since = s.now;
+            if (s.now - refused_since > 1.5 && s.now >= next_refused_log) {
+                next_refused_log = s.now + 10.0;
+                bump("follow_sprint_refused");
+                const auto* rm = ue::value_ptr<uint8_t>(pawn, STR("RotationMode"));
+                const auto* st = ue::value_ptr<uint8_t>(pawn, STR("Stance"));
+                const auto* in = ue::value_ptr<float>(pawn, STR("MovementInputAmount"));
+                const auto* aim = ue::value_ptr<double>(pawn, STR("AimingRotation"));
+                const double vel_yaw = std::atan2(me.vel[1], me.vel[0]) * 57.2958;
+                log().write("coop_follow_sprint_refused", JsonObj().add("own", std::round(own_speed)).add("rv", std::round(rv))
+                                                            .add("gait", game::pawn_gait(pawn)).add("desired", game::pawn_gait(pawn, true))
+                                                            .add("rot_mode", rm ? static_cast<int>(*rm) : -1).add("stance", st ? static_cast<int>(*st) : -1)
+                                                            .add("input", in ? static_cast<double>(*in) : -1.0)
+                                                            .add("aim_yaw", aim ? std::round(aim[1]) : 0.0).add("vel_yaw", std::round(vel_yaw))
+                                                            .add("speeds", fc.speeds_ok).add("sprint_set", std::round(fc.sprint_set)));
+            }
+        } else refused_since = -1;
         if (s.now >= fc.next_gait_assert) {   // le jeu peut remettre l'allure (fin de dialogue, zone…)
             fc.next_gait_assert = s.now + 0.5;
             if (game::pawn_gait(pawn, true) != 2) game::set_pawn_desired_gait(pawn, 2);
@@ -3013,6 +3048,7 @@ int joined_players()
 }
 uint8_t pilot() { return s.pilot; }
 bool is_pilot() { return s.pilot == s.me; }
+bool shared() { return sharing(); }
 void request_pilot()
 {
     if (is_pilot()) return;
