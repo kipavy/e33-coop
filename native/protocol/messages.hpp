@@ -3,6 +3,7 @@
 // est rejeté par decode() et ne doit jamais faire planter le jeu.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -25,6 +26,8 @@ namespace e33::proto {
 //      état des menus de combat du propriétaire, rejoué dans les menus du jeu chez les autres (MenuState),
 //      scène (cinématique) commencée par le pilote et sa cause, déclenchée aussitôt chez les suiveurs (SceneStart), et passée
 //      ensemble (SceneSkip), fin d'une action ennemie chez un joueur et coups reçus par ses héros (EnemyActionDone, D36).
+//      Drapeau persistant posé par le pilote (FlagSet), réparation sur place de l'état d'exploration (WorldLeavesRequest,
+//      WorldLeaves), D38 : un pair plus ancien les ignore (pas de miroir de drapeaux ; réparation remplacée par l'instantané).
 inline constexpr uint16_t kProtocolVersion = 6;
 inline constexpr uint32_t kMagic = 0x43333345; // "E33C"
 
@@ -37,7 +40,7 @@ enum class MsgType : uint16_t {
     WorldInteract = 47, DialogueChoice = 48, MapChange = 49, NarrativeState = 50, BarrierRelease = 51, PauseState = 52, SceneStart = 53, SceneSkip = 54,
     Owners = 60, BattleReady = 61, Roster = 62, WorldHash = 63, ResyncRequest = 64,
     BuildOffer = 65, BuildChunk = 66, EconomyDelta = 67, DefeatChoice = 68,
-    EnemyActionDone = 70,
+    EnemyActionDone = 70, FlagSet = 72, WorldLeavesRequest = 73, WorldLeaves = 74,
 };
 
 const char* type_name(MsgType t);
@@ -352,6 +355,16 @@ struct EconomyDelta { uint32_t seq = 0; uint8_t origin = 0; bool authoritative =
 // prompt : 0 « Réessayer / Abandonner » (yes = réessayer : chacun relance le combat ; non = abandon : l'hôte recharge sa
 // partie, le client attend son instantané), 1 « Envoyer l'équipe de réserve ? » (yes = oui : le combat continue avec elle).
 struct DefeatChoice { uint32_t battle_id = 0; uint8_t prompt = 0; uint8_t yes = 0; };
+// Drapeau persistant (UNamedID de GI.NamedIDsStates) écrit par le pilote (WritePersistentFlag) : pilote -> hôte -> autres,
+// qui l'écrivent aussi (D38). name : nom de l'objet UNamedID (clé des feuilles « flags ») ; guid : son Guid (repli).
+struct FlagSet { uint32_t seq = 0; std::string name; std::array<uint32_t, 4> guid{}; bool value = false; };
+// Client -> hôte : réparation sur place (D38) ; parts : parties de l'empreinte en écart (gold, inventory2, flags).
+struct WorldLeavesRequest { uint32_t seq = 0; std::vector<std::string> parts; };
+// Hôte -> client : feuilles d'une partie chez l'hôte (page par page) et son empreinte (vérification après réparation).
+// inventory2 : clés « item:<Nom> » / « level:<Nom> » avec la casse d'origine (l'empreinte, elle, est en minuscules) ;
+// flags : nom du UNamedID -> "0" / "1" ; gold : une feuille « gold ».
+struct LeafEntry { std::string key; std::string value; };
+struct WorldLeaves { uint32_t seq = 0; std::string part; uint64_t hash = 0; uint16_t page = 0; uint16_t pages = 1; std::vector<LeafEntry> leaves; };
 
 using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStart, TurnStart, ActionCommand,
                              DefenseRequest, DefenseResult, StateHash, BattleEnd, Draws, ComboResult, StateSync,
@@ -359,7 +372,8 @@ using Message = std::variant<Hello, Welcome, Reject, Bye, Ping, Pong, BattleStar
                              SaveOffer, SaveChunk, JoinWait, JoinReady, PilotState, PilotRequest, PilotChange,
                              WorldInteract, DialogueChoice, MapChange, NarrativeState, BarrierRelease, PauseState,
                              Owners, BattleReady, Roster, WorldHash, ResyncRequest, BuildOffer, BuildChunk, EconomyDelta,
-                             IntentPreview, AimView, MenuState, SceneStart, SceneSkip, DefeatChoice, EnemyActionDone>;
+                             IntentPreview, AimView, MenuState, SceneStart, SceneSkip, DefeatChoice, EnemyActionDone,
+                             FlagSet, WorldLeavesRequest, WorldLeaves>;
 
 MsgType type_of(const Message& m);
 // Sérialise un message (type u16 + longueur u16 + charge utile).

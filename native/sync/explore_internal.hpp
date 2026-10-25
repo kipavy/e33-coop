@@ -203,6 +203,23 @@ struct S {
     std::vector<proto::HashPart> last_world_parts; // hôte : dernière empreinte envoyée
     uint64_t copy_ok_hash = 0;                    // client : empreinte vérifiée égale à celle de l'hôte, copie coop à faire
     double copy_ok_at = -1;
+    // Miroir des drapeaux du pilote et réparation sur place (D38)
+    std::deque<proto::FlagSet> flags_in;          // suiveur : drapeaux du pilote à écrire ici (au point sûr)
+    uint32_t flag_seq = 0;                        // pilote : n° du dernier FlagSet publié
+    std::map<std::string, bool> flags_sent;       // pilote : dernière valeur publiée par drapeau
+    struct Repair {
+        enum class St { None, Requested, Received, Applied } st = St::None;
+        uint32_t req = 0;                         // n° de la dernière demande (WorldLeavesRequest.seq)
+        std::vector<std::string> parts;           // parties demandées
+        std::string differ;                       // parties en écart (repli : instantané)
+        double at = -1;                           // demande, réception complète ou application
+        double event_mark = -1;                   // dernier événement juste après l'application
+        std::map<std::string, std::vector<proto::LeafEntry>> leaves;   // feuilles de l'hôte par partie
+        std::map<std::string, uint64_t> host_hash;
+        std::map<std::string, std::set<uint16_t>> pages;
+        std::map<std::string, uint16_t> pages_total;
+        double blocked_until = -1;                // après un échec : instantané direct jusque-là
+    } wr;
 };
 extern S s;
 
@@ -484,6 +501,16 @@ void copy_tick();
 void world_hash_tick();
 void world_resync_tick();
 void perturb_world_tick();
+void start_resync(const std::string& differ, const std::vector<std::string>& parts);
+// Miroir des drapeaux et réparation sur place (explore_repair.cpp, D38)
+bool world_repair_on();
+void on_local_flag(UObject* id, bool value);
+void on_flag_set(const proto::FlagSet& f);
+void flags_tick();
+void send_world_leaves(uint8_t to, const proto::WorldLeavesRequest& rq);
+void on_world_leaves(const proto::WorldLeaves& wl);
+bool try_world_repair(const std::string& differ, const std::vector<std::string>& parts);
+void world_repair_tick();
 
 } // namespace e33::explore::detail
 

@@ -132,7 +132,9 @@ void init(bool host, bool want_join, const Net& net)
                           "interaction_errors", "choice_errors", "choice_timeouts", "map_change_errors", "local_actions_on_follower",
                           "follower_teleports_nogap", "follow_stalls", "follow_dips", "follow_speed_drops", "follow_parasitic_stops",
                           "resyncs_while_moving", "resyncs_deferred_moving", "explore_hitches_moving", "explore_hitches_mod",
-                          "join_load_retries", "join_load_stuck", "snapshot_timeouts"})
+                          "join_load_retries", "join_load_stuck", "snapshot_timeouts",
+                          "flags_published", "flags_mirrored", "flag_mirror_errors", "world_repairs_requested", "world_repairs_in_place",
+                          "world_repairs_failed"})
         bump(c, 0);
 }
 
@@ -263,6 +265,9 @@ bool handle(uint8_t from, const proto::Message& m)
         }
         return true;
     }
+    // Réparation sur place (D38) : feuilles demandées par un client (hôte), reçues de l'hôte (client).
+    if (auto* lr = std::get_if<proto::WorldLeavesRequest>(&m)) { if (s.host) send_world_leaves(from, *lr); return true; }
+    if (auto* wl = std::get_if<proto::WorldLeaves>(&m)) { if (!s.host) on_world_leaves(*wl); return true; }
     if (auto* r = std::get_if<proto::JoinReady>(&m)) {
         if (!s.host) return true;
         auto& pj = s.peers[from];
@@ -309,8 +314,14 @@ bool handle(uint8_t from, const proto::Message& m)
     // Client pas encore entré (instantané en cours) : les événements d'exploration ne le concernent pas encore. Sauf le
     // dernier MapChange, gardé pour après l'arrivée (pilote parti dans un autre niveau pendant la jonction).
     if (!s.host && !sharing() && (std::holds_alternative<proto::WorldInteract>(m) || std::holds_alternative<proto::DialogueChoice>(m) ||
-                                  std::holds_alternative<proto::PilotState>(m)))
+                                  std::holds_alternative<proto::PilotState>(m) || std::holds_alternative<proto::FlagSet>(m)))
         return true;
+    // Drapeau persistant du pilote (D38) : relayé par l'hôte depuis le pilote seulement, comme WorldInteract.
+    if (auto* fl = std::get_if<proto::FlagSet>(&m)) {
+        if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
+        on_flag_set(*fl);
+        return true;
+    }
     if (auto* wi = std::get_if<proto::WorldInteract>(&m)) {
         if (s.host) { if (from != s.pilot) return true; s.net.relay(m, from, true); }
         s.interactions.push_back(*wi);
@@ -395,6 +406,8 @@ void tick(double now)
     { prof::Scope p("explore_poll"); poll_tick(); }
     world_hash_tick();
     world_resync_tick();
+    flags_tick();
+    if (!s.host) world_repair_tick();
     if (!s.host) perturb_world_tick();
 }
 

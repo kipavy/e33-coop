@@ -42,6 +42,12 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 - **Fait** : `StateSync` porte la collision de chaque forme des zones (`FreeAimTargetParts` -> `ValidChildren`) des ennemis (champ final facultatif) ; hash avec zones seulement si les deux états les portent ; `diff` champ `parts` ; réparation `DisablePartsCollisions` / `SetCollisionEnabled`, journal `coop_repair_parts`, compteurs `raw_parts_diffs` / `repaired_parts`. Tests de protocole (aller-retour, ancien format, tronqué).
 - **À vérifier en jeu** : un tir du client sur un point faible du Portier -> au tour suivant `coop_resync` avec `parts` dans `diff` et `coop_repair_parts` `failed` 0, `fixed` true ; puis tirs de l'hôte sur la même zone : mêmes PV des deux côtés. Sans tir : `raw_parts_diffs` doit rester 0. Visuel de la boule non réparé (classe de l'ennemi hors dump).
 
+## 2026-10-25 — drapeaux du pilote recopiés, réparation sur place (branche `feat/world-repair`, D38, non testé en jeu)
+
+- Suite de l'audit (point 4) : `WritePersistentFlag` du pilote publié (`FlagSet`, type 72) et écrit chez les suiveurs au point sûr (`coop_flag_set` / `coop_flag_mirrored`).
+- Écart limité à l'or, aux objets ou aux drapeaux : feuilles de l'hôte demandées (`WorldLeavesRequest` 73 / `WorldLeaves` 74) et différence appliquée sur place, vérifiée par l'empreinte ; instantané seulement en repli (`coop_world_repair` : applied / ok / still_differs / timeout / apply_failed ; compteurs `world_repairs_requested`, `world_repairs_in_place`, `world_repairs_failed`). `-e33worldrepair=0` : ancien comportement.
+- Vérifié : compilation et tests de protocole (CI). À vérifier à deux PC : résolution des `UNamedID` chez le suiveur, application des objets (casse), absence d'`EconomyDelta` renvoyé après une réparation.
+
 ## 2026-10-25, 12h — audit des désynchros de la session du 25/10 01h (branche `fix/desync-audit`, non testée en jeu)
 
 Journaux hôte (01:01-01:51) et client (jusqu'à 01:19) relus désynchro par désynchro ; hashes de l'hôte recalculés hors ligne.

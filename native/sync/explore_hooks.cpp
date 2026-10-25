@@ -53,6 +53,15 @@ void subscribe()
         bump("merchant_buys_published");
         log().write("coop_merchant_buy", JsonObj().add("index", s.merchant_sent));
     });
+    // Drapeau persistant écrit ici (D38) : publié s'il vient du pilote (pas d'un rejeu, ni d'une écriture du mod).
+    // Session du 2026-10-25 : NID_CuratorTutorial posé chez le pilote seulement (branche de dialogue / d'interface vue
+    // une seule fois), jamais chez le suiveur -> empreinte « flags » différente, instantané complet.
+    bus.post(L"/Game/jRPGTemplate/Blueprints/Basics/BP_jRPG_GI_Custom.BP_jRPG_GI_Custom_C:WritePersistentFlag", [](HookCtx& ctx, UFunction* f) {
+        if (!s.active || s.ended) return;
+        UObject* id = ue::read_param_object(ctx, f, STR("NamedID"));
+        const bool value = ue::read_param_int(ctx, f, STR("Value")).value_or(0) != 0;
+        if (id) on_local_flag(id, value);
+    });
     // Tirs du pilote en exploration (point 4 de la liste de Killian : sphères de peinture, cages, boutons) : le projectile
     // qui touche un objet du monde cible du tir (interface BPI_FreeAimTarget_World : FreeAimHit) est publié en
     // WorldInteract « freeaim: » ; le suiveur appelle FreeAimHit sur le même objet. Les combattants du monde (ennemis,

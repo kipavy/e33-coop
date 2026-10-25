@@ -69,7 +69,11 @@ static std::vector<proto::Message> samples()
                               1, 2, 3, proto::NarrativeKind::Dialogue},proto::SceneSkip{0, 5, "SQT_Lumiere_Sophie"},
             proto::DefeatChoice{2, 0, 1}, proto::DefeatChoice{3, 1, 0},
             proto::EnemyActionDone{6, 9, {proto::ActorKind::Enemy, 0}, 1, {{0, 3}, {2, 0}}},
-            proto::EnemyActionDone{6, 10, {proto::ActorKind::Enemy, proto::kAutoSpot}, 0, {}}};
+            proto::EnemyActionDone{6, 10, {proto::ActorKind::Enemy, proto::kAutoSpot}, 0, {}},
+            proto::FlagSet{9, "NID_CuratorTutorial", {0x12345678u, 0x9ABCDEF0u, 0u, 0xFFFFFFFFu}, true}, proto::FlagSet{10, "NID_X", {}, false},
+            proto::WorldLeavesRequest{1, {"gold", "inventory2", "flags"}}, proto::WorldLeavesRequest{2, {}},
+            proto::WorldLeaves{1, "inventory2", 0xFEDCBA9876543210ull, 0, 2, {{"item:CritChanceOnWeak", "1"}, {"level:Weapon_X", "4"}}},
+            proto::WorldLeaves{1, "flags", 7, 1, 2, {{"NID_CuratorTutorial", "1"}}}, proto::WorldLeaves{1, "gold", 0, 0, 1, {}}};
 }
 
 static void test_roundtrip()
@@ -189,6 +193,12 @@ static void test_link_fragments()
             }
             sent.push_back(proto::to_json(ss));
             la.send(ss, true);
+        } else if (i == 5) {
+            // Feuilles d'inventaire de l'hôte (réparation sur place, D38) : ~17 Ko, une page.
+            proto::WorldLeaves wl; wl.seq = 1; wl.part = "inventory2"; wl.hash = 42;
+            for (int j = 0; j < 600; ++j) wl.leaves.push_back({"item:Weapon_LongName_" + std::to_string(j), std::to_string(j)});
+            sent.push_back(proto::to_json(wl));
+            la.send(wl, true);
         } else {
             proto::StateHash h{1, i, i * 11ull};
             sent.push_back(proto::to_json(h));

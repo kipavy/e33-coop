@@ -422,6 +422,10 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++counts[ed->rejected ? "economy_rejections" : "economy_received"];
             } else if (std::get_if<proto::WorldHash>(&m)) {
                 ++counts["world_hashes"];
+            } else if (std::get_if<proto::FlagSet>(&m)) {
+                ++counts["flags_received"];   // D38 : drapeaux du pilote (rien à écrire ici)
+            } else if (std::get_if<proto::WorldLeaves>(&m)) {
+                ++counts["world_leaves_received"];
             } else if (std::get_if<proto::JoinWait>(&m)) {
                 ++counts["join_waits"];
             } else if (std::get_if<proto::Owners>(&m)) {
@@ -1077,7 +1081,8 @@ int run_host(const Args& a, JsonLog& log, Recorder& rec)
                            std::holds_alternative<proto::BuildOffer>(l.msg) || std::holds_alternative<proto::BuildChunk>(l.msg) || std::holds_alternative<proto::EconomyDelta>(l.msg) ||
                            std::holds_alternative<proto::IntentPreview>(l.msg) || std::holds_alternative<proto::AimView>(l.msg) ||
                            std::holds_alternative<proto::MenuState>(l.msg) || std::holds_alternative<proto::SceneStart>(l.msg) ||
-                           std::holds_alternative<proto::SceneSkip>(l.msg) || std::holds_alternative<proto::EnemyActionDone>(l.msg)) {
+                           std::holds_alternative<proto::SceneSkip>(l.msg) || std::holds_alternative<proto::EnemyActionDone>(l.msg) ||
+                           std::holds_alternative<proto::FlagSet>(l.msg) || std::holds_alternative<proto::WorldLeavesRequest>(l.msg)) {
                     // Messages informatifs du client enregistré (écho de cinématique, pause…) : le client rejoué peut ne pas
                     // les envoyer (il n'a pas vu la cinématique de l'hôte) ; ils ne rythment pas le rejeu.
                     ++cursor;

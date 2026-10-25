@@ -26,6 +26,12 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 - Combat : les points faibles des ennemis touchés en visée libre sont remis comme chez l'hôte au tour suivant ; avant,
   un point faible usé chez un seul joueur faisait diverger les dégâts des tirs suivants (PV d'ennemi différents).
 
+### Corrections
+- Exploration : les étapes de progression franchies par le meneur (tutoriels, branches de dialogue vues une seule fois)
+  sont recopiées chez l'autre joueur ; elles ne provoquent plus de rechargement de la partie.
+- Exploration : un écart d'or, d'objets ou de progression est corrigé sur place, sans l'écran figé de 8-9 s ni la
+  téléportation du rechargement complet (gardé en dernier recours).
+
 ## [0.6.34] - 2026-10-25
 
 ### Corrections

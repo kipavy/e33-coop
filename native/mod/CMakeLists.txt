@@ -24,6 +24,7 @@ add_library(${TARGET} SHARED
     ../sync/explore_maps.cpp
     ../sync/explore_narrative.cpp
     ../sync/explore_worldhash.cpp
+    ../sync/explore_repair.cpp
     ../sync/explore_hooks.cpp
     ../sync/mount.cpp
     ../sync/builds.cpp
