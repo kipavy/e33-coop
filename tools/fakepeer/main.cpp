@@ -6,6 +6,8 @@
 //     --turn-lag 1.0 : chaque tour ennemi commence ici (StateHash du tour renvoyé) 1 s après sa réception, comme un vrai
 //     client qui rejoue avec retard les actions des héros de l'hôte ; un coup n'est résolu qu'au même moment de ce tour
 //     ici (DefenseRequest.turn_ms après ce début), pas avant.
+//     --missing-hits N : seuls les N premiers coups de chaque tour ennemi existent ici ; au coup suivant, pas de réponse,
+//     un menu du tour suivant est envoyé (client déjà passé au tour suivant, vu le 2026-10-25 : 3 coups chez lui, 5 chez l'hôte).
 //
 //   fakepeer host --port 7777 --replay r.jsonl [--log f.jsonl] [--timeout 900]
 //     Faux hôte face au vrai jeu client : rejoue les messages hôte->client d'un enregistrement, en attendant
@@ -31,6 +33,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <set>
 #include <cmath>
 #include <deque>
 #include <optional>
@@ -97,6 +100,7 @@ struct Args {
     double pilot_gap_from = 1e18, pilot_gap_to = 1e18;   // hôte : --pilot-gap a:b, positions retenues entre a et b
     std::string net;           // réseau simulé (voir NetSim)
     double turn_lag = 0;       // client : --turn-lag S, tours ennemis commencés S secondes après l'hôte (voir run_client)
+    int missing_hits = 0;      // client : --missing-hits N, coups au-delà du N-ième d'un tour sans réponse (voir run_client)
     std::string in, out;       // slice : enregistrement source, tranche écrite
     int xfer = 0;              // slice : n° de l'instantané de départ
     double to = 1e18;          // slice : fin de la tranche (temps de l'enregistrement)
@@ -604,6 +608,21 @@ int run_client(const Args& a, JsonLog& log, Recorder& rec)
                 ++turns_played;
             } else if (auto* dq = std::get_if<proto::DefenseRequest>(&m)) {
                 if (stuck) continue;
+                if (a.missing_hits > 0 && dq->hit > a.missing_hits) {
+                    // Coup absent ici : on est déjà au tour suivant (menu du héros ouvert), une seule fois par tour.
+                    static std::set<uint32_t> ahead_sent;
+                    ++counts["hits_missing"];
+                    if (ahead_sent.insert(dq->turn).second) {
+                        proto::MenuState ms;
+                        ms.battle_id = dq->battle_id;
+                        ms.turn = dq->turn + 1;
+                        ms.spot = dq->spot;
+                        ms.seq = 1;
+                        lp->send(ms);
+                        ++counts["ahead_menus"];
+                    }
+                    continue;
+                }
                 proto::DefenseResult dr;
                 dr.battle_id = dq->battle_id;
                 dr.turn = dq->turn;
@@ -1205,6 +1224,7 @@ int main(int argc, char** argv)
         else if (k == "--pilot-rate") a.pilot_rate = std::atof(v.c_str());
         else if (k == "--net") a.net = v;
         else if (k == "--turn-lag") a.turn_lag = std::atof(v.c_str());
+        else if (k == "--missing-hits") a.missing_hits = std::atoi(v.c_str());
         else if (k == "--pilot-gap") { const auto c = v.find(':'); a.pilot_gap_from = std::atof(v.c_str()); a.pilot_gap_to = c == std::string::npos ? 1e18 : std::atof(v.c_str() + c + 1); }
         else if (k == "--in") a.in = v;
         else if (k == "--out") a.out = v;

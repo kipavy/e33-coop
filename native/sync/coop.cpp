@@ -2216,8 +2216,17 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     // du délai : propriétaire parti (l'hôte reprend le héros), combat déjà fini chez l'hôte (client : aucun résultat ne
     // viendra), ou propriétaire qui ne répond plus dans ce combat (hôte : tour bloqué chez lui, attaque imposée).
     const bool unresponsive = s.role == Role::Host && b.unresponsive.count(owner) > 0;
-    const bool got = !unresponsive &&
-                     wait_for("defense", [&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner || (s.role == Role::Client && b.host_end >= 0); },
+    // Propriétaire déjà à un tour suivant chez lui (hôte : un message de lui pour un tour plus loin ; client : état de
+    // l'hôte du tour suivant) : ce coup n'existe pas chez lui, aucun résultat ne viendra. Vu le 2026-10-25 (tour 9) :
+    // attaque ennemie à 5 coups chez l'hôte, 3 chez le client déjà dans son menu du tour 10 -> deux gels de 3 s.
+    const uint32_t turn_now = b.turn;
+    auto owner_ahead = [&] {
+        if (s.role == Role::Host) { auto it = b.acks.upper_bound(turn_now); for (; it != b.acks.end(); ++it) if (it->second.count(owner)) return true; return false; }
+        return b.host_sync.upper_bound(turn_now) != b.host_sync.end();
+    };
+    const bool ahead0 = owner_ahead();
+    const bool got = !unresponsive && !ahead0 &&
+                     wait_for("defense", [&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner || (s.role == Role::Client && b.host_end >= 0) || owner_ahead(); },
                               kDefenseTimeout) &&
                      b.defenses.count(key) > 0;
     const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
@@ -2229,6 +2238,12 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     else if (unresponsive) { why = "owner_unresponsive"; bump("defense_waits_skipped"); }
     else if (owner_of_spot(spot) != owner) { why = "owner_left"; bump("defense_waits_owner_left"); }
     else if (s.role == Role::Client && b.host_end >= 0) { why = "host_battle_over"; bump("defense_waits_battle_over"); }
+    else if (owner_ahead()) {
+        // Coup absent chez le propriétaire : esquivé ici (pas de dégâts qu'il n'a pas reçus ; l'état de l'hôte fait foi).
+        why = "owner_ahead";
+        res = jumpable ? proto::Defense::Jump : proto::Defense::Dodge;
+        bump("defense_waits_owner_ahead");
+    }
     else {
         why = "timeout";
         bump("defense_timeouts");
@@ -3965,7 +3980,7 @@ void read_settings()
 {
     for (const char* c : {"desyncs", "raw_hash_diffs", "hashes_compared", "gameplay_draws", "draw_mismatches", "draw_count_diffs", "draw_errors", "invalid_messages",
                           "session_ended", "players_left", "heroes_taken_over", "peer_timeouts", "sessions_rejected", "battle_ready_timeouts", "turn_timer_expired",
-                          "defense_timeouts", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
+                          "defense_timeouts", "defense_waits_owner_ahead", "combo_timeouts", "turn_wait_timeouts", "actor_mismatches", "end_mismatches", "rewards_mismatches",
                           "repair_failures", "defense_verdict_mismatches", "combo_verdict_mismatches", "remote_actions",
                           "setup_draws_replaced", "setup_draws_natural", "start_mech_diffs", "raw_mech_diffs"})
         s.counters[c] = 0;
