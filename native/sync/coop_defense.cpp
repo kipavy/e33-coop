@@ -97,13 +97,24 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     // l'hôte du tour suivant) : ce coup n'existe pas chez lui, aucun résultat ne viendra. Vu le 2026-10-25 (tour 9) :
     // attaque ennemie à 5 coups chez l'hôte, 3 chez le client déjà dans son menu du tour 10 -> deux gels de 3 s.
     const uint32_t turn_now = b.turn;
+    // Action finie chez le propriétaire avec moins de coups sur ce héros (EnemyActionDone, D36) : ce coup n'existe pas chez
+    // lui. Vu le 2026-10-25 (combat 9, tour 15) : propriétaire encore dans le tour, deux gels de 3 s chez l'hôte.
+    auto owner_done = [&]() -> int {   // coups du propriétaire sur ce héros si son action est finie avec moins de coups, sinon -1
+        if (!s.enemy_done) return -1;
+        auto it = b.owner_done.find({turn_now, spot});
+        if (it == b.owner_done.end() || it->second.hits >= hit) return -1;
+        const proto::Unit& a = it->second.actor;
+        const proto::Unit& me = b.turn_actor;
+        if (a.spot != proto::kAutoSpot && me.spot != proto::kAutoSpot && (a.kind != me.kind || a.spot != me.spot)) return -1;   // autre tour chez lui
+        return it->second.hits;
+    };
     auto owner_ahead = [&] {
         if (s.role == Role::Host) { auto it = b.acks.upper_bound(turn_now); for (; it != b.acks.end(); ++it) if (it->second.count(owner)) return true; return false; }
         return b.host_sync.upper_bound(turn_now) != b.host_sync.end();
     };
     // Résultat déjà reçu : pris même si le propriétaire est déjà plus loin (wait_for teste la condition d'abord).
     const bool got = !unresponsive &&
-                     wait_for("defense", [&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner || (s.role == Role::Client && b.host_end >= 0) || owner_ahead(); },
+                     wait_for("defense", [&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner || (s.role == Role::Client && b.host_end >= 0) || owner_done() >= 0 || owner_ahead(); },
                               kDefenseTimeout) &&
                      b.defenses.count(key) > 0;
     const auto waited_ms = static_cast<int64_t>(GetTickCount64() - t0);
@@ -111,10 +122,17 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     if (waited_ms >= 250) bump("defense_waits_long");   // même seuil que coop_wait_long (site defense)
     proto::Defense res = proto::Defense::Fail;
     const char* why = "received";
+    int owner_hits = -1;
     if (got) res = b.defenses[key];
     else if (unresponsive) { why = "owner_unresponsive"; bump("defense_waits_skipped"); }
     else if (owner_of_spot(spot) != owner) { why = "owner_left"; bump("defense_waits_owner_left"); }
     else if (s.role == Role::Client && b.host_end >= 0) { why = "host_battle_over"; bump("defense_waits_battle_over"); }
+    else if ((owner_hits = owner_done()) >= 0) {
+        // Action finie chez le propriétaire avec moins de coups : esquivé ici, comme owner_ahead (l'état de l'hôte fait foi).
+        why = "owner_done";
+        res = jumpable ? proto::Defense::Jump : proto::Defense::Dodge;
+        bump("defense_waits_owner_done");
+    }
     else if (owner_ahead()) {
         // Coup absent chez le propriétaire : esquivé ici (pas de dégâts qu'il n'a pas reçus ; l'état de l'hôte fait foi).
         why = "owner_ahead";
@@ -138,7 +156,57 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
     bump("defenses_imposed");
     log().write("coop_defense_imposed", JsonObj().add("spot", spot).add("hit", static_cast<int>(hit)).add("owner", static_cast<int>(owner)).add("jumpable", jumpable)
                                          .add("started", started)
-                                         .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms).add("why", why), b.turn);
+                                         .add("result", static_cast<int>(res)).add("received", got).add("waited_ms", waited_ms).add("why", why)
+                                         .add("owner_hits", owner_hits), b.turn);
+}
+
+// Fin de l'action du tour en cours ici (début du tour suivant, ou fin du combat) : chaque instance publie le nombre de
+// coups reçus par les héros qu'elle contrôle (D36). Une fois par tour ; seulement si c'était un tour ennemi ou si un héros
+// a été touché. why : point de détection (journal).
+void enemy_action_done(const char* why)
+{
+    auto& b = s.battle;
+    if (!s.enemy_done || s.role == Role::Solo || !b.active || b.turn == 0 || b.done_sent_turn == b.turn) return;
+    if (!s.enemy_turn && b.hit_seq.empty()) return;
+    b.done_sent_turn = b.turn;
+    proto::EnemyActionDone d{b.id, b.turn, b.turn_actor, s.my_player_id, {}};
+    std::string hs = "{";
+    for (const auto& [spot, owner] : b.owner_by_spot) {
+        if (owner != s.my_player_id || d.hits.size() >= 8) continue;
+        auto it = b.hit_seq.find(spot);
+        const uint16_t n = it == b.hit_seq.end() ? 0 : it->second;
+        d.hits.push_back({static_cast<uint8_t>(spot), n});
+        hs += (hs.size() > 1 ? "," : "") + ("\"" + std::to_string(spot) + "\":" + std::to_string(n));
+    }
+    if (d.hits.empty()) return;   // aucun héros d'ici dans ce combat
+    publish(d);
+    bump("enemy_action_done_sent");
+    log().write("coop_enemy_action_done", JsonObj().add("dir", "sent").add("turn", b.turn).add("actor_kind", static_cast<int>(b.turn_actor.kind))
+                                             .add("actor_spot", static_cast<int>(b.turn_actor.spot)).raw("hits", hs + "}").add("why", why), b.turn);
+}
+
+// Fin d'action reçue (propriétaire, ou relayée par l'hôte) : gardée pour les attentes de défense de ce tour (bornée).
+void on_enemy_action_done(Peer& p, const proto::EnemyActionDone& d)
+{
+    auto& b = s.battle;
+    if (d.battle_id != b.id || !s.enemy_done) return;
+    if (s.role == Role::Host && d.player != p.player_id) return;
+    std::string hs = "{";
+    for (const auto& h : d.hits) {
+        if (owner_of_spot(h.spot) != d.player) continue;   // seul le propriétaire du héros compte
+        b.owner_done[{d.turn, h.spot}] = {h.hits, d.actor};
+        hs += (hs.size() > 1 ? "," : "") + ("\"" + std::to_string(h.spot) + "\":" + std::to_string(h.hits));
+    }
+    while (b.owner_done.size() > 64) b.owner_done.erase(b.owner_done.begin());
+    // Même tour ici, autre combattant : numéros de tour décalés, la fin d'action ne sera pas utilisée (owner_done).
+    const bool mismatch = d.turn == b.turn && d.actor.spot != proto::kAutoSpot && b.turn_actor.spot != proto::kAutoSpot &&
+                          (d.actor.kind != b.turn_actor.kind || d.actor.spot != b.turn_actor.spot);
+    if (mismatch) bump("enemy_action_done_actor_mismatches");
+    bump("enemy_action_done_received");
+    log().write("coop_enemy_action_done", JsonObj().add("dir", "recv").add("player", static_cast<int>(d.player)).add("turn", d.turn)
+                                             .add("actor_kind", static_cast<int>(d.actor.kind)).add("actor_spot", static_cast<int>(d.actor.spot))
+                                             .raw("hits", hs + "}").add("actor_mismatch", mismatch), b.turn);
+    if (s.role == Role::Host) publish(d, &p);
 }
 
 } // namespace e33::coop::detail

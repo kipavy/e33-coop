@@ -147,6 +147,11 @@ struct LocalHit {                                          // coup reçu par un 
     bool perfect_dodge = false;
 };
 
+struct OwnerDone {                                         // fin d'action chez le propriétaire d'un héros (D36)
+    uint16_t hits = 0;                                     // coups reçus par ce héros chez lui pendant ce tour
+    proto::Unit actor{proto::ActorKind::Enemy, proto::kAutoSpot};   // combattant du tour chez lui (contrôle)
+};
+
 struct Battle {
     uint32_t id = 0;
     uint32_t turn = 0;
@@ -195,9 +200,14 @@ struct Battle {
     // Parade en duo : défense retenue ici pour chaque coup reçu par un héros pendant le tour (résultat du propriétaire)
     bool duo_parry = false;                                // réglage de l'hôte pour ce combat (BattleStart)
     std::vector<std::pair<int, proto::Defense>> turn_defenses;   // (emplacement, défense)
+    // Fin d'action ennemie (D36) : combattant du tour en cours ici, fins d'action reçues des propriétaires, dernier tour publié.
+    proto::Unit turn_actor{proto::ActorKind::Enemy, proto::kAutoSpot};
+    std::map<std::pair<uint32_t, int>, OwnerDone> owner_done;          // (tour, emplacement) -> fin chez le propriétaire
+    uint32_t done_sent_turn = 0;
     // État
     std::map<uint32_t, uint64_t> local_hash;
     std::map<uint32_t, uint64_t> remote_hash;
+    std::map<uint32_t, proto::StateSync> hashed_state;     // état exact haché pour chaque tour (journal desync)
     std::map<uint32_t, proto::StateSync> host_sync;        // client : état de l'hôte au début de chaque tour
     std::map<uint32_t, proto::TurnStart> host_turns;       // client
     double turn_started_at = 0;
@@ -304,6 +314,7 @@ struct State {
     double ready_idle_s = kReadyIdleTimeout;               // hôte : -e33readyidle=N
     double stuck_turn_s = kStuckTurnTimeout;               // hôte : -e33stuckturn=N
     bool turn_align = true;                                // hôte : démarrage synchronisé des tours ennemis (-e33turnalign=0 : coupé, D28)
+    bool enemy_done = true;                                // fin d'action ennemie publiée et utilisée (-e33enemydone=0 : coupé, D36)
     double barrier_battle_since = -1;                      // diagnostic : barrière tenue pendant un combat engagé (depuis)
     bool want_join = false;                                // client : -e33join=1 (rejoindre la partie de l'hôte, D12)
     // Défaite (D33) : seul l'hôte choisit sur l'écran de défaite (« Réessayer » / « Abandonner »), les clients suivent.
@@ -491,7 +502,7 @@ bool mech_differs(const proto::StateSync& mine, const proto::StateSync& host);
 void offturn_draw(HookCtx& ctx, UFunction* f, RandomKind kind, const std::string& fname);
 std::vector<std::wstring> party_wide(const std::vector<std::string>& v);
 uint8_t default_owner(int index, int spot, const std::string& name);
-void begin_turn_common();
+void begin_turn_common(UObject* actor);
 void align_begin(uint32_t turn, const char* how);
 void host_turn_start(UObject* actor);
 void perturb_state();
@@ -514,6 +525,8 @@ UObject* timeline_hero(UObject* timeline);
 bool impose_defense(UObject* hero, proto::Defense d, bool jumpable);
 proto::Defense local_result(const LocalHit& lh, bool parried, bool dodged, bool gradient);
 void defense_point(UObject* stats_comp, UObject* hero, bool jumpable);
+void enemy_action_done(const char* why);
+void on_enemy_action_done(Peer& p, const proto::EnemyActionDone& d);
 proto::BattleRewards read_rewards(void* st_ptr, RC::Unreal::UStruct* st);
 bool write_loot(void* st_ptr, RC::Unreal::UStruct* st, const std::vector<proto::LootEntry>& loot);
 void finalize_battle(const char* why);

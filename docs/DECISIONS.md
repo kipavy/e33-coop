@@ -625,3 +625,38 @@ GAME-INTERNALS §15), ou un `KismetMathLibrary:Random*` d'un appelant non reconn
 
 **Remise en cause si** : `hero_hits_unattributed` élevé (l'attaquant passé au jeu n'est pas le héros), ou
 `coop_skill_targets_mismatch` fréquent sur des attaques à cible unique (alors le coup n'est pas celui qu'on croit).
+
+## D36 — Fin d'action ennemie publiée par chaque joueur (2026-10-25, bug vu en vrai, complète D11/D22 et 0.6.33)
+
+**Constat** (journal hôte du 25/10, 01h) : le nombre de coups d'une attaque ennemie est décidé par l'animation de chaque
+instance, pas par l'hôte. Combat 6 tour 9 : 5 coups sur Lune chez l'hôte, 3 chez le client ; coups 4 et 5 attendus 3 s
+chacun (image figée), échec imposé, Lune 279 -> 225 PV chez l'hôte seulement. Combat 6 tour 3 : l'inverse. Combat 9
+tour 15 : client encore dans le tour (aucun message d'un tour suivant) : `owner_ahead` (0.6.33) ne sort pas, deux gels de
+3 s. Au même tour, des coups arrivent encore **après** `OnTurnEnded` du boss (événements de fin de tour), jamais après le
+`StartCharacterTurn` suivant : `OnTurnEnded` n'est pas la fin de l'action.
+
+**Décision** (par défaut ; `-e33enemydone=0` coupe l'envoi et l'usage) :
+1. Fin d'action détectée par des points déjà en place et vérifiés : `BM.StartCharacterTurn` (pre, hors contre-attaque,
+   avant toute attente du client), repli `OnTurnStart` (`on_turn_start`, même point que la parade en duo), et
+   `StartBattleEndFlow`. Une fois par tour, si le tour était ennemi ou si un héros a été touché.
+2. Chaque instance publie `EnemyActionDone` (type 70 ; 60/61 déjà pris par Owners / BattleReady) : combat, tour,
+   combattant du tour, émetteur, et pour chacun de **ses** héros le nombre de coups reçus (`hit_seq`). Client -> hôte ->
+   autres ; l'hôte ne garde et ne relaie que les héros de l'émetteur. Un ancien pair ignore ce type.
+3. Attente de la défense du coup k d'un héros (`defense_point`) : sortie dès que son propriétaire a fini ce tour avec
+   moins de k coups sur lui (même combattant de tour des deux côtés, sinon ignoré) : coup **esquivé** ici (saut si
+   sautable), pas de dégâts qu'il n'a pas reçus ; l'état de l'hôte au tour suivant fait foi (comme `owner_ahead`). Un
+   résultat déjà reçu reste prioritaire ; le propriétaire publie ses `DefenseResult` avant sa fin d'action (même lien,
+   ordonné), donc un compte >= k veut dire que le résultat est déjà là.
+4. Coups en plus chez le propriétaire (combat 6 tour 3) : rien à attendre ; écart corrigé par StateSync, comme avant.
+5. Borné : 64 fins d'action gardées, purgées après 4 tours ; aucune nouvelle attente.
+6. `desync` : l'état journalisé est l'état exact haché pour ce tour (`state_from` hashed ; photo du début de tour chez
+   l'hôte, état après réparation chez le client), au lieu d'une photo prise au moment de la comparaison.
+
+**Journaux** : `coop_enemy_action_done` (dir sent / recv, tour, combattant, coups par emplacement, why = point de
+détection, actor_mismatch), `coop_defense_imposed` why `owner_done` + `owner_hits`. Compteurs `enemy_action_done_sent`,
+`enemy_action_done_received`, `enemy_action_done_actor_mismatches`, `defense_waits_owner_done`.
+
+**Remise en cause si** : `defense_timeouts` encore présents avec une fin d'action reçue pour ce tour (envoi trop tardif :
+le client bloqué ailleurs avant `StartCharacterTurn`) ; `enemy_action_done_actor_mismatches` fréquent (tours décalés) ;
+ou `defense_waits_owner_done` sur des coups que le propriétaire a bien reçus (fin publiée trop tôt : un
+`StartCharacterTurn` au milieu d'une action, à exclure comme les contre-attaques).

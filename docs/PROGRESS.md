@@ -7,7 +7,7 @@
 P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible sans divergence durable ; P3 = confort.
 
 **P1**
-1. Gels quand un monstre attaque : attentes de 3 s pour des coups absents chez le client corrigées en 0.6.33 (`owner_ahead`) ; restent les coups visant d'autres héros chez le client (tour encore en cours chez lui) et les alignements D28 animés de 2-3 s.
+1. Gels quand un monstre attaque : attentes de 3 s pour des coups absents chez le client corrigées en 0.6.33 (`owner_ahead`) et par la fin d'action publiée (D36, non testée en jeu : `defense_waits_owner_done`) ; restent les alignements D28 animés de 2-3 s.
 2. À vérifier en jeu (corrigés sans test) : monstres de l'hôte passifs quand J2 mène (0.6.32, D35), améliorations d'armes et élixir de J2 (0.6.32, `coop_economy_delta` why upgrade / use, `coop_item_use_replayed`), cinématique de zone chez J2 (0.6.31), arme changée par J2 (0.6.30), marchand (0.6.29), combat lancé par J2 meneur (0.6.29, D34).
 
 **P2**
@@ -28,6 +28,13 @@ P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible 
 - Recherche (journaux du 25/10, combat 1 tour 7, dump 23765773) : ThunderFall de Lune, 9 coups, cibles différentes coup par coup (client Luster, Portier… ; hôte Portier, Luster…), tirages identiques. Aucun `rng_trace` : budget de 600 épuisé des deux côtés avant le tour 7. Script de ThunderFall absent du dump ; aucun helper « ennemi au hasard » dans `FL_TargetingHelpers_C`. Pas de fonction sûre à rejouer : rien n'est corrigé.
 - Ajouté (D39) : cible de chaque coup de héros comparée hôte / client (`coop_skill_targets_mismatch`, via `Draws`, sans nouveau message) ; traces des tirages des tours des héros (`rng_trace_hero`) ; `GetRandomOtherObjectFromArray` journalisé (`coop_random_object_pick`).
 - À regarder à la prochaine session à deux PC : un ThunderFall (ou autre compétence à rebonds) puis `coop_skill_targets_mismatch`, `rng_trace_hero` du même tour (classe appelante) et `coop_random_object_pick`. Correctif selon le cas (D39) : flux de gameplay ajouté, réécriture du helper, ou cibles publiées par le propriétaire et coups redirigés (nouveau message, risqué).
+
+## 2026-10-25 — fin d'action ennemie publiée par chaque joueur (D36, branche `feat/enemy-hits-sync`, non testé en jeu)
+
+- Constat (journal hôte du 25/10, 01h) : le nombre de coups d'une attaque ennemie dépend de l'animation de chaque PC. Combat 9, tour 15 : boss, coups 2 et 3 sur Lune attendus 3 s chacun chez l'hôte (propriétaire encore dans le tour : `owner_ahead` ne couvre pas) ; au passage, des coups arrivent encore après `OnTurnEnded` du boss, jamais après le `StartCharacterTurn` suivant.
+- Correctif : au `StartCharacterTurn` suivant (repli : `OnTurnStart`, fin de combat), chaque instance publie `EnemyActionDone` (type 70) : coups reçus par chacun de ses héros pendant le tour. Une attente de défense du coup k cesse dès que le propriétaire a fini avec moins de k coups (`why owner_done`, coup esquivé ici, compteur `defense_waits_owner_done`). `-e33enemydone=0` coupe tout.
+- `desync` : l'état journalisé est celui qui a été haché (`state_from` hashed), plus une photo prise après coup.
+- Test écrit, non lancé : faux client `--done-hits N` et `p8_enemydone_host`.
 
 ## 2026-10-25, 12h — audit des désynchros de la session du 25/10 01h (branche `fix/desync-audit`, non testée en jeu)
 

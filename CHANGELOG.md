@@ -18,6 +18,10 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 - Combat : les journaux comparent désormais, coup par coup, l'ennemi touché par les compétences des héros chez chaque
   joueur (compétences à cibles au hasard, comme la foudre à rebonds de Lune), pour préparer leur correction.
 
+### Corrections
+- Combat : moins de gels de 3 s quand un monstre attaque. Si l'attaque touche moins de fois votre héros chez vous que
+  chez l'autre joueur, son jeu n'attend plus votre parade pour les coups en trop.
+
 ## [0.6.34] - 2026-10-25
 
 ### Corrections

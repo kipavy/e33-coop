@@ -62,7 +62,9 @@ static std::vector<proto::Message> samples()
             proto::SceneStart{1, 4, "", "", proto::SceneCause::Unknown, "", "", 0, 0, 0},
             proto::SceneStart{0, 6, "", "/Game/Levels/X.X:PersistentLevel.BP_Dialogue_C_1", proto::SceneCause::Zone, "/Game/Levels/X.X:PersistentLevel.Zone_1", "",
                               1, 2, 3, proto::NarrativeKind::Dialogue},proto::SceneSkip{0, 5, "SQT_Lumiere_Sophie"},
-            proto::DefeatChoice{2, 0, 1}, proto::DefeatChoice{3, 1, 0}};
+            proto::DefeatChoice{2, 0, 1}, proto::DefeatChoice{3, 1, 0},
+            proto::EnemyActionDone{6, 9, {proto::ActorKind::Enemy, 0}, 1, {{0, 3}, {2, 0}}},
+            proto::EnemyActionDone{6, 10, {proto::ActorKind::Enemy, proto::kAutoSpot}, 0, {}}};
 }
 
 static void test_roundtrip()
@@ -89,7 +91,16 @@ static void test_invalid()
     { wire::Reader r(w.data().data(), w.size()); std::string err; CHECK(!proto::decode(r, err)); }
     // Tronqué
     for (size_t cut = 0; cut + 1 < w.size(); ++cut) { wire::Reader r(w.data().data(), cut); std::string err; CHECK(!proto::decode(r, err)); }
-    // Type inconnu
+    // Fin d'action (D36) : émetteur hors bornes, trop de héros
+    {
+        wire::Writer e; proto::encode(proto::EnemyActionDone{6, 9, {proto::ActorKind::Enemy, 0}, 4, {{0, 3}}}, e);
+        wire::Reader r(e.data().data(), e.size()); std::string err; CHECK(!proto::decode(r, err));
+        proto::EnemyActionDone many{6, 9, {proto::ActorKind::Enemy, 0}, 1, {}};
+        for (uint8_t i = 0; i < 9; ++i) many.hits.push_back({i, 1});
+        wire::Writer e2; proto::encode(many, e2);
+        wire::Reader r2(e2.data().data(), e2.size()); CHECK(!proto::decode(r2, err));
+    }
+    // Ancien pair : type inconnu (EnemyActionDone pour un pair d'avant D36) refusé proprement, sans planter
     { wire::Writer u; u.u16(999); u.u16(0); wire::Reader r(u.data().data(), u.size()); std::string err; CHECK(!proto::decode(r, err)); }
     // Fuzz : octets aléatoires, ne doit jamais planter
     std::mt19937 rng(1234);
