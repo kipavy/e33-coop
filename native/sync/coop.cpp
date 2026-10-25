@@ -2224,8 +2224,8 @@ void defense_point(UObject* stats_comp, UObject* hero, bool jumpable)
         if (s.role == Role::Host) { auto it = b.acks.upper_bound(turn_now); for (; it != b.acks.end(); ++it) if (it->second.count(owner)) return true; return false; }
         return b.host_sync.upper_bound(turn_now) != b.host_sync.end();
     };
-    const bool ahead0 = owner_ahead();
-    const bool got = !unresponsive && !ahead0 &&
+    // Résultat déjà reçu : pris même si le propriétaire est déjà plus loin (wait_for teste la condition d'abord).
+    const bool got = !unresponsive &&
                      wait_for("defense", [&] { return b.defenses.count(key) > 0 || owner_of_spot(spot) != owner || (s.role == Role::Client && b.host_end >= 0) || owner_ahead(); },
                               kDefenseTimeout) &&
                      b.defenses.count(key) > 0;
