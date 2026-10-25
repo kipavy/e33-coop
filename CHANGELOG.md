@@ -17,8 +17,9 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 ## [0.6.35] - 2026-10-25
 
 ### Corrections
-- Combat : moins de gels de 3 s quand un monstre attaque. Si l'attaque touche moins de fois votre héros chez vous que
-  chez l'autre joueur, son jeu n'attend plus votre parade pour les coups en trop.
+- Combat : moins de gels de 3 s quand un monstre attaque. Quand une attaque se désynchronise (elle frappe votre héros
+  plus de fois chez l'autre joueur que chez vous, ce qui ne devrait pas arriver), son jeu n'attend plus votre parade
+  pour les coups en trop. La cause de cette désynchro reste à trouver.
 - Combat : les points faibles des ennemis touchés en visée libre sont remis comme chez l'hôte au tour suivant ; avant,
   un point faible usé chez un seul joueur faisait diverger les dégâts des tirs suivants (PV d'ennemi différents).
 - Exploration : les étapes de progression franchies par le meneur (tutoriels, branches de dialogue vues une seule fois)
