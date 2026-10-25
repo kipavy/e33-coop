@@ -2,29 +2,33 @@
 
 > Lire en 2 minutes : état courant en haut, historique en bas.
 
-## Bugs ouverts, priorisés (2026-10-25, 01h45, après la partie du 24-25/10)
+## Bugs ouverts, priorisés (2026-10-25, mis à jour à la 0.6.32)
 
 P1 = l'état de la partie diverge ou un joueur est bloqué ; P2 = gêne visible sans divergence durable ; P3 = confort.
 
 **P1**
-1. Monstres pas au même endroit : J2 meneur, le pion suiveur de l'hôte touche un monstre que J2 n'a pas touché -> combat imposé. Piste : quand le client mène, ennemis de l'hôte passifs comme chez le client, combats seulement par la demande D34 (0.6.29).
-2. Améliorations d'armes faites en même temps au camp : niveau 3 chez l'hôte, 4 chez J2 (deltas `level:` de D13 croisés).
-3. Objet utilisé par J2 en exploration (élixir de chroma : soin) non rejoué chez l'hôte.
-4. Gels de 2 s quand un monstre attaque (D28) : 0 gel voulu ; repenser avec `p8_turnlag_*`.
-5. À vérifier en jeu (corrigés sans test) : cinématique de zone chez J2 (0.6.31), arme changée par J2 (0.6.30), marchand (0.6.29), combat lancé par J2 meneur (0.6.29, D34).
+1. Gels de 2 s quand un monstre attaque (D28) : 0 gel voulu ; repenser avec `p8_turnlag_*`.
+2. À vérifier en jeu (corrigés sans test) : monstres de l'hôte passifs quand J2 mène (0.6.32, D35), améliorations d'armes et élixir de J2 (0.6.32, `coop_economy_delta` why upgrade / use, `coop_item_use_replayed`), cinématique de zone chez J2 (0.6.31), arme changée par J2 (0.6.30), marchand (0.6.29), combat lancé par J2 meneur (0.6.29, D34).
 
 **P2**
-6. J2 meneur : son sprint vu comme une marche avec téléportations chez l'hôte (le lissage D23 ne marche que dans le sens hôte -> client ?).
-7. Pétank : ses déplacements ne sont pas vus par J2 (acteur du monde qui bouge, non synchronisé).
-8. Tirs en exploration (0.6.29, à vérifier : `coop_freeaim_world_hit`).
-9. Écran de défaite (D33, 0.6.20) jamais testé ; scénarios `p3_defeat_*` jamais lancés.
-10. Journaux d'expédition : sélection non synchro (écran à préciser par Killian).
-11. 1 PA de Lune en moins chez le client (`p9_rng_client`, tolérance `raw_hash_diffs<=1` à retirer).
+3. J2 meneur : son sprint vu comme une marche avec téléportations chez l'hôte. Journaux du 25/10 : le pion suiveur de l'hôte n'obtient pas le sprint par moments (300 u/s, allure 1 ; diagnostic `coop_follow_sprint_refused` en 0.6.32), et rafale de téléportations annulées par le jeu (corrigée en 0.6.32 : attente croissante, `coop_follower_teleport_undone`).
+4. Pétank : ses déplacements ne sont pas vus par J2 (acteur du monde qui bouge, non synchronisé).
+5. Tirs en exploration (0.6.29, à vérifier : `coop_freeaim_world_hit`).
+6. Écran de défaite (D33, 0.6.20) jamais testé ; scénarios `p3_defeat_*` jamais lancés.
+7. Journaux d'expédition : sélection non synchro (écran à préciser par Killian).
+8. 1 PA de Lune en moins chez le client (`p9_rng_client`, tolérance `raw_hash_diffs<=1` à retirer).
 
 **P3**
-12. Animation d'escalade de rebord absente chez le client.
-13. Meneur bloqué (diagnostic `coop_pilot_stuck`).
-14. Panneau Coop au clavier / manette (D25).
+9. Animation d'escalade de rebord absente chez le client.
+10. Meneur bloqué (diagnostic `coop_pilot_stuck`).
+11. Panneau Coop au clavier / manette (D25).
+
+## 2026-10-25, 02h05 — v0.6.32 : monstres de l'hôte quand J2 mène, améliorations d'armes, élixir, téléportations (non testé)
+
+- Monstres (D35) : le client mène -> ses ennemis du monde restent actifs (son pion engage, la demande D34 fait partir le combat chez l'hôte) et ceux de l'hôte sont rendus passifs (capsule de rencontre, détection, verrou d'aggro), rendus au jeu dès que l'hôte reprend la main ou à la fin de session (`coop_world_enemies_passive` / `_restored`, champ pilot).
+- Améliorations d'armes (journaux du camp 01:01) : aucun `EconomyDelta` « level: » n'est parti des deux côtés. L'amélioration se fait pendant le dialogue du Curateur ; or un dialogue est un « événement » (`touch`) qui fait reprendre la référence du relevé d'économie après lui, amélioration comprise. Désormais économie relevée juste avant / après `BP_ItemUpgradeSystem.UpgradeWeaponFromInstance`, écart (niveau + matériaux) envoyé aussitôt (`coop_economy_delta` why upgrade).
+- Élixir de chroma de J2 (01:14:49) : seul `item:PartyHealConsumable -1` était appliqué chez l'hôte. Utilisations hors combat (`BP_jRPG_Controller_World.HealParty`, `InventoryManager.UseItemOnCharacter`) envoyées en clé `use:heal_party` / `use:<objet>@<personnage>` (même message, pas de changement de protocole), rejouées par la même fonction du jeu, qui dépense l'objet (`coop_item_use_replayed` : spent ; dépense différée attendue, pas renvoyée).
+- Suivi : chez l'hôte suiveur, 4017 téléportations dans la session, dont ~2800 en 1 min (cible 700 u plus bas, pion remis en place par le jeu à chaque image). Téléportation annulée -> attente 1, 2, 4, 8, 10 s (`coop_follower_teleport_undone`). Sprint refusé par l'ALS (300 u/s, allure 1, entre 01:14 et 01:22) : diagnostic `coop_follow_sprint_refused` (mode de rotation, entrée, visée).
 
 ## 2026-10-25, 01h30 — v0.6.31 : cinématique de zone non lancée chez le suiveur (non testé)
 

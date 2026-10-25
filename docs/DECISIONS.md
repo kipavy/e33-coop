@@ -568,3 +568,19 @@ aller-retour réseau au lieu du temps de trajet du pion suiveur. Le combat local
 **Remise en cause si** : `coop_battle_request_received` started faux (ennemi introuvable chez l'hôte, hôte en menu…),
 ou désyncs au tour 1 toujours présents après une demande (il faudrait alors empêcher le combat local du client et
 attendre le BattleStart de l'hôte).
+
+## D35 — Ennemis du monde : actifs seulement chez le meneur (2026-10-25, bug vu en vrai, précise D34)
+
+**Constat** (24-25/10, J2 meneur) : le pion suiveur de l'hôte touchait un monstre que J2 n'avait pas touché -> combat
+imposé aux deux joueurs. Le client rendait déjà ses ennemis passifs en permanence (combat seulement par BattleStart de
+l'hôte), mais pas l'hôte quand il suit ; et un client meneur ne pouvait être chassé par aucun ennemi chez lui.
+
+**Décision** : les ennemis du monde ne détectent, ne poursuivent et n'engagent que **chez le meneur**. Suiveur (hôte ou
+client) : capsule de rencontre sans chevauchements, détection coupée, verrou d'aggro « E33Coop », repris toutes les 3 s.
+Le joueur qui redevient meneur rend au jeu les ennemis qu'il avait rendus passifs (`restore_world_enemies` : capsule,
+détection, `RemoveAggroLock`) ; l'hôte les rend aussi à la fin de session. Un combat engagé par le pion du client meneur
+part chez l'hôte par la demande D34 ; `StartBattle` appelé par le mod marche sur un ennemi passif.
+
+**Remise en cause si** : combat lancé chez l'hôte suiveur sans `coop_battle_request_received` (autre déclencheur que la
+capsule : zone de transition, embuscade scriptée) ; ou ennemis restés passifs chez l'hôte après la reprise de la main
+(`coop_world_enemies_restored` count 0 alors que des ennemis avaient été rendus passifs).

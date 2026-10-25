@@ -14,6 +14,19 @@ pour lui), pas pour un développeur. Les changements internes (tests, outillage)
 
 ## [Non publié]
 
+## [0.6.32] - 2026-10-25
+
+### Corrections
+- Monstres : quand l'autre joueur mène, les monstres de l'hôte ne foncent plus sur son personnage et ne lancent plus
+  de combat au contact ; seul le meneur déclenche les combats (avant, l'hôte pouvait être pris dans un combat que le
+  meneur n'avait pas touché).
+- Améliorations d'armes (Curateur du camp) : envoyées aussitôt à l'autre joueur ; avant, elles n'étaient jamais
+  partagées et le niveau d'une arme différait d'un joueur à l'autre.
+- Objets utilisés hors combat (élixir de chroma, objet donné à un personnage depuis le menu) : l'effet (soin) a
+  aussi lieu chez l'autre joueur ; avant, seule la quantité suivait.
+- Suivi du meneur : quand le jeu annule une téléportation du personnage suiveur, le mod attend avant de réessayer au
+  lieu de le téléporter à chaque image.
+
 ## [0.6.31] - 2026-10-25
 
 ### Corrections
@@ -285,7 +298,8 @@ Première version publique.
 - Installateur en un fichier (installer, mettre à jour, régler, désinstaller) et mises à jour automatiques depuis les
   releases GitHub.
 
-[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.31...HEAD
+[Non publié]: https://github.com/kipavy/e33-coop/compare/v0.6.32...HEAD
+[0.6.32]: https://github.com/kipavy/e33-coop/compare/v0.6.31...v0.6.32
 [0.6.31]: https://github.com/kipavy/e33-coop/compare/v0.6.30...v0.6.31
 [0.6.30]: https://github.com/kipavy/e33-coop/compare/v0.6.29...v0.6.30
 [0.6.29]: https://github.com/kipavy/e33-coop/compare/v0.6.28...v0.6.29
